@@ -1,0 +1,254 @@
+# pg_fts — BM25 full-text search for PostgreSQL
+
+A PostgreSQL extension for full-text search with true **BM25/BM25F** relevance
+ranking, a dedicated `bm25` inverted-index access method, and a rich query
+language (boolean, phrase, NEAR, prefix, fuzzy, regex).  Unlike the
+`tsvector`/`tsquery` + GIN stack, the index maintains the corpus statistics
+BM25 needs (document count, average length, per-term document frequency) and
+stores term frequency + document length in the posting lists, so ranking is
+answered from the index with no heap recheck.
+
+## Requirements
+
+- PostgreSQL **17 or newer** (17, 18, and current `master`/devel are supported;
+  version differences are handled with compile-time guards).
+- A C toolchain and the PostgreSQL server headers (`postgresql-server-dev-*`
+  or a source install exposing `pg_config`).
+
+## Build and install
+
+```sh
+make PG_CONFIG=/path/to/pg_config
+sudo make install PG_CONFIG=/path/to/pg_config
+```
+
+`PG_CONFIG` defaults to whatever `pg_config` is on `PATH`.
+
+## Test
+
+```sh
+# against a running server (regression + isolation; TAP needs a
+# --enable-tap-tests build):
+make installcheck PG_CONFIG=/path/to/pg_config
+```
+
+## Use
+
+```sql
+CREATE EXTENSION pg_fts;
+
+CREATE TABLE docs (id bigint, body text);
+-- index the analyzed document
+CREATE INDEX docs_bm25 ON docs USING bm25 (to_ftsdoc('english', body));
+
+-- boolean / phrase / prefix / fuzzy / regex match
+SELECT id FROM docs
+ WHERE to_ftsdoc('english', body) @@@ to_ftsquery('english', 'quick & fox');
+
+-- BM25-ranked top-k (index-only ordering scan)
+SELECT id FROM docs
+ ORDER BY to_ftsdoc('english', body) <=> to_ftsquery('english', 'quick fox')
+ LIMIT 10;
+
+-- fast COUNT (transparent: a plain count(*) WHERE @@@ is pushed to the index)
+SELECT count(*) FROM docs
+ WHERE to_ftsdoc('english', body) @@@ to_ftsquery('english', 'quick');
+
+-- maintenance
+SELECT fts_merge('docs_bm25');    -- compact segments now
+SELECT fts_vacuum('docs_bm25');   -- reclaim disk space (compact + truncate)
+```
+
+See `doc/pg_fts.sgml` for the full reference, `CAPABILITIES.md` for the feature
+matrix, and `DEFERRED.md` for the roadmap.
+
+---
+
+pg_fts -- BM25 full-text search for PostgreSQL
+==============================================
+
+pg_fts is a contrib extension providing full-text search with BM25/BM25F
+relevance ranking, a dedicated inverted-index access method, phrase/prefix/
+fuzzy/regex query support, and result presentation.  It differs from the
+tsvector/tsquery + GIN stack in that the index maintains the corpus statistics
+(document count, average length, per-term document frequency) BM25 ranking
+requires, and posting lists carry term frequency and document length, so
+ranking needs no heap recheck.
+
+The extension is developed as a reviewable series; each version below is one
+qualified stage
+(builds clean under --enable-cassert, passes its regression test).
+
+Versions / stages implemented
+-----------------------------
+
+  1.0   ftsdoc/ftsquery types, to_ftsdoc()/to_ftsquery(), @@@ operator
+  1.1   to_ftsdoc(regconfig, text): analyzer reusing a text search config
+  1.2   fts_bm25(): Okapi BM25 scoring
+  1.3   the bm25 index access method (bitmap scan, GenericXLog crash-safe)
+  1.4   fts_bm25_opts(): BM25 variants (lucene, robertson, atire, bm25+, bm25l)
+  1.5   fts_highlight() and fts_snippet()
+  1.6   tsquery_to_ftsquery() and a tsquery->ftsquery cast (migration)
+  1.7   fts_index_stats()/fts_index_df(): index-maintained corpus statistics
+  1.8   incremental maintenance: INSERT appends to a pending list (no REINDEX)
+  1.9   phrase queries ("a b c") via per-term positions (ftsdoc format v2)
+  1.10  external-content indexing via expression index on to_ftsdoc(col)
+  1.11  fuzzy (term~k) and regex (/re/) query terms
+  1.12  fts_bm25f(): BM25F multi-field weighting
+  1.13  background merge of the pending list (VACUUM + fts_merge())
+  1.14  fts_search(): index-only BM25 top-k (no heap access), WAND max-tf bound
+  1.15  trigram pre-filter for fuzzy matching (pg_tre-style pruning)
+  1.16  <=> ordering operator: ORDER BY d <=> q LIMIT k plans as an index scan
+  1.17  to_ftsquery(regconfig, text): config-normalized query terms
+  1.18  fts_index_nsegments(): observe the segment count
+  1.19  fts_count(): MVCC-correct bulk count via the index (fast COUNT path)
+  1.20  fts_vacuum(): reclaim physical bloat (compact + truncate); transparent
+        count(*) WHERE @@@ pushdown to the index via a CustomScan
+
+  Prefix queries (term*) are matched in both the sequential and index paths.
+
+Query language
+--------------
+
+  quick brown          implicit AND
+  quick & brown        AND          quick | brown   OR      !slow / -slow  NOT
+  (a | b) & c          grouping
+  "quick brown fox"    phrase (adjacent)
+  quick*               prefix
+  quick~2              fuzzy, edit distance <= 2
+  /^qu.*x$/            regex over each term
+  title AND fox        keyword operators (AND/OR/NOT, case-insensitive)
+
+Example
+-------
+
+  CREATE EXTENSION pg_fts;
+
+  CREATE TABLE docs (id int, body text);
+  CREATE INDEX docs_bm25 ON docs USING bm25 (to_ftsdoc('english', body));
+
+  SELECT id,
+         fts_bm25(to_ftsdoc('english', body), q,
+                  s.ndocs, s.avgdl,
+                  fts_index_df('docs_bm25', q)) AS score,
+         fts_snippet(body, q) AS excerpt
+  FROM docs, fts_index_stats('docs_bm25') s,
+       to_ftsquery('postgres & "query planner" & index*') q
+  WHERE to_ftsdoc('english', body) @@@ q
+  ORDER BY score DESC
+  LIMIT 10;
+
+Performance / parity
+--------------------
+
+bench/ contains reproducible benchmarks against the tsvector/GIN + ts_rank
+stack and against ParadeDB pg_search (Tantivy) on EC2 -- build time, index
+size, and per-query-type latency at 2M-50M docs.  See bench/RESULTS_*.md for
+the measurements.  fts_bm25_opts variants reproduce Lucene/bm25s scores for
+conformance.
+
+Known limitations / future work
+--------------------------------
+
+  The core roadmap is complete.  Remaining ideas are refinements, not gaps:
+
+  * A fully resumable WAND cursor (emit/suspend/resume) instead of the current
+    adaptive-k batch-with-growth.  WAND needs the top-k threshold to prune, so
+    the batch shape is natural; the adaptive-k form already bounds work to the
+    LIMIT actually requested and starts at a full page so common LIMITs are one
+    pass.
+  * Impact-ordered postings, to let ranked scans over a very common term stop
+    earlier than docid-ordered block-max WAND allows.
+  * Richer regex trigram tiling (full Navarro (k+1)-tiling / Mihov-Schulz
+    automaton, as in pg_tre) beyond the literal-run tiling implemented here.
+  * A+C for the trigram index: option C would store the *complement* of a dense
+    trigram's term set (small when the trigram is common) with an is_complement
+    flag, keeping every stored set <= half the vocabulary.
+
+  Evaluated and deliberately not done: patched-FOR (PFOR) block encoding
+  (measured ~<0.5% index saving, not worth the decode complexity); a chained
+  overflow segment directory (the size-tiered merge keeps the count far below
+  the 128 cap, and the cap raises a clear error rather than corrupting).
+
+Storage architecture
+--------------------
+
+The bm25 index is a set of immutable SEGMENTS plus a small pending write buffer
+(the Lucene/Tantivy consensus design):
+
+  * Each segment has a term dictionary (with a sparse per-page block index for
+    O(log P) term lookup and sublinear prefix scan), FOR-bit-packed 128-doc
+    posting blocks carrying per-block max-tf and min-|D| impact bounds, a
+    trigram index over the vocabulary (for fuzzy/regex), and a livedocs
+    tombstone bitmap.
+  * INSERT appends to the pending buffer (immediately searchable); a flush
+    (fts_merge() or VACUUM) folds pending docs into a new segment.  CREATE INDEX
+    flushes multiple segments to bound build memory (maintenance_work_mem).
+  * A size-tiered merge coalesces similarly-sized segments (dropping tombstoned
+    docs), keeping the live segment count small so per-term query cost stays low.
+  * DELETE/UPDATE are recorded as per-segment tombstones by VACUUM
+    (ambulkdelete); scans and fts_count subtract them, and merges drop them.
+
+Query execution
+---------------
+
+  * @@@ boolean/phrase/NEAR/prefix/fuzzy/regex plans as a bitmap scan.
+  * ORDER BY d <=> q LIMIT k plans as an index scan (no Sort) driven by
+    document-at-a-time block-max WAND (short queries) or MaxScore (>= 4 terms),
+    with lazy per-column posting decode so pruned blocks never decode tf/doclen.
+  * fts_count(regclass, ftsquery) counts matches in bulk from the index using
+    the visibility map (heap probed only for not-all-visible pages).  A plain
+    count(*) ... WHERE col @@@ q is transparently answered by this fast path via
+    a Custom Scan (FtsCount) -- no need to call fts_count() explicitly.
+  * fts_vacuum(regclass) reclaims the physical space left by builds and merges:
+    it compacts to one segment reusing the lowest free blocks, then truncates
+    the free tail back to the OS (runs automatically during VACUUM when the
+    index is substantially bloated).
+  * Ranked (<=>/fts_search) results cover merged segments; pending (unflushed)
+    docs are found by @@@ and counted by fts_count, and become ranked after the
+    next flush (fts_merge() forces one immediately).
+
+Vendored dependencies
+---------------------
+
+  * sparsemap v5.3.0 (contrib/pg_fts/vendor/), a compressed-bitmap library used
+    for the trigram posting sets and per-segment livedocs tombstones.  All its
+    public symbols are namespaced to __pg_bm25_* (via SPARSEMAP_PREFIX in
+    vendor/sm.c and the pg_fts_sm.h wrapper), so a second copy loaded by another
+    extension in the same backend cannot cause dynamic-linker symbol collisions.
+
+Backward compatibility
+-----------------------
+
+tsvector, tsquery, @@, ts_rank and the GIN/GiST opclasses are untouched;
+pg_fts is purely additive and opt-in.
+
+Documentation
+-------------
+
+User-facing reference documentation is in doc/src/sgml/pgfts.sgml (rendered in
+the "Additional Supplied Modules" appendix as "pg_fts").  This README is the
+developer/design overview; CAPABILITIES.md is the production-readiness /
+feature matrix (index-AM capability flags, concurrency, replication, and an
+honest comparison to tsvector/GIN and ParadeDB pg_search).
+
+Testing
+-------
+
+  * sql/pg_fts.sql + expected/pg_fts.out -- the functional regression suite
+    (types, query language, the bm25 index, ranking, maintenance, and the
+    MVCC/tombstone/oversized-doc correctness edges).
+  * specs/bm25_concurrency.spec, specs/bm25_cic.spec -- isolation tests: MVCC
+    snapshot stability, pending-list visibility, VACUUM/merge invisibility to
+    an open scan, delete+reuse tombstone correctness, and CREATE/REINDEX INDEX
+    CONCURRENTLY.
+  * t/001_crash_recovery.pl -- an immediate crash + WAL replay reproduces exact
+    query answers (GenericXLog crash-safety).
+  * t/002_replication.pl -- the index replicates to a streaming standby with
+    identical results, including tombstoned deletes.
+  * bench/ -- reproducible large-scale benchmarks vs tsvector/GIN and pg_search
+    (see bench/RESULTS_*.md).
+
+Run with: make installcheck (REGRESS + ISOLATION + TAP_TESTS), or under meson
+meson test pg_fts/... (TAP tests require -Dtap_tests=enabled and the IPC::Run
+Perl module).

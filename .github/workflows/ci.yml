@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: [17, 18]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PostgreSQL ${{ matrix.pg }} + server headers
+        run: |
+          sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            postgresql-${{ matrix.pg }} \
+            postgresql-server-dev-${{ matrix.pg }} \
+            gcc make
+
+      - name: Build
+        run: make PG_CONFIG=/usr/lib/postgresql/${{ matrix.pg }}/bin/pg_config
+
+      - name: Install
+        run: sudo make install PG_CONFIG=/usr/lib/postgresql/${{ matrix.pg }}/bin/pg_config
+
+      - name: Regression + isolation tests
+        run: |
+          PGBIN=/usr/lib/postgresql/${{ matrix.pg }}/bin
+          sudo -u postgres "$PGBIN/pg_ctlcluster" ${{ matrix.pg }} main start || sudo service postgresql start
+          # run installcheck against the default cluster
+          sudo -u postgres make installcheck \
+            PG_CONFIG=$PGBIN/pg_config \
+            PGUSER=postgres
+
+      - name: Show diffs on failure
+        if: failure()
+        run: |
+          for f in regression.diffs output_iso/regression.diffs; do
+            [ -f "$f" ] && { echo "=== $f ==="; cat "$f"; }
+          done
