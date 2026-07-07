@@ -95,37 +95,31 @@ tsvector/tsquery + GIN stack in that the index maintains the corpus statistics
 requires, and posting lists carry term frequency and document length, so
 ranking needs no heap recheck.
 
-The extension is developed as a reviewable series; each version below is one
-qualified stage
-(builds clean under --enable-cassert, passes its regression test).
+The extension is developed as a qualified feature series (each stage builds
+clean under --enable-cassert and passes its regression test).  The internal
+series reached 1.20 before being squashed to a single 0.1.0 install script for
+the first public release.
 
-Versions / stages implemented
------------------------------
+Features
+--------
 
-  1.0   ftsdoc/ftsquery types, to_ftsdoc()/to_ftsquery(), @@@ operator
-  1.1   to_ftsdoc(regconfig, text): analyzer reusing a text search config
-  1.2   fts_bm25(): Okapi BM25 scoring
-  1.3   the bm25 index access method (bitmap scan, GenericXLog crash-safe)
-  1.4   fts_bm25_opts(): BM25 variants (lucene, robertson, atire, bm25+, bm25l)
-  1.5   fts_highlight() and fts_snippet()
-  1.6   tsquery_to_ftsquery() and a tsquery->ftsquery cast (migration)
-  1.7   fts_index_stats()/fts_index_df(): index-maintained corpus statistics
-  1.8   incremental maintenance: INSERT appends to a pending list (no REINDEX)
-  1.9   phrase queries ("a b c") via per-term positions (ftsdoc format v2)
-  1.10  external-content indexing via expression index on to_ftsdoc(col)
-  1.11  fuzzy (term~k) and regex (/re/) query terms
-  1.12  fts_bm25f(): BM25F multi-field weighting
-  1.13  background merge of the pending list (VACUUM + fts_merge())
-  1.14  fts_search(): index-only BM25 top-k (no heap access), WAND max-tf bound
-  1.15  trigram pre-filter for fuzzy matching (pg_tre-style pruning)
-  1.16  <=> ordering operator: ORDER BY d <=> q LIMIT k plans as an index scan
-  1.17  to_ftsquery(regconfig, text): config-normalized query terms
-  1.18  fts_index_nsegments(): observe the segment count
-  1.19  fts_count(): MVCC-correct bulk count via the index (fast COUNT path)
-  1.20  fts_vacuum(): reclaim physical bloat (compact + truncate); transparent
-        count(*) WHERE @@@ pushdown to the index via a CustomScan
-
-  Prefix queries (term*) are matched in both the sequential and index paths.
+  * ftsdoc/ftsquery types, to_ftsdoc()/to_ftsquery(), the @@@ match operator
+  * the bm25 index access method (bitmap scan + <=> ordering scan, GenericXLog
+    crash-safe, MVCC-correct)
+  * fts_bm25(): Okapi BM25 scoring, with the lucene/robertson/atire/bm25+/bm25l
+    variants; fts_bm25f(): BM25F multi-field weighting
+  * index-maintained corpus statistics (fts_index_stats()/fts_index_df()) so
+    ranking needs no heap recheck
+  * fts_highlight() and fts_snippet(); tsquery_to_ftsquery() migration + cast
+  * phrase queries ("a b c") via per-term positions; prefix (term*), fuzzy
+    (term~k, Levenshtein DFA), and regex (/re/) terms, with a trigram pre-filter
+  * external-content indexing via an expression index on to_ftsdoc(col)
+  * incremental maintenance (INSERT appends to a pending list, no REINDEX);
+    background/on-demand merge (fts_merge()) and compaction (fts_vacuum())
+  * block-max WAND / MaxScore top-k with lazy per-column decode; fts_search()
+    index-only BM25 top-k
+  * fts_count(): MVCC-correct bulk count via the index, plus a transparent
+    count(*) WHERE @@@ CustomScan pushdown
 
 Query language
 --------------
@@ -158,19 +152,36 @@ Example
   ORDER BY score DESC
   LIMIT 10;
 
-Performance / parity
---------------------
+Performance
+-----------
 
-bench/ contains reproducible benchmarks against the tsvector/GIN + ts_rank
-stack and against ParadeDB pg_search (Tantivy) on EC2 -- build time, index
-size, and per-query-type latency at 2M-50M docs.  See bench/RESULTS_*.md for
-the measurements.  fts_bm25_opts variants reproduce Lucene/bm25s scores for
-conformance.
+bench/ contains reproducible benchmarks on EC2 (build time, index size, and
+per-query-type latency at 2M+ docs).  See bench/RESULTS_*.md, and HANDOFF.md for
+the full analysis.  The honest summary:
+
+  * vs the built-in tsvector/GIN + ts_rank stack, pg_fts is far faster on ranked
+    retrieval (up to ~40x on common-term top-k, because ts_rank must fetch and
+    sort every match) — see bench/RESULTS_WIKIPEDIA_2M.md.
+  * vs the specialist BM25 extensions (VectorChord-bm25, Timescale
+    pg_textsearch), pg_fts currently *trails* on raw ranked latency and index
+    size — see bench/RESULTS_VS_VCHORD_PGTEXTSEARCH.md.  pg_fts stores positional
+    postings (for phrase/NEAR) and per-document length, so its index is larger
+    and its docid-ordered block-max WAND decodes more per candidate.  Closing
+    that gap is a posting-codec change tracked in ROADMAP.md.
+  * pg_fts's distinguishing strengths are its query-language breadth
+    (phrase/NEAR/prefix/fuzzy/regex over one operator), an index-native
+    count(*) that the specialist engines do not expose, and MVCC/crash/
+    replication correctness.
+
+fts_bm25_opts variants reproduce Lucene/bm25s scores for conformance.
+This is an early (0.1.0) release; ranked performance will iterate.
 
 Known limitations / future work
 --------------------------------
 
-  The core roadmap is complete.  Remaining ideas are refinements, not gaps:
+  The headline gap is ranked-retrieval latency vs the specialist BM25 engines
+  (above); ROADMAP.md tracks the codec direction that closes it.  Other tracked
+  ideas:
 
   * A fully resumable WAND cursor (emit/suspend/resume) instead of the current
     adaptive-k batch-with-growth.  WAND needs the top-k threshold to prune, so

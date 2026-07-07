@@ -1,4 +1,4 @@
-/* pg_fts--1.0.sql */
+/* pg_fts--0.1.0.sql */
 
 -- complain if script is sourced in psql, rather than via CREATE EXTENSION
 \echo Use "CREATE EXTENSION pg_fts" to load this file. \quit

@@ -349,9 +349,10 @@ docid-ordered positional blocks will close it — the two attempts prove that.
    common ones. A CustomScan aggregate that counts via the VM without
    materializing the full TID set could help.
 4. **The v1.0 release squash dropped the DEFERRED.md and bench/NOTE_*.md** from
-   the standalone tree at one point. This handoff restores them. **Keep them** —
-   they are the record of what was tried and why it failed, and prevent
-   re-litigating dead ends.
+   the standalone tree at one point; this handoff restored them. The failed-
+   experiment record (`bench/NOTE_*.md`) is **kept** — it prevents re-litigating
+   dead ends. `DEFERRED.md` was subsequently merged into `ROADMAP.md` (the
+   scrubbed, release-facing superset); consult `ROADMAP.md` for future work.
 5. **Parallel merge / parallel-context launch from inside executor nodes is
    fragile at scale** (workers often didn't launch on EC2 despite free slots).
    If you revisit parallel query, use a real partial-path / Gather plan, not an
@@ -394,9 +395,9 @@ docid-ordered positional blocks will close it — the two attempts prove that.
   build were added during the v1.0 prep.
 - **Original dev tree (source of truth for the full 1.0→1.20 history and all
   notes):** `~/ws/postgres/fts/contrib/pg_fts` on the `fts` branch of the
-  gburd/postgres fork (pushed to `origin/fts`). The DEFERRED.md and the three
-  `bench/NOTE_*.md` live there and are copied into the standalone `bench/` by
-  this handoff.
+  gburd/postgres fork (pushed to `origin/fts`). The original DEFERRED.md and the
+  three `bench/NOTE_*.md` live there; in the standalone tree DEFERRED.md was
+  merged into `ROADMAP.md` and the `bench/NOTE_*.md` are kept as-is.
 - **Benchmark result files** (raw numbers): `bench/RESULTS_*.md` and
   `bench/NOTE_*.md` in the standalone tree.
 - **Vendored dependency:** `vendor/sm.c` + `vendor/sm.h` (sparsemap), public

@@ -1,39 +1,47 @@
 # Changelog
 
-All notable changes to pg_fts are documented here.  The extension version
-(the `default_version` in `pg_fts.control`) advances one step per feature; the
-public release series tracks those.
+All notable changes to pg_fts are documented here.
 
-## Unreleased / toward 1.0 public release
+## 0.1.0 — initial public release
 
-- Standalone (out-of-tree) build via PGXS; no PostgreSQL source tree required.
-- Supported on PostgreSQL 17, 18, and current devel.
+First public release.  The extension was developed as an internal, qualified
+feature series (each stage clean under `--enable-cassert`, regression-green)
+that reached internal version 1.20 before being squashed to a single `0.1.0`
+install script for release.  Versioning starts at 0.1.0 to signal that the
+on-disk format and ranked-query performance will iterate before 1.0.
 
-## 1.20
+Included in 0.1.0:
 
-- `fts_vacuum(regclass)`: reclaim physical index bloat by compacting to one
-  segment (reusing the lowest free blocks) and truncating the free tail back to
-  the OS — shrinks an index grown larger than its live contents without a
-  REINDEX.  Runs automatically during `VACUUM` when the index is substantially
-  bloated.
-- Transparent COUNT pushdown: a plain `count(*) ... WHERE col @@@ q` is answered
-  from the index by a `Custom Scan (FtsCount)` (visibility-map bulk count),
-  ~3× faster than the bitmap heap scan, with no need to call `fts_count()`.
-- Faster posting decode: word-oriented FOR unpack (~5.7× the per-value cost),
-  cutting common-term `fts_count` ~3×.
-- Parallel index build/merge: concurrent segment writes (per-page relation
-  extension lock), so `CREATE INDEX` and `fts_merge` parallelize the scan and
-  intermediate merges.
+- `ftsdoc` / `ftsquery` types, the `@@@` match operator, and the `<=>`
+  relevance-ordering operator (`ORDER BY d <=> q LIMIT k` plans as an index
+  scan, no Sort).
+- The `bm25` inverted-index access method: WAL-logged via GenericXLog
+  (crash-safe, physical-replication safe), MVCC-correct (per-segment
+  tombstones), segmented (Lucene/Tantivy-style) on-disk format with a
+  size-tiered background merge, block-max WAND / MaxScore top-k with lazy
+  per-column decode.
+- Okapi BM25 scoring with the lucene / robertson / atire / bm25+ / bm25l
+  variants; BM25F multi-field weighting; index-maintained corpus statistics
+  (N, avgdl, per-term df) so ranking needs no heap recheck.
+- A rich query language over one operator: boolean, phrase `"a b c"`, NEAR,
+  prefix `term*`, fuzzy `term~k` (Levenshtein DFA), and regex `/re/`, with a
+  trigram pre-filter for fuzzy/regex.
+- `fts_highlight()` / `fts_snippet()`; `tsquery_to_ftsquery()` migration helper
+  and cast.
+- Incremental maintenance (INSERT appends to a pending list, no REINDEX);
+  `fts_merge()` and `fts_vacuum()` (compact + truncate) for on-demand
+  maintenance.
+- `fts_count()` and a transparent `count(*) ... WHERE @@@` CustomScan pushdown
+  for MVCC-correct bulk counts from the index — a capability the specialist
+  BM25 extensions do not expose.
+- Parallel index build/merge; standalone PGXS build plus Nix flake and a
+  Windows/MSVC meson recipe; supported on PostgreSQL 17, 18, and 19/devel.
 
-## 1.0 – 1.19
-
-The reviewable feature series: `ftsdoc`/`ftsquery` types and the `@@@`/`<=>`
-operators; the `bm25` access method (GenericXLog crash-safe, MVCC-correct);
-Okapi BM25 with the lucene/robertson/atire/bm25+/bm25l variants; highlight and
-snippet; `tsquery` migration; index-maintained corpus statistics; incremental
-maintenance via a pending list; phrase / prefix / fuzzy / regex queries;
-external-content (expression) indexing; block-max WAND / MaxScore top-k with
-lazy per-column decode; the segmented (Lucene/Tantivy-style) on-disk format with
-size-tiered background merge; per-segment tombstones for DELETE/UPDATE; and
-`fts_count()` for MVCC-correct bulk counts.  See README.md for the per-version
-list.
+Known performance position (see `bench/RESULTS_VS_VCHORD_PGTEXTSEARCH.md` and
+`HANDOFF.md`): pg_fts is far faster than the built-in tsvector/GIN + `ts_rank`
+stack on ranked retrieval (up to ~40×), but trails the specialist BM25
+extensions (VectorChord-bm25, Timescale pg_textsearch) on raw ranked latency and
+index size, because it stores positional postings for phrase/NEAR.  Closing that
+gap is a posting-codec rewrite tracked in `ROADMAP.md`; 0.1.0 ships on its
+distinguishing strengths — query-language breadth, index-native COUNT, and
+MVCC/crash correctness — and will iterate on ranked performance.

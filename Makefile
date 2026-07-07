@@ -24,7 +24,7 @@ OBJS = \
 	pg_fts_match.o
 
 EXTENSION = pg_fts
-DATA = pg_fts--1.0.sql
+DATA = pg_fts--0.1.0.sql
 PGFILEDESC = "pg_fts - full-text search with BM25 ranking"
 
 REGRESS = pg_fts

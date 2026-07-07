@@ -85,7 +85,7 @@ and build time.  pg_fts's distinguishing value is its richer query language
 (positional/phrase/fuzzy/regex) and an index-native COUNT — not raw ranked
 speed.  Closing the ranked gap is a posting-codec problem (compact columnar +
 rank/select skip, and a hard top-k early-termination), documented in
-bench/NOTE_FORMAT_V3_PROFILE.md and DEFERRED.md; the code-level levers tried so
+bench/NOTE_FORMAT_V3_PROFILE.md and ROADMAP.md; the code-level levers tried so
 far (impact-ordering, parallel scan) did not close it.
 
 Measured: EC2 r7i.4xlarge, PostgreSQL 17.10, 2,188,038 Wikipedia articles,

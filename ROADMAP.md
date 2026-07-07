@@ -28,19 +28,22 @@ they are not rediscovered. Ordered roughly by value.
    larger flush budget (its share of `maintenance_work_mem`) would leave ~1
    segment per worker, shrinking the post-build merge input. Complements #1/#2.
 
-4. **Ranked common-term latency.**
-   Ranked top-k over a very common term (docid-ordered block-max WAND) degrades
-   more than a fully impact-ordered engine would, because block-max WAND cannot
-   skip blocks when a term appears in most documents. Profiling shows such a
-   query is roughly one-third decode + block-load and two-thirds
-   scoring/heap/executor, so a columnar-codec rewrite is capped and cannot
-   enable additional skipping. The evidence-supported levers instead are:
-   (a) SIMD bulk-unpack of the docid column (a bounded decode micro-optimization,
-   portability-gated), and (b) a **parallel ranked scan** that splits a
-   high-frequency term's block chain across workers and merges top-k — the
-   largest remaining lever (see #6). An impact-ordered posting layout was
-   prototyped and reverted: per-block impact bounds cluster too tightly on real
-   text to prune effectively.
+4. **Ranked common-term latency (the headline gap).**
+   Ranked top-k over a very common term (docid-ordered block-max WAND) is the
+   largest gap vs VectorChord/pg_textsearch
+   (`bench/RESULTS_VS_VCHORD_PGTEXTSEARCH.md`): block-max WAND cannot skip blocks
+   when a term appears in most documents. Profiling shows such a query is
+   roughly one-third decode + block-load and two-thirds scoring/heap/executor,
+   so an incremental codec tweak is capped and cannot enable additional
+   skipping. Two attempts were prototyped and reverted with evidence
+   (`bench/NOTE_IMPACT_ORDERING.md`, `bench/NOTE_PARALLEL_RANKED.md`). The real
+   lever is a **format-v3 codec**: a compact columnar posting layout
+   (rank/select-friendly docid set + quantized-impact sidecar, positions
+   optional) with a hard top-k early-termination like VectorChord's block-WeakAND
+   — a substantial rewrite, and the only thing shown capable of closing the gap.
+   A cheaper adjacent win: an **optional no-positions index mode**
+   (`WITH (positions=off)`) for phrase-free workloads — smaller index, faster
+   build and scan — keeping phrase/NEAR support opt-in.
 
 5. **COUNT / aggregation Custom Scan pushdown.**
    A transparent `count(*) WHERE col @@@ query` currently runs as a bitmap heap
@@ -75,10 +78,13 @@ they are not rediscovered. Ordered roughly by value.
 
 ## Benchmark / competitive
 
-9. **Complete a multi-engine real-corpus comparison.**
-   Publish a clean comparison (build time, index size, per-query latency across
-   selectivity bands, warm/cold) of pg_fts against other PostgreSQL full-text
-   options on the same large corpus.
+9. **Multi-engine real-corpus comparison — done; iterate.**
+   A clean 3-way comparison (build time, index size, per-query latency across
+   selectivity bands) vs VectorChord-bm25 and Timescale pg_textsearch on 2.19M
+   Wikipedia articles is in `bench/RESULTS_VS_VCHORD_PGTEXTSEARCH.md`. It shows
+   pg_fts trailing on ranked latency and index size (the codec gap, #4) while
+   leading on query-language breadth and index-native COUNT. The follow-up is
+   the format-v3 codec work (#4), not more benchmarking.
 
 10. **`fts_search` SRF under-fetch safety.**
     The top-k over-fetch is tight (`k*2`). This is safe for the ordering scan

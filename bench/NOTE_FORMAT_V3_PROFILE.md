@@ -59,7 +59,7 @@ but:
    term latency, and the biggest remaining lever.  This is an executor/AM change,
    not a codec change.
 
-Both are recorded in DEFERRED.md.  A speculative columnar-codec rewrite is NOT
+Both are recorded in ROADMAP.md.  A speculative columnar-codec rewrite is NOT
 undertaken because the profile shows it cannot beat the ~30% decode+load ceiling
 and cannot enable the block-skipping that real English text defeats -- the same
 negative result that reverted the impact directory, now confirmed by profiling
