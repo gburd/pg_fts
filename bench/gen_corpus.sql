@@ -1,4 +1,4 @@
--- contrib/pg_fts/bench/gen_corpus.sql
+-- bench/gen_corpus.sql
 -- Generate a reproducible corpus with a Zipfian-ish vocabulary so IDF/BM25 are
 -- meaningful (rare terms carry signal, common terms don't).  :ndocs and :vocab
 -- are psql vars.  Produces docs(id, body) with ~12-word bodies drawn from a

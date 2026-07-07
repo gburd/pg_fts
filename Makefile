@@ -24,27 +24,7 @@ OBJS = \
 	pg_fts_match.o
 
 EXTENSION = pg_fts
-DATA = pg_fts--1.0.sql \
-	pg_fts--1.0--1.1.sql \
-	pg_fts--1.1--1.2.sql \
-	pg_fts--1.2--1.3.sql \
-	pg_fts--1.3--1.4.sql \
-	pg_fts--1.4--1.5.sql \
-	pg_fts--1.5--1.6.sql \
-	pg_fts--1.6--1.7.sql \
-	pg_fts--1.7--1.8.sql \
-	pg_fts--1.8--1.9.sql \
-	pg_fts--1.9--1.10.sql \
-	pg_fts--1.10--1.11.sql \
-	pg_fts--1.11--1.12.sql \
-	pg_fts--1.12--1.13.sql \
-	pg_fts--1.13--1.14.sql \
-	pg_fts--1.14--1.15.sql \
-	pg_fts--1.15--1.16.sql \
-	pg_fts--1.16--1.17.sql \
-	pg_fts--1.17--1.18.sql \
-	pg_fts--1.18--1.19.sql \
-	pg_fts--1.19--1.20.sql
+DATA = pg_fts--1.0.sql
 PGFILEDESC = "pg_fts - full-text search with BM25 ranking"
 
 REGRESS = pg_fts

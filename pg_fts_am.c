@@ -30,7 +30,7 @@
  * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
- *	  contrib/pg_fts/pg_fts_am.c
+ *	  pg_fts_am.c
  *
  *-------------------------------------------------------------------------
  */
@@ -1773,7 +1773,7 @@ bm25_merge_all(Relation index)
 	 * tail: the final reduction is the write of ONE multi-GB output segment by
 	 * a single backend, which no group-partition scheme parallelizes.  The
 	 * merge tail is a single-output-write cost, not a parallelism-partition
-	 * one -- see DEFERRED.md (codec / streamed-write direction).
+	 * one -- see ROADMAP.md (codec / streamed-write direction).
 	 */
 	if (!IsInParallelMode() && max_parallel_maintenance_workers > 0)
 	{

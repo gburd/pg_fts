@@ -12,13 +12,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pg: [17, 18]
+        pg: [17, 18, 19]   # 19 = master/devel, may not be packaged yet
     steps:
       - uses: actions/checkout@v4
 
       - name: Install PostgreSQL ${{ matrix.pg }} + server headers
+        # 19 lives in the pgdg -testing snapshot repo and may be missing entirely
+        continue-on-error: ${{ matrix.pg == 19 }}
         run: |
           sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          if [ "${{ matrix.pg }}" = "19" ]; then
+            sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg-testing main 19" > /etc/apt/sources.list.d/pgdg-testing.list'
+          fi
           curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -27,12 +32,15 @@ jobs:
             gcc make
 
       - name: Build
+        continue-on-error: ${{ matrix.pg == 19 }}
         run: make PG_CONFIG=/usr/lib/postgresql/${{ matrix.pg }}/bin/pg_config
 
       - name: Install
+        continue-on-error: ${{ matrix.pg == 19 }}
         run: sudo make install PG_CONFIG=/usr/lib/postgresql/${{ matrix.pg }}/bin/pg_config
 
       - name: Regression + isolation tests
+        continue-on-error: ${{ matrix.pg == 19 }}
         run: |
           PGBIN=/usr/lib/postgresql/${{ matrix.pg }}/bin
           sudo -u postgres "$PGBIN/pg_ctlcluster" ${{ matrix.pg }} main start || sudo service postgresql start

@@ -60,7 +60,7 @@ SELECT fts_vacuum('docs_bm25');   -- reclaim disk space (compact + truncate)
 ```
 
 See `doc/pg_fts.sgml` for the full reference, `CAPABILITIES.md` for the feature
-matrix, and `DEFERRED.md` for the roadmap.
+matrix, and `ROADMAP.md` for the roadmap.
 
 ---
 
@@ -226,7 +226,7 @@ pg_fts is purely additive and opt-in.
 Documentation
 -------------
 
-User-facing reference documentation is in doc/src/sgml/pgfts.sgml (rendered in
+User-facing reference documentation is in doc/pg_fts.sgml (rendered in
 the "Additional Supplied Modules" appendix as "pg_fts").  This README is the
 developer/design overview; CAPABILITIES.md is the production-readiness /
 feature matrix (index-AM capability flags, concurrency, replication, and an
