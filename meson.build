@@ -4,14 +4,15 @@
 # meson recipe exists only for Windows/MSVC, where PostgreSQL itself is built
 # with meson and PGXS is unavailable.
 #
-# PREREQUISITE (not yet satisfied on the test box): an MSVC-built PostgreSQL
-# >= 17 built from source with the same Visual Studio toolchain
-# (`meson setup ... && ninja install`).  A MinGW/Strawberry PostgreSQL will NOT
-# work: it ships a GCC-flavored pg_config.h (HAVE_STRINGS_H=1,
-# PG_INT128_TYPE=__int128) that MSVC cannot consume, and no postgres.lib backend
-# import library to link against.  The pg_fts C sources are MSVC-clean (vendored
-# sparsemap already carries full _MSC_VER shims, including _M_ARM64), so once a
-# real MSVC PostgreSQL exists this recipe is the whole story.
+# PREREQUISITE: an MSVC-built PostgreSQL >= 17 built from source with the same
+# Visual Studio toolchain (`meson setup ... && ninja install`).  A
+# MinGW/Strawberry PostgreSQL will NOT work: it ships a GCC-flavored pg_config.h
+# (HAVE_STRINGS_H=1, PG_INT128_TYPE=__int128) that MSVC cannot consume, and no
+# postgres.lib backend import library to link against.  The pg_fts C sources are
+# MSVC-clean (vendored sparsemap carries full _MSC_VER shims, including
+# _M_ARM64).  Validated on Windows 11 ARM64 (x64-emulated cl) under both VS2022
+# (cl 19.44) and VS2026-preview (cl 19.50): builds clean and @@@/<=>/fts_count
+# pass against a from-source MSVC PostgreSQL 17.10.
 #
 # Build (from an "x64 Native Tools" prompt, or after vcvars64.bat):
 #   meson setup build -Dpg_dir=C:/pgsql --buildtype=release
@@ -25,9 +26,20 @@ project('pg_fts', 'c',
   version: '0.1.0',
   default_options: ['c_std=c11', 'warning_level=2'])
 
+fs = import('fs')
 pg_dir = get_option('pg_dir')            # e.g. C:/pgsql (MSVC-built PG >= 17)
-pg_include_server = pg_dir / 'include' / 'server'
-pg_lib            = pg_dir / 'lib'
+
+# A meson/nixpkgs-built PostgreSQL installs headers under
+# include/postgresql/server and extension files under share/postgresql/extension;
+# the older/MSVC layout uses include/server and share/extension.  Detect which.
+if fs.is_dir(pg_dir / 'include' / 'postgresql' / 'server')
+  pg_include_server = pg_dir / 'include' / 'postgresql' / 'server'
+  pg_extension_dir  = pg_dir / 'share' / 'postgresql' / 'extension'
+else
+  pg_include_server = pg_dir / 'include' / 'server'
+  pg_extension_dir  = pg_dir / 'share' / 'extension'
+endif
+pg_lib = pg_dir / 'lib'
 
 cc = meson.get_compiler('c')
 
@@ -59,12 +71,14 @@ sources = files(
   'vendor/sm.c',                         # already carries full _MSC_VER shims
 )
 
-# On MSVC the C99-mixed-decl / implicit-fallthrough warnings the Makefile
-# suppresses for vendor/sm.o do not exist in the same form, so no per-file
-# suppression is needed.
+# -DWIN32 + the CRT quiet macro; /wd4267 /wd4244 silence the size_t/__int64 ->
+# int narrowing warnings exactly as PostgreSQL's own build suppresses them (they
+# also bleed out of PG's headers, so suppressing here quiets both).
 c_args = [
   '-DWIN32',
   '-D_CRT_SECURE_NO_WARNINGS',
+  '/wd4267',
+  '/wd4244',
 ]
 
 pg_fts = shared_module('pg_fts',
@@ -77,7 +91,8 @@ pg_fts = shared_module('pg_fts',
   install_dir: pg_lib,
 )
 
-# Control + SQL script into share/extension.  Single install script for the
-# 0.1.0 release (the private incremental upgrade series was collapsed).
-install_data('pg_fts.control', install_dir: pg_dir / 'share' / 'extension')
-install_data('pg_fts--0.1.0.sql', install_dir: pg_dir / 'share' / 'extension')
+# Control + SQL script into the extension dir (layout auto-detected above).
+# Single install script for the 0.1.0 release (the private incremental upgrade
+# series was collapsed).
+install_data('pg_fts.control', install_dir: pg_extension_dir)
+install_data('pg_fts--0.1.0.sql', install_dir: pg_extension_dir)
