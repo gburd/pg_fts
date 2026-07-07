@@ -1,4 +1,4 @@
-<!-- doc/src/sgml/pgfts.sgml -->
+<!-- doc/pg_fts.sgml -->
 
 <sect1 id="pgfts" xreflabel="pg_fts">
  <title>pg_fts &mdash; BM25 full-text search</title>

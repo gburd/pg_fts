@@ -29,7 +29,7 @@
  * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
- *	  contrib/pg_fts/pg_fts_lev.c
+ *	  pg_fts_lev.c
  *
  *-------------------------------------------------------------------------
  */

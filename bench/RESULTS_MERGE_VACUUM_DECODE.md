@@ -21,7 +21,7 @@ ITERATE the parallel merge to one segment was measured WORSE and reverted:
 Finding: the merge tail is the write of ONE multi-GB output segment by a single
 backend.  No group-partition scheme parallelizes a single output write, and
 iterating just adds write amplification.  Cutting this needs a streamed/columnar
-write path (DEFERRED.md), not more merge parallelism.  Workers do run for the
+write path (ROADMAP.md), not more merge parallelism.  Workers do run for the
 scan and the intermediate group merges.
 
 ## 2. Physical bloat reclaim: fts_vacuum (low-page FSM bias + truncate)
@@ -60,4 +60,4 @@ The headline: common-term fts_count 305 -> 101 ms (3x), now BELOW pg_search's
 123 ms on the same box.  The ranked paths move less because they are gated more
 by WAND cursor advance and top-k than by raw decode volume; closing the ranked
 gap vs vchord/pg_search remains a codec matter (compact columnar + rank/select
-skip), per NOTE_IMPACT_ORDERING.md.
+skip) on real text; impact-ordering was evaluated and reverted (see ROADMAP.md).

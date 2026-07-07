@@ -11,7 +11,7 @@
  * definitions and these declarations resolve to the same namespaced symbols.
  *
  * IDENTIFICATION
- *	  contrib/pg_fts/pg_fts_sm.h
+ *	  pg_fts_sm.h
  *
  *-------------------------------------------------------------------------
  */

@@ -61,6 +61,6 @@ vchord uses the same `to_tsvector('english',...)` as GIN.
 ## Where pg_fts should improve (unchanged conclusion)
 The ranked-retrieval gap vs vchord/pg_search is a **posting-codec** matter
 (compact columnar + rank/select skip), not an index-structure or sparsemap
-matter — see NOTE_IMPACT_ORDERING.md and DEFERRED.md.  Physical index bloat
+matter — see ROADMAP.md.  Physical index bloat
 after merge (12 GB vs ~3.6 GB logical) is the other actionable item: recycle
 merged source pages eagerly rather than leaving them for later reuse.

@@ -1,5 +1,5 @@
 /*
- * contrib/pg_fts/bench/bench.sql -- stage 12 parity / performance harness.
+ * bench/bench.sql -- stage 12 parity / performance harness.
  *
  * A minimal, reproducible A/B comparison of pg_fts (bm25) against the existing
  * tsvector + GIN + ts_rank stack on the same corpus.  Load a text corpus into

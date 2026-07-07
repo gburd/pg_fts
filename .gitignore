@@ -20,3 +20,14 @@ regression.out
 *~
 *.swp
 .DS_Store
+
+# other
+.memelord
+
+# agent tooling (not part of the extension)
+.claude/
+.mcp.json
+AGENTS.md
+.kiro/
+.pi/
+

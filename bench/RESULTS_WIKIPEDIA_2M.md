@@ -74,7 +74,7 @@ Every ranked query was checked to return the same match set as the GIN path
 
 `bench/get_wikipedia.py` (streams the HF parquet to TSV), load the first 2M
 rows, build the two indexes as above, then `bench/bench_fixed.sh` (pinned terms,
-median-of-9).  See `PRODUCTION_SCALE_PLAN.md` for the full methodology and the
+median-of-9).  See the harness scripts in this directory for the full methodology and the
 10M-50M scale plan.
 
 ## Update: parallel build/merge + regression fix (2M Wikipedia, r7i.4xlarge, PG17)
@@ -100,7 +100,7 @@ The common&mid ranked regression (37.8 -> 16.6 ms) is fixed, back to baseline.
 Note on the parallel MERGE at scale: it launches workers and is verified correct
 locally, but on the multi-preload EC2 cluster it sometimes fell back to the
 serial merge path (worker launch returned 0 despite free slots -- under
-investigation; tracked in DEFERRED.md).  The compaction itself (the regression
+investigation; tracked in ROADMAP.md).  The compaction itself (the regression
 fix) is confirmed on EC2 regardless of whether the merge ran parallel or serial.
 
 ## Same-hardware A/B of the regression fix (r7i.4xlarge, 1.4M-row corpus, PG20devel)
