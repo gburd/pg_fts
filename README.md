@@ -24,6 +24,26 @@ sudo make install PG_CONFIG=/path/to/pg_config
 
 `PG_CONFIG` defaults to whatever `pg_config` is on `PATH`.
 
+On Windows with MSVC (where PostgreSQL is built with meson rather than PGXS)
+use the meson recipe instead, pointing `pg_dir` at an MSVC-built PostgreSQL
+≥ 17 (a MinGW/Strawberry PostgreSQL will not work):
+
+```sh
+meson setup build -Dpg_dir=C:/pgsql --buildtype=release
+ninja -C build
+ninja -C build install
+```
+
+With [Nix](https://nixos.org) (flakes) you can build and test without a local
+PostgreSQL install:
+
+```sh
+nix build .#default              # build against nixpkgs PostgreSQL 17
+nix flake check                  # build + regression/isolation tests, PG 17 and 18
+nix develop                      # dev shell with the toolchain + pg_config
+nix run .#docs                   # validate doc/pg_fts.sgml
+```
+
 ## Test
 
 ```sh
