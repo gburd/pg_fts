@@ -18,7 +18,7 @@ setup
     CREATE TABLE tdoc (id int primary key, d ftsdoc);
     INSERT INTO tdoc SELECT g, to_ftsdoc('alpha doc ' || g)
         FROM generate_series(1, 200) g;
-    CREATE INDEX tdoc_bm25 ON tdoc USING bm25 (d);
+    CREATE INDEX tdoc_bm25 ON tdoc USING fts (d);
 }
 
 teardown

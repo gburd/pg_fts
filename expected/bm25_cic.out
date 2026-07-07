@@ -1,7 +1,7 @@
 Parsed test spec with 2 sessions
 
 starting permutation: b_cic w_beta b_ric b_check
-step b_cic: CREATE INDEX CONCURRENTLY cic_bm25 ON cic USING bm25 (d);
+step b_cic: CREATE INDEX CONCURRENTLY cic_bm25 ON cic USING fts (d);
 step w_beta: INSERT INTO cic SELECT g, to_ftsdoc('beta doc ' || g)
                      FROM generate_series(200, 249) g;
 step b_ric: REINDEX INDEX CONCURRENTLY cic_bm25;

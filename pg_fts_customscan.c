@@ -182,7 +182,7 @@ fts_find_pushdown_index(PlannerInfo *root, RelOptInfo *rel,
 			Oid			indexoid = lfirst_oid(ic);
 			Relation	ind = index_open(indexoid, AccessShareLock);
 
-			if (ind->rd_rel->relam == get_index_am_oid("bm25", true) &&
+			if (ind->rd_rel->relam == get_index_am_oid("fts", true) &&
 				ind->rd_indexprs != NIL &&
 				equal(linitial(ind->rd_indexprs), lhs))
 				found = indexoid;

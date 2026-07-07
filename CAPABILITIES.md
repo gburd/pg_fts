@@ -1,6 +1,6 @@
 # pg_fts capability / production-readiness matrix
 
-BM25 full-text search index access method (`bm25`) for PostgreSQL.
+BM25 full-text search index access method (`fts`) for PostgreSQL.
 
 Every claim below is grounded in the source under `contrib/pg_fts/`. File:line
 citations are to the tree this document was generated against. All
@@ -84,7 +84,7 @@ MVCC-correct bulk-count primitive. Callers wanting a fast count must call
 ### 3. REPACK / pg_repack / in-place compaction
 
 **pg_repack does not apply to an index AM** — it rewrites the *table*, which is
-orthogonal to `bm25`. What pg_fts offers for compaction:
+orthogonal to `fts`. What pg_fts offers for compaction:
 
 - **VACUUM + `fts_merge()`** — the size-tiered segment merge. VACUUM's
   `amvacuumcleanup` folds pending docs into a segment and merges;
@@ -142,11 +142,11 @@ a **migration helper** `tsquery_to_ftsquery()` (`pg_fts_migrate.c:130`, faithful
 `&→AND`, `|→OR`, `!→NOT`, `<N>→FTS_OP_PHRASE` preserving the gap) and an
 ASSIGNMENT **cast** (`pg_fts--1.5--1.6.sql:14-15`) so existing tsquery values
 flow into `@@@`, but there is **no transparent operator/type shim** — queries,
-index DDL (`USING bm25 (to_ftsdoc(...))`) and ranking calls must be rewritten.
+index DDL (`USING fts (to_ftsdoc(...))`) and ranking calls must be rewritten.
 
 **(b) Logical replication does not replicate indexes.** Under logical
 replication the subscriber maintains its **own** indexes; a subscriber must have
-pg_fts installed and its own `bm25` index provisioned. This is no worse than GIN
+pg_fts installed and its own `fts` index provisioned. This is no worse than GIN
 (indexes are never logically replicated), but it is a per-subscriber
 provisioning step, not automatic.
 

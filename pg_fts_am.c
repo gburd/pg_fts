@@ -75,7 +75,7 @@
 #include "utils/snapmgr.h"
 #include "utils/selfuncs.h"
 
-PG_FUNCTION_INFO_V1(bm25handler);
+PG_FUNCTION_INFO_V1(fts_handler);
 
 /* ----- build: collect postings from the heap ----- */
 
@@ -759,6 +759,37 @@ bm25_init_metapage(Relation index)
 		((char *) meta + sizeof(BM25MetaPageData)) - (char *) page;
 	GenericXLogFinish(state);
 	UnlockReleaseBuffer(buffer);
+}
+
+/*
+ * Validate a metapage's magic and format version before trusting its contents.
+ * Guards against a pg_fts shared library reading an index written by an
+ * incompatible on-disk format (e.g. a .so upgraded/downgraded out of step with
+ * the physical index) — the classic ".so vs catalog/on-disk skew".  Callers
+ * pass the metapage of an index being opened for scan/insert/maintenance; a
+ * mismatch raises a clear, actionable error rather than silently misreading
+ * bytes.
+ */
+static void
+bm25_check_meta(Page page, Relation index)
+{
+	BM25MetaPageData *meta = BM25PageGetMeta(page);
+
+	if (meta->magic != BM25_MAGIC)
+		ereport(ERROR,
+				(errcode(ERRCODE_INDEX_CORRUPTED),
+				 errmsg("index \"%s\" is not a valid pg_fts index",
+						RelationGetRelationName(index)),
+				 errdetail("Metapage magic 0x%08X does not match the expected 0x%08X.",
+						   meta->magic, BM25_MAGIC)));
+
+	if (meta->version != BM25_VERSION)
+		ereport(ERROR,
+				(errcode(ERRCODE_INDEX_CORRUPTED),
+				 errmsg("index \"%s\" has pg_fts on-disk format version %u, but this build expects version %u",
+						RelationGetRelationName(index),
+						meta->version, BM25_VERSION),
+				 errhint("REINDEX the index to rebuild it in the current format.")));
 }
 
 /*
@@ -2463,6 +2494,7 @@ bm25_insert(Relation index, Datum *values, bool *isnull,
 	metabuf = ReadBuffer(index, BM25_METAPAGE_BLKNO);
 	LockBuffer(metabuf, BUFFER_LOCK_EXCLUSIVE);
 	metapage = BufferGetPage(metabuf);
+	bm25_check_meta(metapage, index);
 	meta = BM25PageGetMeta(metapage);
 	tailblk = meta->pendingtail;
 
@@ -2774,6 +2806,7 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 		Buffer		mb = ReadBuffer(index, BM25_METAPAGE_BLKNO);
 
 		LockBuffer(mb, BUFFER_LOCK_SHARE);
+		bm25_check_meta(BufferGetPage(mb), index);
 		memcpy(&meta, BM25PageGetMeta(BufferGetPage(mb)), sizeof(meta));
 		UnlockReleaseBuffer(mb);
 	}
@@ -2956,10 +2989,10 @@ fts_merge(PG_FUNCTION_ARGS)
 	bool		done;
 
 	index = index_open(indexoid, ShareUpdateExclusiveLock);
-	if (index->rd_rel->relam != get_index_am_oid("bm25", true))
+	if (index->rd_rel->relam != get_index_am_oid("fts", true))
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("\"%s\" is not a bm25 index",
+				 errmsg("\"%s\" is not an fts index",
 						RelationGetRelationName(index))));
 	done = bm25_flush_pending(index);
 	/*
@@ -2993,10 +3026,10 @@ fts_vacuum(PG_FUNCTION_ARGS)
 	bool		done;
 
 	index = index_open(indexoid, ShareUpdateExclusiveLock);
-	if (index->rd_rel->relam != get_index_am_oid("bm25", true))
+	if (index->rd_rel->relam != get_index_am_oid("fts", true))
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("\"%s\" is not a bm25 index",
+				 errmsg("\"%s\" is not an fts index",
 						RelationGetRelationName(index))));
 	done = bm25_flush_pending(index);
 	if (bm25_vacuum_compact(index))
@@ -3068,7 +3101,7 @@ bm25_validate(Oid opclassoid)
 }
 
 Datum
-bm25handler(PG_FUNCTION_ARGS)
+fts_handler(PG_FUNCTION_ARGS)
 {
 	IndexAmRoutine *amroutine = makeNode(IndexAmRoutine);
 

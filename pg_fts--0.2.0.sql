@@ -1,4 +1,4 @@
-/* pg_fts--0.1.0.sql */
+/* pg_fts--0.2.0.sql */
 
 -- complain if script is sourced in psql, rather than via CREATE EXTENSION
 \echo Use "CREATE EXTENSION pg_fts" to load this file. \quit
@@ -222,18 +222,18 @@ CREATE CAST (tsquery AS ftsquery)
 -- index on to_ftsdoc(text_column) is the external-content model -- the text
 -- lives in the base table and the index stores only postings.
 --
-CREATE FUNCTION bm25handler(internal)
+CREATE FUNCTION fts_handler(internal)
 RETURNS index_am_handler
 AS 'MODULE_PATHNAME'
 LANGUAGE C;
 
-CREATE ACCESS METHOD bm25 TYPE INDEX HANDLER bm25handler;
+CREATE ACCESS METHOD fts TYPE INDEX HANDLER fts_handler;
 
-COMMENT ON ACCESS METHOD bm25 IS 'bm25 inverted index for full-text search';
+COMMENT ON ACCESS METHOD fts IS 'fts inverted index for full-text search with BM25 ranking';
 
 -- Operator class: strategy 1 is @@@ (ftsdoc @@@ ftsquery).
-CREATE OPERATOR CLASS ftsdoc_bm25_ops
-DEFAULT FOR TYPE ftsdoc USING bm25 AS
+CREATE OPERATOR CLASS ftsdoc_fts_ops
+DEFAULT FOR TYPE ftsdoc USING fts AS
     OPERATOR 1 @@@ (ftsdoc, ftsquery);
 
 --
@@ -309,9 +309,9 @@ CREATE OPERATOR <=> (
     COMMUTATOR = <=>
 );
 
--- Add the ORDER BY operator (strategy 2) to the bm25 operator class so
+-- Add the ORDER BY operator (strategy 2) to the fts operator class so
 -- "ORDER BY col <=> query LIMIT k" uses an index ordering scan.
-ALTER OPERATOR FAMILY ftsdoc_bm25_ops USING bm25 ADD
+ALTER OPERATOR FAMILY ftsdoc_fts_ops USING fts ADD
     OPERATOR 2 <=> (ftsdoc, ftsquery) FOR ORDER BY pg_catalog.float_ops;
 
 --

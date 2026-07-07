@@ -241,6 +241,7 @@ bm25_read_meta(Relation index, BM25MetaPageData *out)
 
 	LockBuffer(buffer, BUFFER_LOCK_SHARE);
 	page = BufferGetPage(buffer);
+	bm25_check_meta(page, index);
 	memcpy(out, BM25PageGetMeta(page), sizeof(BM25MetaPageData));
 	UnlockReleaseBuffer(buffer);
 }
@@ -1680,10 +1681,10 @@ fts_index_stats(PG_FUNCTION_ARGS)
 	tupdesc = BlessTupleDesc(tupdesc);
 
 	index = index_open(indexoid, AccessShareLock);
-	if (index->rd_rel->relam != get_index_am_oid("bm25", true))
+	if (index->rd_rel->relam != get_index_am_oid("fts", true))
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("\"%s\" is not a bm25 index",
+				 errmsg("\"%s\" is not an fts index",
 						RelationGetRelationName(index))));
 	bm25_read_meta(index, &meta);
 	index_close(index, AccessShareLock);

@@ -2,6 +2,25 @@
 
 All notable changes to pg_fts are documented here.
 
+## 0.2.0
+
+**Breaking:** the index access method was renamed **`bm25` → `fts`**
+(`CREATE INDEX ... USING fts (to_ftsdoc('english', body))`).  This lets pg_fts
+coexist in the same database as Timescale pg_textsearch (whose AM is named
+`bm25`), so a pg_textsearch workload can be migrated one index at a time rather
+than in a single hard cutover.  Existing `USING bm25` indexes must be recreated
+as `USING fts`.  The BM25 scoring functions (`fts_bm25`, `fts_bm25f`,
+`fts_bm25_opts`) are unchanged — BM25 is the ranking algorithm, `fts` is the
+access method.
+
+- On-disk format version check: opening an index whose stored format version
+  does not match the loaded shared library now raises a clear error
+  (`... has pg_fts on-disk format version N, but this build expects M`) with a
+  `REINDEX` hint, instead of silently misreading the index.
+- New `doc/MIGRATING_FROM_PG_TEXTSEARCH.md`: query/DDL rewrite table, the
+  multi-column → concatenated-`to_ftsdoc` pattern, and index build sizing
+  (`CREATE INDEX` bounds build memory to `maintenance_work_mem`).
+
 ## 0.1.0 — initial public release
 
 First public release.  The extension was developed as an internal, qualified

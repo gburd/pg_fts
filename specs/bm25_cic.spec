@@ -21,7 +21,7 @@ teardown
 }
 
 session "builder"
-step "b_cic"   { CREATE INDEX CONCURRENTLY cic_bm25 ON cic USING bm25 (d); }
+step "b_cic"   { CREATE INDEX CONCURRENTLY cic_bm25 ON cic USING fts (d); }
 step "b_ric"   { REINDEX INDEX CONCURRENTLY cic_bm25; }
 step "b_check" { SET enable_seqscan = off;
                  SELECT count(*) AS alpha FROM cic WHERE d @@@ 'alpha'::ftsquery;

@@ -1,4 +1,4 @@
-CREATE EXTENSION pg_fts VERSION '0.1.0';
+CREATE EXTENSION pg_fts VERSION '0.2.0';
 
 -- ftsdoc: analysis, output shows terms with term frequencies
 SELECT to_ftsdoc('The quick brown fox, the QUICK fox!');
@@ -147,11 +147,11 @@ SELECT 'quick*'::ftsquery;                        -- renders with the star
 SELECT to_ftsdoc('the quicksand shifts') @@@ 'quick*'::ftsquery AS prefix_hit;
 SELECT to_ftsdoc('slow and steady') @@@ 'quick*'::ftsquery AS prefix_miss;
 SELECT to_ftsdoc('quick brown fox') @@@ 'qu* & fo*'::ftsquery AS prefix_and;
--- prefix works through the bm25 index too
+-- prefix works through the fts index too
 CREATE TABLE pfx (id serial, d ftsdoc);
 INSERT INTO pfx (d) VALUES (to_ftsdoc('quicksand')), (to_ftsdoc('quiche')),
                           (to_ftsdoc('slow'));
-CREATE INDEX pfx_bm25 ON pfx USING bm25 (d);
+CREATE INDEX pfx_bm25 ON pfx USING fts (d);
 SET enable_seqscan = off;
 SELECT id FROM pfx WHERE d @@@ 'qui*'::ftsquery ORDER BY id;
 RESET enable_seqscan;
@@ -162,7 +162,7 @@ CREATE TABLE corpus (id serial, d ftsdoc);
 INSERT INTO corpus (d)
 SELECT to_ftsdoc('common ' || CASE WHEN g % 10 = 0 THEN 'rare' ELSE 'filler' END)
 FROM generate_series(1, 100) g;
-CREATE INDEX corpus_bm25 ON corpus USING bm25 (d);
+CREATE INDEX corpus_bm25 ON corpus USING fts (d);
 -- stats reflect the corpus: 100 docs
 SELECT ndocs, nterms FROM fts_index_stats('corpus_bm25');
 -- 'rare' (df=10) scores higher than 'common' (df=100) using index df
@@ -179,7 +179,7 @@ DROP TABLE corpus;
 -- incremental index maintenance (pending list).
 CREATE TABLE inc (id serial, d ftsdoc);
 INSERT INTO inc (d) VALUES (to_ftsdoc('alpha beta')), (to_ftsdoc('gamma delta'));
-CREATE INDEX inc_bm25 ON inc USING bm25 (d);
+CREATE INDEX inc_bm25 ON inc USING fts (d);
 SET enable_seqscan = off;
 -- rows present at build time are found via the main structure
 SELECT id FROM inc WHERE d @@@ 'alpha'::ftsquery ORDER BY id;
@@ -210,12 +210,12 @@ SELECT to_ftsdoc('the quick brown fox jumps') @@@ '"quick brown fox"'::ftsquery 
 SELECT to_ftsdoc('quick red brown fox') @@@ '"quick brown fox"'::ftsquery AS three_miss;
 -- phrase combined with boolean operators
 SELECT to_ftsdoc('the quick brown fox') @@@ '"quick brown" & fox'::ftsquery AS combo;
--- phrase works through the bm25 index (recheck enforces adjacency)
+-- phrase works through the fts index (recheck enforces adjacency)
 CREATE TABLE ph (id serial, d ftsdoc);
 INSERT INTO ph (d) VALUES (to_ftsdoc('quick brown fox')),
                           (to_ftsdoc('brown quick fox')),
                           (to_ftsdoc('quick brown bear'));
-CREATE INDEX ph_bm25 ON ph USING bm25 (d);
+CREATE INDEX ph_bm25 ON ph USING fts (d);
 SET enable_seqscan = off;
 SELECT id FROM ph WHERE d @@@ '"quick brown"'::ftsquery ORDER BY id;   -- 1 and 3
 RESET enable_seqscan;
@@ -230,7 +230,7 @@ INSERT INTO articles (body) VALUES
   ('the quick brown fox'),
   ('lazy dogs sleep'),
   ('quick foxes are clever');
-CREATE INDEX articles_bm25 ON articles USING bm25 (to_ftsdoc(body));
+CREATE INDEX articles_bm25 ON articles USING fts (to_ftsdoc(body));
 SET enable_seqscan = off;
 -- query against the expression index; text is fetched from the table only
 -- for returned rows
@@ -256,11 +256,11 @@ SELECT to_ftsdoc('lazy dog') @@@ '/^qu/'::ftsquery AS regex_miss;
 SELECT '/ab.*cd/'::ftsquery;
 -- fuzzy combined with boolean
 SELECT to_ftsdoc('the quic brown fox') @@@ 'quick~1 & fox'::ftsquery AS combo;
--- fuzzy/regex work through the bm25 index (recheck applies the exact test)
+-- fuzzy/regex work through the fts index (recheck applies the exact test)
 CREATE TABLE fz (id serial, d ftsdoc);
 INSERT INTO fz (d) VALUES (to_ftsdoc('quick')), (to_ftsdoc('quic')),
                           (to_ftsdoc('slow'));
-CREATE INDEX fz_bm25 ON fz USING bm25 (d);
+CREATE INDEX fz_bm25 ON fz USING fts (d);
 SET enable_seqscan = off;
 SELECT id FROM fz WHERE d @@@ 'quick~1'::ftsquery ORDER BY id;   -- 1 and 2
 SELECT id FROM fz WHERE d @@@ '/^qu/'::ftsquery ORDER BY id;      -- 1 and 2
@@ -288,7 +288,7 @@ SELECT fts_bm25f(ARRAY[to_ftsdoc('a')], 'a'::ftsquery, ARRAY[1.0,2.0], 10, ARRAY
 -- Background merge of the pending list.
 CREATE TABLE mrg (id serial, d ftsdoc);
 INSERT INTO mrg (d) VALUES (to_ftsdoc('alpha beta'));
-CREATE INDEX mrg_bm25 ON mrg USING bm25 (d);
+CREATE INDEX mrg_bm25 ON mrg USING fts (d);
 INSERT INTO mrg (d) VALUES (to_ftsdoc('alpha gamma')), (to_ftsdoc('delta'));
 -- before merge: 2 docs pending
 SELECT ndocs FROM fts_index_stats('mrg_bm25');
@@ -312,7 +312,7 @@ INSERT INTO srch (body, d) VALUES
   ('quick brown fox', to_ftsdoc('quick brown fox')),
   ('a slow turtle', to_ftsdoc('a slow turtle')),
   ('quick', to_ftsdoc('quick'));
-CREATE INDEX srch_bm25 ON srch USING bm25 (d);
+CREATE INDEX srch_bm25 ON srch USING fts (d);
 -- top-k by index-only score: doc with tf(quick)=3 ranks first
 SELECT s.id, round(r.score::numeric, 3) AS score
 FROM fts_search('srch_bm25', 'quick'::ftsquery, 10) r
@@ -340,7 +340,7 @@ SELECT to_ftsdoc('dog log fog') @@@ 'rat~1'::ftsquery AS short_miss;
 CREATE TABLE viz (id serial, d ftsdoc);
 INSERT INTO viz (d) VALUES (to_ftsdoc('apple')), (to_ftsdoc('apple')),
                           (to_ftsdoc('apple')), (to_ftsdoc('apple'));
-CREATE INDEX viz_bm25 ON viz USING bm25 (d);
+CREATE INDEX viz_bm25 ON viz USING fts (d);
 -- delete two rows; their postings remain in the index until merge/reindex
 DELETE FROM viz WHERE id IN (2, 3);
 -- fts_search must skip the dead tuples (returns 2 live rows, not 4)
@@ -355,7 +355,7 @@ DROP TABLE viz;
 CREATE TABLE cmp (id serial, d ftsdoc);
 INSERT INTO cmp (d) SELECT to_ftsdoc('common term here')
 FROM generate_series(1, 500);
-CREATE INDEX cmp_bm25 ON cmp USING bm25 (d);
+CREATE INDEX cmp_bm25 ON cmp USING fts (d);
 -- all 500 rows match the compressed posting list
 SELECT count(*) AS all_match
 FROM fts_search('cmp_bm25', 'common'::ftsquery, 1000) r JOIN cmp c ON c.ctid = r.ctid;
@@ -375,7 +375,7 @@ INSERT INTO wnd (d) VALUES
   (to_ftsdoc('gamma only')),               -- neither
   (to_ftsdoc('alpha')),                    -- alpha only
   (to_ftsdoc('beta'));                     -- beta only
-CREATE INDEX wnd_bm25 ON wnd USING bm25 (d);
+CREATE INDEX wnd_bm25 ON wnd USING fts (d);
 -- top-2 for 'alpha | beta': the two docs matching both terms should lead
 SELECT w.id
 FROM fts_search('wnd_bm25', 'alpha | beta'::ftsquery, 3) r
@@ -393,7 +393,7 @@ CREATE TABLE lazy (id serial, d ftsdoc);
 -- 2000 docs of 'term': posting list spans many pages; one doc has high tf
 INSERT INTO lazy (d) SELECT to_ftsdoc('term') FROM generate_series(1, 2000);
 INSERT INTO lazy (d) VALUES (to_ftsdoc('term term term term term'));  -- id 2001
-CREATE INDEX lazy_bm25 ON lazy USING bm25 (d);
+CREATE INDEX lazy_bm25 ON lazy USING fts (d);
 -- top-1 must be the high-tf doc (id 2001), found via block-max skipping
 SELECT l.id
 FROM fts_search('lazy_bm25', 'term'::ftsquery, 1) r JOIN lazy l ON l.ctid = r.ctid;
@@ -419,7 +419,7 @@ SELECT to_ftsdoc('a b c') @@@ 'NEAR(a c)'::ftsquery AS near_default_k;
 -- FSM page recycling: repeated merges reuse freed blocks (no unbounded growth).
 CREATE TABLE recyc (id serial, d ftsdoc);
 INSERT INTO recyc (d) SELECT to_ftsdoc('term' || (g % 50)) FROM generate_series(1, 500) g;
-CREATE INDEX recyc_bm25 ON recyc USING bm25 (d);
+CREATE INDEX recyc_bm25 ON recyc USING fts (d);
 -- churn: insert + merge several times; each merge frees the old blocks
 DO $$
 BEGIN
@@ -443,7 +443,7 @@ INSERT INTO ord (d) VALUES
   (to_ftsdoc('quick brown fox')),
   (to_ftsdoc('a slow turtle')),
   (to_ftsdoc('quick'));                    -- short doc, high length-norm score
-CREATE INDEX ord_bm25 ON ord USING bm25 (d);
+CREATE INDEX ord_bm25 ON ord USING fts (d);
 SET enable_seqscan = off;
 -- the plan should be an index scan ordered by the distance operator (no Sort)
 EXPLAIN (COSTS OFF)
@@ -460,7 +460,7 @@ DROP TABLE ord;
 CREATE TABLE trgm (id serial, d ftsdoc);
 INSERT INTO trgm (d) SELECT to_ftsdoc('document' || g) FROM generate_series(1, 1000) g;
 INSERT INTO trgm (d) VALUES (to_ftsdoc('documemt42'));   -- id 1001, 1 edit from document42
-CREATE INDEX trgm_bm25 ON trgm USING bm25 (d);
+CREATE INDEX trgm_bm25 ON trgm USING fts (d);
 SET enable_seqscan = off;
 -- fuzzy: finds the exact 'document42' (id 43: 'document42') and the typo (1001)
 SELECT count(*) AS fuzzy_via_trigram
@@ -478,7 +478,7 @@ DROP TABLE trgm;
 -- grow k and return the full ordered set correctly across the boundary.
 CREATE TABLE bigord (id serial, d ftsdoc);
 INSERT INTO bigord (d) SELECT to_ftsdoc('term extra' || (g % 3)) FROM generate_series(1, 300) g;
-CREATE INDEX bigord_bm25 ON bigord USING bm25 (d);
+CREATE INDEX bigord_bm25 ON bigord USING fts (d);
 SET enable_seqscan = off;
 -- all 300 match 'term'; requesting 200 crosses the initial k=64 batch
 SELECT count(*) AS got, bool_and(s >= lead_s) AS ordered_ok
@@ -489,7 +489,7 @@ FROM (SELECT r.score AS s, lead(r.score) OVER (ORDER BY r.score DESC) AS lead_s
 RESET enable_seqscan;
 DROP TABLE bigord;
 
--- the bm25 index access method.
+-- the fts index access method.
 
 CREATE TABLE idxdocs (id serial, d ftsdoc);
 INSERT INTO idxdocs (d) VALUES
@@ -498,7 +498,7 @@ INSERT INTO idxdocs (d) VALUES
   (to_ftsdoc('quick turtles are rare')),
   (to_ftsdoc('brown bears and quick foxes'));
 
-CREATE INDEX idxdocs_bm25 ON idxdocs USING bm25 (d);
+CREATE INDEX idxdocs_bm25 ON idxdocs USING fts (d);
 
 -- force index usage and confirm the plan uses a bitmap scan on our AM
 SET enable_seqscan = off;
@@ -533,7 +533,7 @@ SELECT to_ftsquery('english'::regconfig, 'databases running')::text AS stemmed_r
 -- Segmented architecture: queries must span multiple segments correctly.
 CREATE TABLE seg (id serial, d ftsdoc);
 INSERT INTO seg(d) SELECT to_ftsdoc('alpha doc'||g) FROM generate_series(1,100) g;
-CREATE INDEX seg_bm25 ON seg USING bm25 (d);          -- segment 0
+CREATE INDEX seg_bm25 ON seg USING fts (d);          -- segment 0
 INSERT INTO seg(d) SELECT to_ftsdoc('beta doc'||g) FROM generate_series(1,50) g;
 SELECT fts_merge('seg_bm25');                          -- flush -> segment 1
 INSERT INTO seg(d) SELECT to_ftsdoc('alpha more'||g) FROM generate_series(1,30) g;
@@ -552,7 +552,7 @@ DROP TABLE seg;
 -- segment count stays bounded while results are preserved.
 CREATE TABLE tier (id serial, d ftsdoc);
 INSERT INTO tier(d) SELECT to_ftsdoc('common w'||(g%20)) FROM generate_series(1,100) g;
-CREATE INDEX tier_bm25 ON tier USING bm25 (d);
+CREATE INDEX tier_bm25 ON tier USING fts (d);
 DO $$ BEGIN FOR i IN 1..10 LOOP
   INSERT INTO tier(d) SELECT to_ftsdoc('common x'||(g%20)) FROM generate_series(1,20) g;
   PERFORM fts_merge('tier_bm25');
@@ -569,7 +569,7 @@ DROP TABLE tier;
 CREATE TABLE blk (id serial, d ftsdoc);
 INSERT INTO blk(d) SELECT to_ftsdoc('pop '||repeat('pop ',(g%7))||'w'||g)
   FROM generate_series(1,3000) g;      -- 'pop' in 3000 docs, >20 blocks/page
-CREATE INDEX blk_bm25 ON blk USING bm25 (d);
+CREATE INDEX blk_bm25 ON blk USING fts (d);
 SET enable_seqscan = off;
 SELECT count(*) AS pop_ct FROM blk WHERE d @@@ 'pop'::ftsquery;   -- 3000
 -- WAND top-10 distances equal a full seqscan sort's top-10 distances
@@ -589,7 +589,7 @@ DROP TABLE blk;
 CREATE TABLE voc (id serial, d ftsdoc);
 INSERT INTO voc(d) SELECT to_ftsdoc('term'||lpad(g::text,5,'0')||' shared')
   FROM generate_series(1,8000) g;      -- 8000 distinct terms -> multi-page dict
-CREATE INDEX voc_bm25 ON voc USING bm25 (d);
+CREATE INDEX voc_bm25 ON voc USING fts (d);
 SET enable_seqscan = off;
 SELECT count(*) AS first_term  FROM voc WHERE d @@@ 'term00001'::ftsquery;  -- 1
 SELECT count(*) AS mid_term    FROM voc WHERE d @@@ 'term04000'::ftsquery;  -- 1
@@ -611,7 +611,7 @@ CREATE TABLE bmw (id serial, d ftsdoc);
 INSERT INTO bmw(d) SELECT to_ftsdoc('alpha '||
     CASE WHEN g%50=0 THEN repeat('beta ',5) ELSE '' END||'w'||g)
   FROM generate_series(1,12000) g;
-CREATE INDEX bmw_bm25 ON bmw USING bm25 (d);
+CREATE INDEX bmw_bm25 ON bmw USING fts (d);
 SET enable_seqscan = off;
 CREATE TEMP TABLE bmw_top AS SELECT round((d <=> 'alpha beta'::ftsquery)::numeric,6) dist
   FROM bmw WHERE d @@@ 'alpha beta'::ftsquery ORDER BY dist LIMIT 10;
@@ -629,7 +629,7 @@ CREATE EXTENSION IF NOT EXISTS fuzzystrmatch;
 CREATE TABLE fz (id serial, body text, d ftsdoc);
 INSERT INTO fz(body) SELECT 'document'||g||' filler' FROM generate_series(1,5000) g;
 UPDATE fz SET d = to_ftsdoc(body);
-CREATE INDEX fz_bm25 ON fz USING bm25 (d);
+CREATE INDEX fz_bm25 ON fz USING fts (d);
 SET enable_seqscan = off;
 SELECT count(*) AS dfa_fuzzy FROM fz WHERE d @@@ 'document42~2'::ftsquery;
 SET enable_seqscan = on; SET enable_indexscan = off; SET enable_bitmapscan = off;
@@ -650,7 +650,7 @@ INSERT INTO ms(d) SELECT to_ftsdoc(
   (CASE WHEN g%7=0 THEN 'delta ' ELSE '' END)||
   (CASE WHEN g%11=0 THEN 'epsilon ' ELSE '' END)||'w'||g)
   FROM generate_series(1,20000) g;
-CREATE INDEX ms_bm25 ON ms USING bm25 (d);
+CREATE INDEX ms_bm25 ON ms USING fts (d);
 SET enable_seqscan = off;
 CREATE TEMP TABLE mtop AS SELECT round((d <=> 'alpha beta gamma delta epsilon'::ftsquery)::numeric,6) dist
   FROM ms WHERE d @@@ 'alpha beta gamma delta epsilon'::ftsquery ORDER BY dist LIMIT 20;
@@ -668,7 +668,7 @@ DROP TABLE ms;
 CREATE EXTENSION IF NOT EXISTS pg_fts;
 CREATE TABLE tomb (id int primary key, d ftsdoc);
 INSERT INTO tomb SELECT g, to_ftsdoc('alpha doc'||g) FROM generate_series(1,100) g;
-CREATE INDEX tomb_bm25 ON tomb USING bm25 (d);
+CREATE INDEX tomb_bm25 ON tomb USING fts (d);
 SET enable_seqscan = off;
 SELECT count(*) AS c_before FROM tomb WHERE d @@@ 'alpha'::ftsquery;         -- 100
 DELETE FROM tomb WHERE id <= 40;
@@ -689,7 +689,7 @@ DROP TABLE tomb;
 -- oversized document: an analyzed ftsdoc larger than one pending page must be
 -- indexed as its own segment rather than rejected
 CREATE TABLE bigdoc (id int, d ftsdoc);
-CREATE INDEX bigdoc_bm25 ON bigdoc USING bm25 (d);
+CREATE INDEX bigdoc_bm25 ON bigdoc USING fts (d);
 INSERT INTO bigdoc SELECT 1, to_ftsdoc(string_agg('term'||g||'x', ' '))
   FROM generate_series(1,4000) g;
 INSERT INTO bigdoc VALUES (2, to_ftsdoc('small doc with term500x here'));
@@ -706,7 +706,7 @@ INSERT INTO pbuild SELECT g, to_ftsdoc('common term'||(g%200)||' doc'||g)
   FROM generate_series(1,20000) g;
 SET min_parallel_table_scan_size = 0;
 SET max_parallel_maintenance_workers = 2;
-CREATE INDEX pbuild_bm25 ON pbuild USING bm25 (d);
+CREATE INDEX pbuild_bm25 ON pbuild USING fts (d);
 RESET max_parallel_maintenance_workers;
 RESET min_parallel_table_scan_size;
 SET enable_seqscan = off;
@@ -725,7 +725,7 @@ INSERT INTO vac SELECT g, to_ftsdoc('common term'||(g%200)||' doc'||g)
   FROM generate_series(1,20000) g;
 SET min_parallel_table_scan_size = 0;
 SET max_parallel_maintenance_workers = 2;
-CREATE INDEX vac_bm25 ON vac USING bm25 (d);
+CREATE INDEX vac_bm25 ON vac USING fts (d);
 RESET max_parallel_maintenance_workers;
 RESET min_parallel_table_scan_size;
 SET enable_seqscan = off;
@@ -743,7 +743,7 @@ DROP TABLE vac;
 CREATE TABLE cnt (id int, body text);
 INSERT INTO cnt SELECT g, 'common '||CASE WHEN g%4=0 THEN 'quarter ' ELSE '' END||'w'||(g%100)
   FROM generate_series(1,10000) g;
-CREATE INDEX cnt_bm25 ON cnt USING bm25(to_ftsdoc('english',body));
+CREATE INDEX cnt_bm25 ON cnt USING fts(to_ftsdoc('english',body));
 ANALYZE cnt;
 SET enable_seqscan=off;
 SELECT count(*) = fts_count('cnt_bm25', to_ftsquery('english','common')) AS count_matches

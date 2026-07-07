@@ -13,7 +13,7 @@
   relevance ranking.  It adds two data types &mdash; <type>ftsdoc</type> (an
   analyzed document) and <type>ftsquery</type> (a parsed query) &mdash; the
   <literal>@@@</literal> match operator and the <literal>&lt;=&gt;</literal>
-  relevance-distance operator, and a dedicated <literal>bm25</literal> index
+  relevance-distance operator, and a dedicated <literal>fts</literal> index
   access method that answers both.
  </para>
 
@@ -34,7 +34,7 @@
    This module is under active development.  Its on-disk format and SQL
    interface may change between versions; an <command>ALTER EXTENSION
    pg_fts UPDATE</command> that changes the on-disk format requires a
-   <command>REINDEX</command> of existing <literal>bm25</literal> indexes.
+   <command>REINDEX</command> of existing <literal>fts</literal> indexes.
   </para>
  </caution>
 
@@ -48,7 +48,7 @@
      <para>
       An analyzed document: a sorted list of terms, each with its term
       frequency and token positions, plus the document length.  Produced from
-      text with <function>to_ftsdoc</function>.  A <literal>bm25</literal>
+      text with <function>to_ftsdoc</function>.  A <literal>fts</literal>
       index stores the analyzed postings derived from an <type>ftsdoc</type>,
       not the original text.
      </para>
@@ -91,7 +91,7 @@
       <entry>
        Relevance distance <literal>1/(1+score)</literal> (a smaller distance is
        a higher BM25 score).  Used in <literal>ORDER BY</literal> to rank; the
-       <literal>bm25</literal> index answers this as an ordering scan.
+       <literal>fts</literal> index answers this as an ordering scan.
       </entry>
      </row>
     </tbody>
@@ -100,12 +100,12 @@
  </sect2>
 
  <sect2 id="pgfts-index">
-  <title>The <literal>bm25</literal> index</title>
+  <title>The <literal>fts</literal> index</title>
 
   <para>
    Create an index over an <type>ftsdoc</type> expression:
 <programlisting>
-CREATE INDEX docs_bm25 ON docs USING bm25 (to_ftsdoc('english', body));
+CREATE INDEX docs_bm25 ON docs USING fts (to_ftsdoc('english', body));
 </programlisting>
    The expression form is the recommended <quote>external content</quote>
    model: the text lives in the table, and the index derives the analyzed
@@ -144,7 +144,7 @@ SELECT id FROM docs
 
   <note>
    <para>
-    The <literal>bm25</literal> index is not covering (it stores postings, not
+    The <literal>fts</literal> index is not covering (it stores postings, not
     the source document), so it does not support index-only scans.  A fast,
     visibility-map-aware count is available as <function>fts_count</function>.
    </para>
@@ -183,7 +183,7 @@ SELECT id FROM docs
     <listitem>
      <para>
       Count the documents matching <replaceable>query</replaceable> using the
-      given <literal>bm25</literal> index, in bulk, without per-row executor
+      given <literal>fts</literal> index, in bulk, without per-row executor
       overhead.  Visible rows are counted via the visibility map; the heap is
       probed only for pages not marked all-visible.
      </para>
@@ -308,7 +308,7 @@ INSERT INTO docs (body) VALUES
   ('a quick red fox jumps'),
   ('lazy brown dogs sleep');
 
-CREATE INDEX docs_bm25 ON docs USING bm25 (to_ftsdoc('english', body));
+CREATE INDEX docs_bm25 ON docs USING fts (to_ftsdoc('english', body));
 
 -- boolean match
 SELECT id FROM docs

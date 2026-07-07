@@ -1,7 +1,7 @@
 # pg_fts — BM25 full-text search for PostgreSQL
 
 A PostgreSQL extension for full-text search with true **BM25/BM25F** relevance
-ranking, a dedicated `bm25` inverted-index access method, and a rich query
+ranking, a dedicated `fts` inverted-index access method, and a rich query
 language (boolean, phrase, NEAR, prefix, fuzzy, regex).  Unlike the
 `tsvector`/`tsquery` + GIN stack, the index maintains the corpus statistics
 BM25 needs (document count, average length, per-term document frequency) and
@@ -59,7 +59,7 @@ CREATE EXTENSION pg_fts;
 
 CREATE TABLE docs (id bigint, body text);
 -- index the analyzed document
-CREATE INDEX docs_bm25 ON docs USING bm25 (to_ftsdoc('english', body));
+CREATE INDEX docs_bm25 ON docs USING fts (to_ftsdoc('english', body));
 
 -- boolean / phrase / prefix / fuzzy / regex match
 SELECT id FROM docs
@@ -80,7 +80,9 @@ SELECT fts_vacuum('docs_bm25');   -- reclaim disk space (compact + truncate)
 ```
 
 See `doc/pg_fts.sgml` for the full reference, `CAPABILITIES.md` for the feature
-matrix, and `ROADMAP.md` for the roadmap.
+matrix, `ROADMAP.md` for the roadmap, and
+`doc/MIGRATING_FROM_PG_TEXTSEARCH.md` if you are moving from Timescale
+pg_textsearch.
 
 ---
 
@@ -104,7 +106,7 @@ Features
 --------
 
   * ftsdoc/ftsquery types, to_ftsdoc()/to_ftsquery(), the @@@ match operator
-  * the bm25 index access method (bitmap scan + <=> ordering scan, GenericXLog
+  * the fts index access method (bitmap scan + <=> ordering scan, GenericXLog
     crash-safe, MVCC-correct)
   * fts_bm25(): Okapi BM25 scoring, with the lucene/robertson/atire/bm25+/bm25l
     variants; fts_bm25f(): BM25F multi-field weighting
@@ -139,7 +141,7 @@ Example
   CREATE EXTENSION pg_fts;
 
   CREATE TABLE docs (id int, body text);
-  CREATE INDEX docs_bm25 ON docs USING bm25 (to_ftsdoc('english', body));
+  CREATE INDEX docs_bm25 ON docs USING fts (to_ftsdoc('english', body));
 
   SELECT id,
          fts_bm25(to_ftsdoc('english', body), q,
@@ -204,7 +206,7 @@ Known limitations / future work
 Storage architecture
 --------------------
 
-The bm25 index is a set of immutable SEGMENTS plus a small pending write buffer
+The fts index is a set of immutable SEGMENTS plus a small pending write buffer
 (the Lucene/Tantivy consensus design):
 
   * Each segment has a term dictionary (with a sparse per-page block index for
