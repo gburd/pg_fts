@@ -1,0 +1,66 @@
+name: Release
+
+# Tag-triggered publish. Cutting a vX.Y.Z tag (on Codeberg; auto-mirrored to
+# GitHub) builds+tests the extension, produces the PGXN source-dist zip, attaches
+# it to a GitHub Release, and uploads the distribution to PGXN.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write   # create the GitHub Release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need the tag + full history for `git archive`
+
+      - name: Install PostgreSQL 17 + server headers
+        run: |
+          sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            postgresql-17 postgresql-server-dev-17 gcc make zip
+
+      - name: Build + test (gate the release)
+        run: |
+          PGBIN=/usr/lib/postgresql/17/bin
+          make PG_CONFIG=$PGBIN/pg_config
+          sudo make install PG_CONFIG=$PGBIN/pg_config
+          sudo -u postgres "$PGBIN/pg_ctlcluster" 17 main start || sudo service postgresql start
+          sudo -u postgres make installcheck PG_CONFIG=$PGBIN/pg_config PGUSER=postgres
+
+      - name: Build source distribution (PGXN zip)
+        id: dist
+        run: |
+          make dist PG_CONFIG=/usr/lib/postgresql/17/bin/pg_config
+          echo "zip=pg_fts-${GITHUB_REF_NAME#v}.zip" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: ${{ steps.dist.outputs.zip }}
+
+      - name: Publish to PGXN
+        env:
+          PGXN_USER: ${{ secrets.PGXN_USER }}
+          PGXN_PASSWORD: ${{ secrets.PGXN_PASSWORD }}
+        run: |
+          if [ -z "$PGXN_USER" ] || [ -z "$PGXN_PASSWORD" ]; then
+            echo "PGXN_USER/PGXN_PASSWORD secrets not set; skipping PGXN upload." >&2
+            exit 0
+          fi
+          # PGXN Manager upload API: authenticated multipart POST of the dist zip.
+          # The distribution name + version are read from META.json inside the zip.
+          code=$(curl -sS -o /tmp/pgxn_resp.txt -w '%{http_code}' \
+            --user "$PGXN_USER:$PGXN_PASSWORD" \
+            -F "archive=@${{ steps.dist.outputs.zip }};type=application/zip" \
+            https://manager.pgxn.org/upload)
+          echo "PGXN upload HTTP $code"; cat /tmp/pgxn_resp.txt || true
+          case "$code" in 2*) : ;; *) echo "PGXN upload failed" >&2; exit 1 ;; esac

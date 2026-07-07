@@ -1,0 +1,57 @@
+name: Release
+
+# Codeberg (Forgejo Actions) tag-triggered publish: build+test, produce the
+# PGXN source-dist zip, and attach it to a Forgejo release on Codeberg.
+# PGXN publishing is handled once, by the GitHub mirror's release workflow
+# (PGXN rejects a duplicate version), so this workflow does not upload to PGXN.
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: docker
+    container:
+      image: postgres:17
+    steps:
+      - name: Install build deps
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            postgresql-server-dev-17 gcc make git zip ca-certificates
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # tag + history for `git archive`
+
+      - name: Build + test (gate the release)
+        run: |
+          make PG_CONFIG=/usr/bin/pg_config
+          make install PG_CONFIG=/usr/bin/pg_config
+          # run the regression + isolation suite as the postgres user against a
+          # throwaway cluster
+          su postgres -c '
+            /usr/lib/postgresql/17/bin/initdb -D /tmp/pgdata --no-locale --encoding=UTF8 &&
+            /usr/lib/postgresql/17/bin/pg_ctl -D /tmp/pgdata -o "-k /tmp -c listen_addresses=localhost" -w start
+          '
+          su postgres -c 'make installcheck PG_CONFIG=/usr/bin/pg_config PGHOST=/tmp PGUSER=postgres'
+
+      - name: Build source distribution (PGXN zip)
+        id: dist
+        run: |
+          make dist PG_CONFIG=/usr/bin/pg_config
+          echo "zip=pg_fts-${GITHUB_REF_NAME#v}.zip" >> "$GITHUB_OUTPUT"
+
+      - name: Create Codeberg release
+        uses: https://code.forgejo.org/forgejo/release-action@v2
+        with:
+          direction: upload
+          token: ${{ secrets.RELEASE_TOKEN }}
+          tag: ${{ github.ref_name }}
+          title: ${{ github.ref_name }}
+          files: ${{ steps.dist.outputs.zip }}
+          release-notes: |
+            pg_fts ${{ github.ref_name }}
+
+            Source distribution (build with `make PG_CONFIG=...`); see README.md.

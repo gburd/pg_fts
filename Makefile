@@ -40,3 +40,17 @@ include $(PGXS)
 # warnings for it only (public symbols are namespaced to __pg_bm25_* via
 # pg_fts_sm.h).
 vendor/sm.o: CFLAGS += -Wno-declaration-after-statement -Wno-implicit-fallthrough
+
+# --- Source distribution (PGXN release artifact) ---------------------------
+# `make dist` produces pg_fts-$(DISTVERSION).zip in PGXN layout (all files under
+# a pg_fts-$(DISTVERSION)/ prefix) straight from the committed tree via
+# git archive, so it always matches the tag and never includes build artifacts.
+# DISTVERSION is read from META.json (single source of truth).
+DISTVERSION = $(shell grep -m1 '"version"' META.json | sed -E 's/.*"version": *"([^"]+)".*/\1/')
+DISTNAME = pg_fts-$(DISTVERSION)
+
+.PHONY: dist
+dist:
+	@test -n "$(DISTVERSION)" || { echo "could not read version from META.json" >&2; exit 1; }
+	git archive --format=zip --prefix=$(DISTNAME)/ -o $(DISTNAME).zip HEAD
+	@echo "created $(DISTNAME).zip"

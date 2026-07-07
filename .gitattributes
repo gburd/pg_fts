@@ -1,0 +1,11 @@
+# Files excluded from the `git archive` source distribution (make dist / PGXN).
+# The release zip carries the buildable extension + user docs, not dev/CI
+# scaffolding or the benchmark harness.
+.gitattributes   export-ignore
+.editorconfig    export-ignore
+.envrc           export-ignore
+.gitignore       export-ignore
+.github          export-ignore
+.forgejo         export-ignore
+bench            export-ignore
+HANDOFF.md       export-ignore
