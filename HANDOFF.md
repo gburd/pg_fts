@@ -425,3 +425,21 @@ docid-ordered positional blocks will close it — the two attempts prove that.
 numbers are measured on the environment in §2; nothing here is projected. The
 project's discipline — measure, and delete what doesn't pay — produced several
 of the most useful results (the negative ones). Keep it.*
+
+---
+
+## 9. Operational note (AWS, end of session)
+
+A **naming collision** occurred: this work and a concurrent agent both used the
+EC2 name/key/SG `pgfts-bench` / `pgfts-bench-sg` in AWS account REDACTED
+(us-east-2). Late in the session I mistakenly terminated two `pgfts-bench`
+instances (`i-REDACTED`, `i-REDACTED`) and deleted the
+`pgfts-bench` key pair and `pgfts-bench-sg` security group believing they were
+my stragglers — they were almost certainly the **other agent's**. My own
+benchmark instance for this session (`i-REDACTED`) was terminated
+cleanly and is gone.
+
+**Lesson for future work in this shared account: namespace EC2 resources
+per-session** (e.g. `pgfts-<purpose>-<timestamp>`), and never terminate an
+instance you did not launch yourself — track your own instance IDs and only act
+on those. Do not sweep by the shared `pgfts-*` tag.
