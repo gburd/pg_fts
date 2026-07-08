@@ -2903,7 +2903,11 @@ bm25_topk_visible(Relation index, const BM25MetaPageData *meta,
 
 	results = (ScoredTid *) palloc(Max(k, 1) * sizeof(ScoredTid));
 	heap = table_open(index->rd_index->indrelid, AccessShareLock);
+#if PG_VERSION_NUM >= 190000
+	fetch = table_index_fetch_begin(heap, SO_NONE);
+#else
 	fetch = table_index_fetch_begin(heap);
+#endif
 	/* One reusable slot for the whole visibility loop (cleared between fetches)
 	 * rather than a create/drop per candidate. */
 	slot = table_slot_create(heap, NULL);
@@ -2969,7 +2973,11 @@ bm25_count_visible(Relation index, FtsQuery q)
 	 */
 	if (recheck)
 	{
+#if PG_VERSION_NUM >= 190000
+		fetch = table_index_fetch_begin(heap, SO_NONE);
+#else
 		fetch = table_index_fetch_begin(heap);
+#endif
 		for (i = 0; i < matches.n; i++)
 		{
 			ItemPointerData tid = matches.tids[i];
@@ -3003,7 +3011,11 @@ bm25_count_visible(Relation index, FtsQuery q)
 		/* page not all-visible: probe the heap for this TID's visibility */
 		if (fetch == NULL)
 		{
+#if PG_VERSION_NUM >= 190000
+			fetch = table_index_fetch_begin(heap, SO_NONE);
+#else
 			fetch = table_index_fetch_begin(heap);
+#endif
 		}
 		{
 			ItemPointerData tid = matches.tids[i];
