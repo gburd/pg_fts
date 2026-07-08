@@ -36,9 +36,9 @@ jobs:
           PGBIN=/usr/lib/postgresql/17/bin
           make PG_CONFIG=$PGBIN/pg_config
           sudo make install PG_CONFIG=$PGBIN/pg_config
-          # pg_virtualenv spins an ephemeral cluster + superuser env and runs
-          # installcheck against it (portable Debian/pgdg way).
-          pg_virtualenv -v 17 make installcheck PG_CONFIG=$PGBIN/pg_config
+          # REGRESS + ISOLATION are the release gate (TAP harness runs separately
+          # in CI and is not required to publish).
+          pg_virtualenv -v 17 make installcheck TAP_TESTS=0 PG_CONFIG=$PGBIN/pg_config
 
       - name: Build source distribution (PGXN zip)
         id: dist
