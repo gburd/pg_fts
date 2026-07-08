@@ -21,7 +21,7 @@
 #include "storage/itemptr.h"
 
 #define BM25_MAGIC			0x42324635	/* "B2F5" */
-#define BM25_VERSION		2		/* v2: segmented layout */
+#define BM25_VERSION		3		/* v3: per-segment doclen sidecar (doclen out of postings) */
 #define BM25_METAPAGE_BLKNO	0
 
 /* page opaque flags */
@@ -33,6 +33,7 @@
 #define BM25_TRGM_DATA		(1 << 5)	/* trigram sparsemap blob page */
 #define BM25_LIVEDOCS		(1 << 6)	/* per-segment tombstone bitmap page */
 #define BM25_DICTINDEX		(1 << 7)	/* sparse block index over dict pages */
+#define BM25_DOCLEN			(1 << 8)	/* per-segment doclen sidecar page */
 
 typedef struct BM25PageOpaqueData
 {
@@ -67,6 +68,7 @@ typedef struct BM25SegMeta
 	uint32		ndeleted;		/* tombstoned docs (for merge accounting) */
 	uint32		livedocslen;	/* serialized size of the livedocs tombstone blob */
 	BlockNumber dictindexstart; /* sparse block index over dict pages (Invalid = none) */
+	BlockNumber doclenstart;	/* first doclen-sidecar page (Invalid = none) */
 } BM25SegMeta;
 
 #define BM25_MAX_SEGMENTS 128	/* fits the metapage (~6KB of ~8KB); the size-
@@ -116,26 +118,29 @@ typedef struct BM25DictIndexEntry
 	char		term[FLEXIBLE_ARRAY_MEMBER];
 } BM25DictIndexEntry;
 
-/* a posting: which heap tuple, its term frequency, and the document length */
+/* a posting: which heap tuple and its term frequency (|D| lives in the
+ * per-segment doclen sidecar, keyed by docid, not in the posting stream). */
 typedef struct BM25Posting
 {
 	ItemPointerData tid;
 	uint32		tf;
-	uint32		doclen;			/* |D|: total tokens in the document */
+	uint32		doclen;			/* |D|: filled by callers that need it (merge/read);
+								 * NOT stored in the posting stream anymore */
 } BM25Posting;
 
 /*
  * Posting pages hold one or more fixed-size BLOCKS of up to BM25_BLOCK_SIZE
  * postings (the Lucene/Tantivy 128-doc block design).  Each block is a
- * BM25BlockHdr followed by three FOR (frame-of-reference) bit-packed columns --
- * docid-gaps, tfs, doclens; docid gaps are relative to first_docid within the
- * block.  Per-block max_tf/min_doclen give block-max WAND a tight impact bound
- * (finer than per-page), and first_docid lets a cursor skip an entire block
- * whose docids are all below a target.  (The columns are already narrow -- tf
- * and doclen are small and docid gaps are tiny within a common term's dense
- * blocks -- so patched-FOR/PFOR outlier extraction was measured to save only
- * ~7% of the column bytes, under ~0.5% of the whole index, not worth the
- * hot-path decode complexity; plain FOR is kept.)
+ * BM25BlockHdr followed by TWO FOR (frame-of-reference) bit-packed columns --
+ * docid-gaps and tfs; docid gaps are relative to first_docid within the block.
+ * (Prior to v3 a third column stored |D| once per posting -- once per
+ * document*distinct-term pair, ~40% of the index; it is now a per-segment
+ * doclen sidecar keyed by docid, stored once per document.)  Per-block
+ * max_tf/min_doclen give block-max WAND a tight impact bound (finer than
+ * per-page), and first_docid lets a cursor skip an entire block whose docids
+ * are all below a target.  min_doclen is retained as a per-block aggregate
+ * computed at write time from the sidecar doclens -- it stays in the header
+ * (tiny) so WAND block-max bounds need no sidecar read while pruning.
  */
 #define BM25_BLOCK_SIZE 128
 
@@ -181,6 +186,27 @@ typedef struct BM25TrgmEntry
 	uint32		smlen;			/* serialized sparsemap length in bytes */
 	BlockNumber firstdata;		/* first BM25_TRGM_DATA page of the term-ord set */
 } BM25TrgmEntry;
+
+/*
+ * Doclen sidecar: a per-segment array mapping docid -> |D|, stored ONCE per
+ * document (not once per posting).  A segment's distinct docids are gathered at
+ * write/merge time, sorted ascending, and packed into fixed BM25_BLOCK_SIZE-doc
+ * CHUNKS chained across doclen pages.  Each chunk is a BM25DoclenChunkHdr
+ * followed by two FOR columns: docid-gaps (from first_docid) and doclens.
+ * Chunks are docid-ordered, so a lookup binary-searches a tiny in-memory chunk
+ * directory (one first_docid per chunk, built once when a scan first touches
+ * the sidecar) to the covering chunk, then random-accesses the doclen at the
+ * matching offset.  A scan cursor walks docids ascending, so it caches the
+ * current decoded chunk and advances forward -- one ReadBuffer per ~128 scored
+ * postings, not one per posting.
+ */
+typedef struct BM25DoclenChunkHdr
+{
+	uint32		count;			/* docids in this chunk (<= BM25_BLOCK_SIZE) */
+	uint32		first_docid_hi;
+	uint32		first_docid_lo;
+	uint32		bytelen;		/* byte length of the two FOR columns that follow */
+} BM25DoclenChunkHdr;
 
 /* scan functions (pg_fts_am_scan.c, #included into pg_fts_am.c) */
 extern IndexScanDesc bm25_beginscan(Relation r, int nkeys, int norderbys);

@@ -359,7 +359,7 @@ bm25_lookup_term(Relation index, const BM25SegMeta *seg,
 			/* read exactly this term's df postings from the shared chain */
 			BM25Posting *post;
 			int			np = bm25_decode_term(index, firstposting, firstoffset,
-										  df, &post, NULL);
+										  df, &post, NULL, NULL);
 			ItemPointerData *tids = palloc(Max(np, 1) * sizeof(ItemPointerData));
 			int			n = 0;
 			int			i;
@@ -593,7 +593,7 @@ bm25_lookup_prefix(Relation index, const BM25SegMeta *seg,
 				BM25Posting *post;
 				int			np = bm25_decode_term(index, de->firstposting,
 												  de->firstoffset, de->df,
-												  &post, NULL);
+												  &post, NULL, NULL);
 				int			k;
 
 				for (k = 0; k < np; k++)
@@ -820,7 +820,7 @@ bm25_fuzzy_terms(Relation index, const BM25SegMeta *seg,
 				BM25Posting *post;
 				int			np = bm25_decode_term(index, de->firstposting,
 												  de->firstoffset, de->df,
-												  &post, NULL);
+												  &post, NULL, NULL);
 
 				/* keep this term's docid-sorted TIDs as a run for k-way merge */
 				if (np > 0)
@@ -1038,7 +1038,7 @@ bm25_universe(Relation index, BlockNumber dictstart)
 			BM25Posting *post;
 			int			np = bm25_decode_term(index, de->firstposting,
 											  de->firstoffset, de->df,
-											  &post, NULL);
+											  &post, NULL, NULL);
 			int			k;
 
 			for (k = 0; k < np; k++)
@@ -1805,14 +1805,15 @@ typedef struct WandCursor
 
 	/*
 	 * Current block only, decoded LAZILY: docids are unpacked eagerly (needed
-	 * to pivot/skip), but tf and doclen stay bit-packed in blkbuf and are
-	 * extracted per-posting on demand (bm25_for_get) only when a posting is
-	 * actually scored -- so blocks pruned by block-max never pay for tf/dl.
+	 * to pivot/skip), but tf stays bit-packed in blkbuf and is extracted
+	 * per-posting on demand (bm25_for_get) only when a posting is actually
+	 * scored -- so blocks pruned by block-max never pay for tf.  |D| is no
+	 * longer in the block stream; it is looked up from the per-segment doclen
+	 * sidecar (dlr) by docid, only for scored postings.
 	 */
 	unsigned char *blkbuf;		/* copy of the current block's FOR payload */
 	uint64		docids[BM25_BLOCK_SIZE];	/* decoded docids of current block */
 	uint32		tfoff;			/* offset of tf column within blkbuf */
-	uint32		dloff;			/* offset of doclen column within blkbuf */
 	int			blkcount;		/* postings in the current block */
 	uint32		blk_max_tf;		/* block-max tf (from header) */
 	uint32		blk_min_dl;		/* block-min |D| (from header) */
@@ -1828,6 +1829,7 @@ typedef struct WandCursor
 	BM25Tombstones *tombs;		/* loaded per-segment tombstones (or NULL) */
 	uint32		segidx;			/* which segment this cursor's postings belong to */
 	sm_cursor_cached_t tombcache;	/* stack MRU chunk cache for tombstone lookups */
+	BM25DoclenReader dlr;		/* per-segment doclen sidecar reader (docid -> |D|) */
 	/*
 	 * Optional docid range [docid_lo, docid_hi) for a parallel worker's slice.
 	 * docid_lo = 0 and docid_hi = UINT64_MAX means "whole term" (the serial
@@ -1872,7 +1874,6 @@ wand_load_block(WandCursor *c)
 	uint64		base;
 	int			cnt;
 	int			glen;
-	int			tflen;
 	int			i;
 
 	if (c->blkbuf)
@@ -1928,12 +1929,11 @@ wand_load_block(WandCursor *c)
 	c->blkbuf = (unsigned char *) palloc(bh->bytelen);
 	memcpy(c->blkbuf, stream, bh->bytelen);
 
-	/* eagerly decode ONLY docids (gaps); record tf/dl column offsets for lazy
-	 * per-posting access -- pruned blocks never touch tf/dl */
+	/* eagerly decode ONLY docids (gaps); record the tf column offset for lazy
+	 * per-posting access -- pruned blocks never touch tf.  |D| is in the
+	 * sidecar now, not the block. */
 	glen = bm25_for_unpack(c->blkbuf, cnt, gaps);
-	tflen = bm25_for_bytelen(c->blkbuf + glen, cnt);
 	c->tfoff = (uint32) glen;
-	c->dloff = (uint32) (glen + tflen);
 
 	base = ((uint64) bh->first_docid_hi << 32) | bh->first_docid_lo;
 	for (i = 0; i < cnt; i++)
@@ -2065,14 +2065,16 @@ wand_skip_block(WandCursor *c)
 	wand_skip_own_tombstoned(c);
 }
 
-/* Exact BM25 contribution of the current posting.  tf and |D| are extracted
- * from the block's still-packed FOR columns ON DEMAND (bm25_for_get) -- only
- * for postings actually scored, so pruned blocks never decode tf/dl. */
+/* Exact BM25 contribution of the current posting.  tf is extracted from the
+ * block's still-packed FOR column ON DEMAND (bm25_for_get) -- only for postings
+ * actually scored; |D| is looked up from the per-segment doclen sidecar by
+ * docid (the cursor caches the current sidecar chunk, so ascending scans stay
+ * O(1) per posting).  Pruned blocks never touch tf or the sidecar. */
 static inline double
 wand_contrib_cur(WandCursor *c)
 {
 	double		tf = (double) bm25_for_get(c->blkbuf + c->tfoff, c->cur);
-	double		dl = (double) bm25_for_get(c->blkbuf + c->dloff, c->cur);
+	double		dl = (double) bm25_doclen_lookup(&c->dlr, c->docid);
 	double		norm = tf + c->k1_1mb + c->k1b_inv_avgdl * dl;
 
 	return c->idf_k1p1 * tf / norm;
@@ -2338,8 +2340,11 @@ fts_search_bmw(WandCursor *cursors, int nterms, int k, ScoredTid **out)
 
 	/* release any still-loaded block buffers */
 	for (t = 0; t < nterms; t++)
+	{
 		if (cursors[t].blkbuf)
 			pfree(cursors[t].blkbuf);
+		bm25_doclen_reader_fini(&cursors[t].dlr);
+	}
 
 	qsort(heap, nheap, sizeof(ScoredTid), cmp_scored_desc);
 	*out = heap;
@@ -2473,8 +2478,11 @@ fts_search_maxscore(WandCursor *cursors, int nterms, int k, ScoredTid **out)
 	}
 
 	for (t = 0; t < nterms; t++)
+	{
 		if (cursors[t].blkbuf)
 			pfree(cursors[t].blkbuf);
+		bm25_doclen_reader_fini(&cursors[t].dlr);
+	}
 
 	qsort(heap, nheap, sizeof(ScoredTid), cmp_scored_desc);
 	*out = heap;
@@ -2678,6 +2686,8 @@ bm25_topk_candidates_range(Relation index, const BM25MetaPageData *meta,
 			cursors[nactive].segidx = s;
 			cursors[nactive].docid_lo = docid_lo;
 			cursors[nactive].docid_hi = docid_hi;
+			bm25_doclen_reader_init(&cursors[nactive].dlr, index,
+									meta->segs[s].doclenstart);
 			{
 				sm_cursor_cached_t ini = SM_CURSOR_CACHED_INIT;
 

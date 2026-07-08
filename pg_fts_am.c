@@ -529,6 +529,203 @@ bm25_for_get(const unsigned char *buf, int i)
 	return v;
 }
 
+/* ----- doclen sidecar reader (docid -> |D|, per segment) ----- */
+
+/*
+ * A lazily-built directory over a segment's doclen sidecar chunks plus a cache
+ * of the currently-decoded chunk.  The directory is one (first_docid, blk, off)
+ * per chunk, in docid order, so a lookup binary-searches to the covering chunk
+ * (O(log C)); a forward-walking cursor mostly reuses the cached chunk (O(1))
+ * and only re-decodes when it crosses a chunk boundary.  Built once per
+ * (segment, scan-cursor) on first lookup; cheap (one header read per ~128
+ * docs).
+ */
+typedef struct BM25DoclenDirEnt
+{
+	uint64		first_docid;
+	BlockNumber blk;
+	uint32		off;
+}			BM25DoclenDirEnt;
+
+typedef struct BM25DoclenReader
+{
+	Relation	index;
+	BlockNumber start;			/* seg->doclenstart (Invalid = no sidecar) */
+	BM25DoclenDirEnt *dir;		/* one entry per chunk, docid-ascending */
+	int			ndir;
+	bool		built;
+	/* cached decoded chunk */
+	int			cached;			/* dir index of the decoded chunk, or -1 */
+	uint64		docids[BM25_BLOCK_SIZE];
+	uint32		doclens[BM25_BLOCK_SIZE];
+	int			count;
+} BM25DoclenReader;
+
+static void
+bm25_doclen_reader_init(BM25DoclenReader *r, Relation index, BlockNumber start)
+{
+	r->index = index;
+	r->start = start;
+	r->dir = NULL;
+	r->ndir = 0;
+	r->built = false;
+	r->cached = -1;
+	r->count = 0;
+}
+
+static void
+bm25_doclen_reader_fini(BM25DoclenReader *r)
+{
+	if (r->dir)
+		pfree(r->dir);
+	r->dir = NULL;
+	r->built = false;
+}
+
+/* Walk the sidecar chunk chain once, recording (first_docid, blk, off) per
+ * chunk into the directory (docid-ascending by construction). */
+static void
+bm25_doclen_build_dir(BM25DoclenReader *r)
+{
+	BlockNumber blk = r->start;
+	int			cap = 0;
+
+	r->built = true;
+	if (blk == InvalidBlockNumber)
+		return;
+
+	while (blk != InvalidBlockNumber)
+	{
+		Buffer		buf = ReadBuffer(r->index, blk);
+		Page		page;
+		char	   *p,
+				   *pend;
+		BlockNumber next;
+
+		LockBuffer(buf, BUFFER_LOCK_SHARE);
+		page = BufferGetPage(buf);
+		pend = (char *) page + ((PageHeader) page)->pd_lower;
+		next = BM25PageGetOpaque(page)->nextblk;
+		p = (char *) PageGetContents(page);
+		while (p + sizeof(BM25DoclenChunkHdr) <= pend)
+		{
+			BM25DoclenChunkHdr *ch = (BM25DoclenChunkHdr *) p;
+
+			if (ch->count == 0)
+				break;
+			if (r->ndir >= cap)
+			{
+				cap = cap ? cap * 2 : 64;
+				r->dir = r->dir
+					? repalloc(r->dir, cap * sizeof(BM25DoclenDirEnt))
+					: palloc(cap * sizeof(BM25DoclenDirEnt));
+			}
+			r->dir[r->ndir].first_docid =
+				((uint64) ch->first_docid_hi << 32) | ch->first_docid_lo;
+			r->dir[r->ndir].blk = blk;
+			r->dir[r->ndir].off = (uint32) ((char *) ch - (char *) page);
+			r->ndir++;
+			p = (char *) MAXALIGN((char *) (ch + 1) + ch->bytelen);
+		}
+		UnlockReleaseBuffer(buf);
+		blk = next;
+	}
+}
+
+/* Decode the chunk at directory index d into the reader's cache. */
+static void
+bm25_doclen_load_chunk(BM25DoclenReader *r, int d)
+{
+	Buffer		buf;
+	Page		page;
+	BM25DoclenChunkHdr *ch;
+	const unsigned char *stream;
+	uint64		gaps[BM25_BLOCK_SIZE];
+	uint64		dls[BM25_BLOCK_SIZE];
+	uint64		base;
+	int			cnt;
+	int			pos = 0;
+	int			i;
+
+	buf = ReadBuffer(r->index, r->dir[d].blk);
+	LockBuffer(buf, BUFFER_LOCK_SHARE);
+	page = BufferGetPage(buf);
+	ch = (BM25DoclenChunkHdr *) ((char *) page + r->dir[d].off);
+	stream = (const unsigned char *) (ch + 1);
+	cnt = (int) ch->count;
+	if (cnt > BM25_BLOCK_SIZE)
+		cnt = BM25_BLOCK_SIZE;
+	pos += bm25_for_unpack(stream + pos, cnt, gaps);
+	bm25_for_unpack(stream + pos, cnt, dls);
+	base = ((uint64) ch->first_docid_hi << 32) | ch->first_docid_lo;
+	for (i = 0; i < cnt; i++)
+	{
+		base += gaps[i];		/* first gap is 0 */
+		r->docids[i] = base;
+		r->doclens[i] = (uint32) dls[i];
+	}
+	r->count = cnt;
+	r->cached = d;
+	UnlockReleaseBuffer(buf);
+}
+
+/*
+ * Look up |D| for a docid.  Returns 0 if the sidecar is empty or the docid is
+ * not present (a defensive fallback; scoring should never miss since every
+ * scored docid was written to the sidecar).  Fast path: the docid is in the
+ * cached chunk (a forward-walking cursor stays here); otherwise binary-search
+ * the directory to the covering chunk and decode it.
+ */
+static uint32
+bm25_doclen_lookup(BM25DoclenReader *r, uint64 docid)
+{
+	int			lo,
+				hi,
+				d;
+
+	if (!r->built)
+		bm25_doclen_build_dir(r);
+	if (r->ndir == 0)
+		return 0;
+
+	/* fast path: still inside the cached chunk? */
+	if (r->cached >= 0 && r->count > 0 &&
+		docid >= r->docids[0] && docid <= r->docids[r->count - 1])
+	{
+		/* forward scan is common (ascending docids); small linear probe */
+		for (d = 0; d < r->count; d++)
+			if (r->docids[d] == docid)
+				return r->doclens[d];
+		return 0;				/* gap within chunk range: not present */
+	}
+
+	/* binary search the directory for the chunk whose range covers docid:
+	 * the last chunk with first_docid <= docid */
+	lo = 0;
+	hi = r->ndir - 1;
+	d = 0;
+	while (lo <= hi)
+	{
+		int			mid = (lo + hi) / 2;
+
+		if (r->dir[mid].first_docid <= docid)
+		{
+			d = mid;
+			lo = mid + 1;
+		}
+		else
+			hi = mid - 1;
+	}
+	if (r->cached != d)
+		bm25_doclen_load_chunk(r, d);
+	if (r->count == 0 || docid < r->docids[0] || docid > r->docids[r->count - 1])
+		return 0;
+	for (lo = 0; lo < r->count; lo++)
+		if (r->docids[lo] == docid)
+			return r->doclens[lo];
+	return 0;
+}
+
 /*
  * Decode exactly one term's postings from the shared posting chain: start at
  * (firstblk, firstoff) and decode consecutive blocks -- following nextblk
@@ -536,10 +733,15 @@ bm25_for_get(const unsigned char *buf, int i)
  * written contiguously, so its run is delimited purely by df.  Returns the
  * count (== df on a consistent index); *out (and *blockmax if non-NULL) are
  * palloc'd.  `off` on pages after the first is the contents start.
+ *
+ * If `dlr` is non-NULL, each posting's doclen is filled from the doclen
+ * sidecar (needed by merge/read, which rebuilds the merged segment's sidecar);
+ * scan callers pass NULL and never read posts[].doclen.
  */
 static int
 bm25_decode_term(Relation index, BlockNumber firstblk, uint32 firstoff,
-				 uint32 df, BM25Posting **out, uint32 **blockmax)
+				 uint32 df, BM25Posting **out, uint32 **blockmax,
+				 BM25DoclenReader *dlr)
 {
 	BM25Posting *posts;
 	uint32	   *bmax = NULL;
@@ -571,7 +773,6 @@ bm25_decode_term(Relation index, BlockNumber firstblk, uint32 firstoff,
 			uint64		docid = ((uint64) bh->first_docid_hi << 32) | bh->first_docid_lo;
 			uint64		gaps[BM25_BLOCK_SIZE];
 			uint64		tfs[BM25_BLOCK_SIZE];
-			uint64		dls[BM25_BLOCK_SIZE];
 			int			cnt = (int) bh->count;
 			int			pos = 0;
 			int			i;
@@ -580,13 +781,12 @@ bm25_decode_term(Relation index, BlockNumber firstblk, uint32 firstoff,
 				break;
 			pos += bm25_for_unpack(stream + pos, cnt, gaps);
 			pos += bm25_for_unpack(stream + pos, cnt, tfs);
-			pos += bm25_for_unpack(stream + pos, cnt, dls);
 			for (i = 0; i < cnt && n < (int) df; i++)
 			{
 				docid += gaps[i];
 				bm25_docid_to_tid(docid, &posts[n].tid);
 				posts[n].tf = (uint32) tfs[i];
-				posts[n].doclen = (uint32) dls[i];
+				posts[n].doclen = dlr ? bm25_doclen_lookup(dlr, docid) : 0;
 				if (bmax)
 					bmax[n] = bh->max_tf;
 				n++;
@@ -796,8 +996,9 @@ bm25_check_meta(Page page, Relation index)
  * Write all postings for one term into the segment's shared posting-page chain
  * via a BM25PostWriter, returning the term's first block + byte offset.
  * Postings are docid-sorted and packed into 128-doc FOR blocks (BM25BlockHdr +
- * three frame-of-reference bit-packed columns: docid-gaps, tfs, doclens), which
+ * two frame-of-reference bit-packed columns: docid-gaps, tfs), which
  * compresses the common case of many clustered docids into a few bits each.
+ * (|D| is written separately to the per-segment doclen sidecar, once per doc.)
  */
 typedef struct BM25PostingSort
 {
@@ -888,8 +1089,7 @@ bm25_write_postings(BM25PostWriter *pw, BuildTerm *bt,
 	{
 		uint64		gaps[BM25_BLOCK_SIZE];
 		uint64		tfs[BM25_BLOCK_SIZE];
-		uint64		dls[BM25_BLOCK_SIZE];
-		unsigned char scratch[3 * (1 + (BM25_BLOCK_SIZE * 64 + 7) / 8)];
+		unsigned char scratch[2 * (1 + (BM25_BLOCK_SIZE * 64 + 7) / 8)];
 		int			sclen = 0;
 		uint32		blk_max_tf = 0;
 		uint32		blk_min_dl = UINT32_MAX;
@@ -906,7 +1106,6 @@ bm25_write_postings(BM25PostWriter *pw, BuildTerm *bt,
 		{
 			gaps[bcount] = sorted[i].docid - prev_docid;	/* first gap is 0 */
 			tfs[bcount] = sorted[i].tf;
-			dls[bcount] = sorted[i].doclen;
 			if (sorted[i].tf > blk_max_tf)
 				blk_max_tf = sorted[i].tf;
 			if (sorted[i].doclen < blk_min_dl)
@@ -918,7 +1117,6 @@ bm25_write_postings(BM25PostWriter *pw, BuildTerm *bt,
 
 		sclen += bm25_for_pack(gaps, bcount, scratch + sclen);
 		sclen += bm25_for_pack(tfs, bcount, scratch + sclen);
-		sclen += bm25_for_pack(dls, bcount, scratch + sclen);
 
 		need = MAXALIGN(sizeof(BM25BlockHdr) + sclen);
 
@@ -969,6 +1167,155 @@ bm25_write_postings(BM25PostWriter *pw, BuildTerm *bt,
 	}
 
 	pfree(sorted);
+}
+
+/* (docid, doclen) pair for building the per-segment doclen sidecar */
+typedef struct BM25DoclenPair
+{
+	uint64		docid;
+	uint32		doclen;
+}			BM25DoclenPair;
+
+static int
+cmp_doclen_pair(const void *a, const void *b)
+{
+	uint64		da = ((const BM25DoclenPair *) a)->docid;
+	uint64		db = ((const BM25DoclenPair *) b)->docid;
+
+	return (da < db) ? -1 : (da > db) ? 1 : 0;
+}
+
+/*
+ * Write the per-segment doclen sidecar: gather every posting's (docid, doclen),
+ * sort by docid, dedup (the same docid appears once per distinct term but its
+ * doclen is identical), and FOR-pack into BM25_BLOCK_SIZE-doc chunks chained
+ * across BM25_DOCLEN pages.  Each chunk stores docid-gaps + doclens.  Returns
+ * the first sidecar block (Invalid if the segment is empty).
+ *
+ * doclen is a per-DOCUMENT value carried on every posting, so gathering from
+ * the postings and deduping by docid recovers exactly one entry per document
+ * -- and it works uniformly for build, insert, and merge (merge reassigns no
+ * docids; docids are heap-TID derived, globally unique, so the merged segment's
+ * distinct docids are simply the union of its sources' live docs).
+ */
+static BlockNumber
+bm25_write_doclens(Relation index, BM25BuildState *bs)
+{
+	BM25DoclenPair *pairs;
+	int			npairs = 0;
+	int			cap = 0;
+	int			i,
+				j,
+				ndistinct;
+	BlockNumber first = InvalidBlockNumber;
+	Buffer		buffer = InvalidBuffer;
+	GenericXLogState *state = NULL;
+	Page		page = NULL;
+
+	/* gather (docid, doclen) from every posting of every term */
+	for (i = 0; i < bs->nterms; i++)
+	{
+		BuildTerm  *bt = &bs->terms[i];
+		int			p;
+
+		if (npairs + bt->nposts > cap)
+		{
+			while (npairs + bt->nposts > cap)
+				cap = cap ? cap * 2 : 1024;
+			pairs = (npairs == 0)
+				? palloc(cap * sizeof(BM25DoclenPair))
+				: repalloc(pairs, cap * sizeof(BM25DoclenPair));
+		}
+		for (p = 0; p < bt->nposts; p++)
+		{
+			pairs[npairs].docid = bm25_tid_to_docid(&bt->tids[p]);
+			pairs[npairs].doclen = bt->doclens[p];
+			npairs++;
+		}
+	}
+	if (npairs == 0)
+		return InvalidBlockNumber;
+
+	qsort(pairs, npairs, sizeof(BM25DoclenPair), cmp_doclen_pair);
+
+	/* dedup by docid, in place (keep first occurrence; doclen is identical) */
+	ndistinct = 1;
+	for (i = 1; i < npairs; i++)
+		if (pairs[i].docid != pairs[ndistinct - 1].docid)
+			pairs[ndistinct++] = pairs[i];
+
+	/* pack into BM25_BLOCK_SIZE-doc chunks over a page chain */
+	i = 0;
+	while (i < ndistinct)
+	{
+		uint64		gaps[BM25_BLOCK_SIZE];
+		uint64		dls[BM25_BLOCK_SIZE];
+		unsigned char scratch[2 * (1 + (BM25_BLOCK_SIZE * 64 + 7) / 8)];
+		int			sclen = 0;
+		uint64		first_docid = pairs[i].docid;
+		uint64		prev = pairs[i].docid;
+		int			cnt = 0;
+		Size		need;
+		char	   *dst;
+		char	   *pageend;
+		BM25DoclenChunkHdr *ch;
+
+		for (j = i; j < ndistinct && cnt < BM25_BLOCK_SIZE; j++)
+		{
+			gaps[cnt] = pairs[j].docid - prev;	/* first gap is 0 */
+			dls[cnt] = pairs[j].doclen;
+			prev = pairs[j].docid;
+			cnt++;
+		}
+		i = j;
+
+		sclen += bm25_for_pack(gaps, cnt, scratch + sclen);
+		sclen += bm25_for_pack(dls, cnt, scratch + sclen);
+		need = MAXALIGN(sizeof(BM25DoclenChunkHdr) + sclen);
+
+		if (buffer != InvalidBuffer)
+		{
+			pageend = (char *) page + BLCKSZ - MAXALIGN(sizeof(BM25PageOpaqueData));
+			if ((char *) page + ((PageHeader) page)->pd_lower + need > pageend)
+			{
+				Buffer		next = bm25_new_buffer(index);
+				BlockNumber nextblk = BufferGetBlockNumber(next);
+
+				BM25PageGetOpaque(page)->nextblk = nextblk;
+				GenericXLogFinish(state);
+				UnlockReleaseBuffer(buffer);
+				buffer = next;
+				state = GenericXLogStart(index);
+				page = GenericXLogRegisterBuffer(state, buffer, GENERIC_XLOG_FULL_IMAGE);
+				bm25_init_page(page, BM25_DOCLEN);
+			}
+		}
+		if (buffer == InvalidBuffer)
+		{
+			buffer = bm25_new_buffer(index);
+			first = BufferGetBlockNumber(buffer);
+			state = GenericXLogStart(index);
+			page = GenericXLogRegisterBuffer(state, buffer, GENERIC_XLOG_FULL_IMAGE);
+			bm25_init_page(page, BM25_DOCLEN);
+		}
+
+		dst = (char *) page + ((PageHeader) page)->pd_lower;
+		ch = (BM25DoclenChunkHdr *) dst;
+		ch->count = (uint32) cnt;
+		ch->first_docid_hi = (uint32) (first_docid >> 32);
+		ch->first_docid_lo = (uint32) (first_docid & 0xFFFFFFFF);
+		ch->bytelen = (uint32) sclen;
+		memcpy((char *) (ch + 1), scratch, sclen);
+		((PageHeader) page)->pd_lower += need;
+	}
+
+	if (buffer != InvalidBuffer)
+	{
+		GenericXLogFinish(state);
+		UnlockReleaseBuffer(buffer);
+	}
+	pfree(pairs);
+	return first;
 }
 
 /*
@@ -1153,6 +1500,7 @@ bm25_write_segment(Relation index, BM25BuildState *bs, BM25SegMeta *seg)
 	MemSet(seg, 0, sizeof(BM25SegMeta));
 	seg->dictstart = bm25_write_dictionary(index, bs, postings, offsets, &seg->dictindexstart);
 	seg->trgmstart = bm25_write_trigrams(index, bs);
+	seg->doclenstart = bm25_write_doclens(index, bs);
 	seg->livedocs = InvalidBlockNumber;
 	seg->ndocs = bs->ndocs;
 	seg->sumdoclen = bs->sumdoclen;
@@ -1210,6 +1558,9 @@ bm25_read_segment_into(Relation index, const BM25SegMeta *seg, BM25BuildState *b
 	sm_t		tomb;
 	bool		hastomb = false;
 	sm_cursor_cached_t tombcache = SM_CURSOR_CACHED_INIT;
+	BM25DoclenReader dlr;
+
+	bm25_doclen_reader_init(&dlr, index, seg->doclenstart);
 
 	/* open this segment's tombstone bitmap so merge physically DROPS deleted
 	 * docs (otherwise re-adding their postings would resurrect them) */
@@ -1243,7 +1594,7 @@ bm25_read_segment_into(Relation index, const BM25SegMeta *seg, BM25BuildState *b
 						k;
 
 			np = bm25_decode_term(index, de->firstposting, de->firstoffset,
-								  de->df, &post, NULL);
+								  de->df, &post, NULL, &dlr);
 			for (k = 0; k < np; k++)
 			{
 				if (hastomb)
@@ -1267,6 +1618,7 @@ bm25_read_segment_into(Relation index, const BM25SegMeta *seg, BM25BuildState *b
 	}
 	if (tombbuf)
 		pfree(tombbuf);
+	bm25_doclen_reader_fini(&dlr);
 	bs->ndocs += seg->ndocs - seg->ndeleted;
 }
 
@@ -2763,7 +3115,7 @@ bm25_segment_docids(Relation index, const BM25SegMeta *seg)
 						k;
 
 			np = bm25_decode_term(index, de->firstposting, de->firstoffset,
-								  de->df, &post, NULL);
+								  de->df, &post, NULL, NULL);
 			for (k = 0; k < np; k++)
 				sm_add_grow(&seen, bm25_tid_to_docid(&post[k].tid));
 			pfree(post);
