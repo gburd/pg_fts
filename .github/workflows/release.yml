@@ -37,9 +37,9 @@ jobs:
           make PG_CONFIG=$PGBIN/pg_config
           sudo make install PG_CONFIG=$PGBIN/pg_config
           # REGRESS + ISOLATION are the release gate. PGXS ignores a CLI
-          # TAP_TESTS override; PROVE_TESTS pointed at a non-existent glob makes
-          # the TAP stage a no-op (TAP runs in CI, not required to publish).
-          pg_virtualenv -v 17 make installcheck PROVE_TESTS='t/_skip_*.pl' PG_CONFIG=$PGBIN/pg_config
+          # TAP_TESTS override; PROVE_TESTS points prove at a trivial always-pass
+          # file so the TAP stage is a no-op (TAP runs in CI, not required to publish).
+          pg_virtualenv -v 17 make installcheck PROVE_TESTS=ci/noop.pl PG_CONFIG=$PGBIN/pg_config
 
       - name: Build source distribution (PGXN zip)
         id: dist
