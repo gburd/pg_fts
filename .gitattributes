@@ -9,4 +9,5 @@
 .forgejo         export-ignore
 bench            export-ignore
 test             export-ignore
+ci               export-ignore
 HANDOFF.md       export-ignore

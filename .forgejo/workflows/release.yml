@@ -1,9 +1,11 @@
 name: Release
 
-# Codeberg (Forgejo Actions) tag-triggered publish: build+test, produce the
-# PGXN source-dist zip, and attach it to a Forgejo release on Codeberg.
-# PGXN publishing is handled once, by the GitHub mirror's release workflow
-# (PGXN rejects a duplicate version), so this workflow does not upload to PGXN.
+# Codeberg (Forgejo Actions) tag-triggered publish. Codeberg is the canonical
+# origin; a vX.Y.Z tag here builds+tests, produces the PGXN source-dist zip,
+# attaches it to a Codeberg release, publishes the distribution to PGXN, and
+# submits a release announcement to the PostgreSQL news/announce system.
+# (The GitHub mirror only builds + makes a GitHub Release; it does NOT publish
+# to PGXN or announce -- those happen once, here.)
 on:
   push:
     tags:
@@ -19,7 +21,7 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            postgresql-server-dev-17 gcc make git zip ca-certificates
+            postgresql-server-dev-17 gcc make git zip curl ca-certificates
 
       - uses: actions/checkout@v4
         with:
@@ -29,13 +31,15 @@ jobs:
         run: |
           make PG_CONFIG=/usr/bin/pg_config
           make install PG_CONFIG=/usr/bin/pg_config
-          # run the regression + isolation suite as the postgres user against a
-          # throwaway cluster
           su postgres -c '
             /usr/lib/postgresql/17/bin/initdb -D /tmp/pgdata --no-locale --encoding=UTF8 &&
             /usr/lib/postgresql/17/bin/pg_ctl -D /tmp/pgdata -o "-k /tmp -c listen_addresses=localhost" -w start
           '
-          su postgres -c 'make installcheck PG_CONFIG=/usr/bin/pg_config PGHOST=/tmp PGUSER=postgres'
+          # REGRESS + ISOLATION gate. PGXS ignores a CLI TAP_TESTS override, so
+          # point PROVE_TESTS at a trivial always-pass file to make the TAP stage
+          # a no-op here (the crash-recovery/replication TAP harness needs its
+          # own cluster setup; it runs in the test workflow, not the gate).
+          su postgres -c 'make installcheck PROVE_TESTS=ci/noop.pl PG_CONFIG=/usr/bin/pg_config PGHOST=/tmp PGUSER=postgres'
 
       - name: Build source distribution (PGXN zip)
         id: dist
@@ -55,3 +59,43 @@ jobs:
             pg_fts ${{ github.ref_name }}
 
             Source distribution (build with `make PG_CONFIG=...`); see README.md.
+
+      - name: Publish to PGXN
+        env:
+          PGXN_USER: ${{ secrets.PGXN_USER }}
+          PGXN_PASSWORD: ${{ secrets.PGXN_PASSWORD }}
+        run: |
+          if [ -z "$PGXN_USER" ] || [ -z "$PGXN_PASSWORD" ]; then
+            echo "PGXN_USER/PGXN_PASSWORD secrets not set; skipping PGXN upload." >&2
+            exit 0
+          fi
+          # PGXN Manager upload API: authenticated multipart POST of the dist zip.
+          # A SUCCESSFUL upload returns a 3xx redirect to the new release page;
+          # 409 means the version is already published; 4xx/5xx are real errors.
+          code=$(curl -sS -o /tmp/pgxn_resp.txt -w '%{http_code}' \
+            --user "$PGXN_USER:$PGXN_PASSWORD" \
+            -F "archive=@${{ steps.dist.outputs.zip }};type=application/zip" \
+            https://manager.pgxn.org/upload)
+          echo "PGXN upload HTTP $code"; cat /tmp/pgxn_resp.txt || true
+          case "$code" in
+            2*|3*) echo "PGXN upload accepted." ;;
+            409)   echo "::warning::PGXN reports this version already published; skipping." ;;
+            *)     echo "PGXN upload failed (HTTP $code)" >&2; exit 1 ;;
+          esac
+
+      - name: Announce to PostgreSQL news/announce
+        env:
+          PGORG_USER: ${{ secrets.PGORG_USER }}
+          PGORG_PASSWORD: ${{ secrets.PGORG_PASSWORD }}
+        run: |
+          if [ -z "$PGORG_USER" ] || [ -z "$PGORG_PASSWORD" ]; then
+            echo "PGORG_USER/PGORG_PASSWORD secrets not set; skipping announcement." >&2
+            exit 0
+          fi
+          VERSION="${GITHUB_REF_NAME#v}"
+          # Draft the announcement body from CHANGELOG.md's top section + a
+          # standard footer; ci/announce.sh handles the postgresql.org news
+          # submission (login-authorized web form). It is a no-op-friendly script
+          # that prints what it would submit if the endpoint/creds are absent.
+          bash ci/announce.sh "$VERSION"
+

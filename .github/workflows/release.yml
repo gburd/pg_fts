@@ -1,8 +1,10 @@
 name: Release
 
-# Tag-triggered publish. Cutting a vX.Y.Z tag (on Codeberg; auto-mirrored to
-# GitHub) builds+tests the extension, produces the PGXN source-dist zip, attaches
-# it to a GitHub Release, and uploads the distribution to PGXN.
+# Tag-triggered mirror build. Codeberg is the canonical origin and auto-mirrors
+# to this GitHub repo; a vX.Y.Z tag here builds + tests + attaches the source zip
+# to a GitHub Release. PGXN publishing and the PostgreSQL announcement happen
+# once, on the Codeberg (.forgejo) release workflow -- NOT here (PGXN rejects a
+# duplicate version).
 on:
   push:
     tags:
@@ -52,28 +54,3 @@ jobs:
         with:
           generate_release_notes: true
           files: ${{ steps.dist.outputs.zip }}
-
-      - name: Publish to PGXN
-        env:
-          PGXN_USER: ${{ secrets.PGXN_USER }}
-          PGXN_PASSWORD: ${{ secrets.PGXN_PASSWORD }}
-        run: |
-          if [ -z "$PGXN_USER" ] || [ -z "$PGXN_PASSWORD" ]; then
-            echo "PGXN_USER/PGXN_PASSWORD secrets not set; skipping PGXN upload." >&2
-            exit 0
-          fi
-          # PGXN Manager upload API: authenticated multipart POST of the dist
-          # zip.  The distribution name + version are read from META.json inside
-          # the zip.  A SUCCESSFUL upload returns a 3xx redirect (303 See Other)
-          # to the new release's page; only 4xx/5xx are real failures (401 =
-          # bad credentials, 409 = version already published).
-          code=$(curl -sS -o /tmp/pgxn_resp.txt -w '%{http_code}' \
-            --user "$PGXN_USER:$PGXN_PASSWORD" \
-            -F "archive=@${{ steps.dist.outputs.zip }};type=application/zip" \
-            https://manager.pgxn.org/upload)
-          echo "PGXN upload HTTP $code"; cat /tmp/pgxn_resp.txt || true
-          case "$code" in
-            2*|3*) echo "PGXN upload accepted." ;;
-            409)   echo "::warning::PGXN reports this version already published; skipping." ;;
-            *)     echo "PGXN upload failed (HTTP $code)" >&2; exit 1 ;;
-          esac
