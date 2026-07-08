@@ -20,10 +20,10 @@ jobs:
         # 19 lives in the pgdg -testing snapshot repo and may be missing entirely
         continue-on-error: ${{ matrix.pg == 19 }}
         run: |
-          # Drop the runner's preinstalled third-party apt sources (Microsoft,
-          # etc.); they intermittently serve broken InRelease files and fail
-          # `apt-get update`, which is unrelated to pg_fts.  We only need pgdg.
-          sudo rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources || true
+          # The runner's preinstalled Microsoft apt repo intermittently serves a
+          # broken InRelease and fails `apt-get update`; remove just that repo
+          # (keep the LLVM/ubuntu repos — postgresql-server-dev depends on clang).
+          sudo rm -f /etc/apt/sources.list.d/microsoft*.list /etc/apt/sources.list.d/microsoft*.sources || true
           sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
           if [ "${{ matrix.pg }}" = "19" ]; then
             sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg-testing main 19" > /etc/apt/sources.list.d/pgdg-testing.list'

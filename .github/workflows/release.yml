@@ -21,9 +21,10 @@ jobs:
 
       - name: Install PostgreSQL 17 + server headers
         run: |
-          # Drop the runner's preinstalled third-party apt sources (Microsoft,
-          # etc.) that intermittently break `apt-get update`; we only need pgdg.
-          sudo rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources || true
+          # Remove just the runner's preinstalled Microsoft apt repo (it can
+          # serve a broken InRelease and fail `apt-get update`); keep the
+          # LLVM/ubuntu repos — postgresql-server-dev depends on clang.
+          sudo rm -f /etc/apt/sources.list.d/microsoft*.list /etc/apt/sources.list.d/microsoft*.sources || true
           sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
           curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
           sudo apt-get update
