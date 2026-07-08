@@ -8,4 +8,5 @@
 .github          export-ignore
 .forgejo         export-ignore
 bench            export-ignore
+test             export-ignore
 HANDOFF.md       export-ignore

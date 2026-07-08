@@ -1,0 +1,195 @@
+/*-------------------------------------------------------------------------
+ *
+ * pg_fts_for.h
+ *		Frame-of-reference (FOR) integer bit-packing codec for pg_fts.
+ *
+ * The compression core of the bm25 posting blocks, extracted here as pure
+ * standalone C (no PostgreSQL includes) so it can be exercised by standalone
+ * property tests (test/hegel/) while remaining the single source of truth --
+ * pg_fts_am.c #includes this header rather than carrying its own copy.
+ *
+ * When included from a PostgreSQL backend TU, postgres.h has already defined
+ * uint64/uint32; the guards below keep this header from redefining them.  When
+ * included from a standalone test, it provides them from <stdint.h>.
+ *
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
+ *
+ * IDENTIFICATION
+ *	  pg_fts_for.h
+ *
+ *-------------------------------------------------------------------------
+ */
+#ifndef PG_FTS_FOR_H
+#define PG_FTS_FOR_H
+
+#include <stdint.h>
+#include <string.h>
+
+/*
+ * PostgreSQL's c.h defines uint64/uint32 and UINT64CONST; only supply them when
+ * we are compiled outside the backend (postgres.h not included).  PG guards its
+ * own typedefs with HAVE_UINT64 etc., so we key off UINT64CONST, which is only
+ * defined by c.h.
+ */
+#ifndef UINT64CONST
+typedef uint64_t uint64;
+typedef uint32_t uint32;
+#define UINT64CONST(x) ((uint64) x##ULL)
+#endif
+
+/*
+ * FOR (frame-of-reference) bit-packing of a block's three columns (docid gaps,
+ * tfs, doclens) as Structure-of-Arrays.  Each column is [u8 bitwidth][packed
+ * little-endian bitstream of `n` values].  Small, uniform values (the common
+ * case for delta-coded docids and tf/doclen) pack to a few bits each instead of
+ * a whole varint byte -- this both shrinks the index and cuts decode cost.
+ * Width 0 means every value is 0 (no bits stored).
+ */
+static inline int
+bm25_bitwidth(uint64 maxval)
+{
+	int			w = 0;
+
+	while (maxval)
+	{
+		w++;
+		maxval >>= 1;
+	}
+	return w;				/* 0 if maxval==0 */
+}
+
+/* pack n values at `width` bits each into buf starting at bit offset 0; returns
+ * bytes written (including the leading width byte). */
+static inline int
+bm25_for_pack(const uint64 *vals, int n, unsigned char *buf)
+{
+	uint64		maxv = 0;
+	int			width;
+	int			i;
+	int			bitpos;
+	int			nbytes;
+
+	for (i = 0; i < n; i++)
+		if (vals[i] > maxv)
+			maxv = vals[i];
+	width = bm25_bitwidth(maxv);
+	buf[0] = (unsigned char) width;
+	if (width == 0)
+		return 1;
+	nbytes = 1 + (n * width + 7) / 8;
+	memset(buf + 1, 0, nbytes - 1);
+	bitpos = 0;
+	for (i = 0; i < n; i++)
+	{
+		uint64		v = vals[i];
+		int			b;
+
+		for (b = 0; b < width; b++)
+		{
+			if (v & ((uint64) 1 << b))
+			{
+				int			abs = bitpos + b;
+
+				buf[1 + (abs >> 3)] |= (unsigned char) (1 << (abs & 7));
+			}
+		}
+		bitpos += width;
+	}
+	return nbytes;
+}
+
+/* unpack n values at the width stored in buf[0]; returns bytes consumed. */
+static inline int
+bm25_for_unpack(const unsigned char *buf, int n, uint64 *out)
+{
+	int			width = buf[0];
+	int			i;
+	int			bitpos;
+	const unsigned char *bits;
+	uint64		mask;
+
+	if (width == 0)
+	{
+		for (i = 0; i < n; i++)
+			out[i] = 0;
+		return 1;
+	}
+
+	bits = buf + 1;
+	mask = (width >= 64) ? ~UINT64CONST(0) : (((uint64) 1 << width) - 1);
+	bitpos = 0;
+	for (i = 0; i < n; i++)
+	{
+		int			byte = bitpos >> 3;
+		int			shift = bitpos & 7;
+		uint64		v;
+
+		/*
+		 * A value spans at most width+7 bits, so a single unaligned load of
+		 * the covering bytes at `byte` plus shift/mask extracts it when
+		 * shift+width <= 64.  For the rare wide case (shift+width > 64)
+		 * assemble across a 9-byte window.  Replaces the per-bit inner loop
+		 * that dominated posting decode.
+		 */
+		if (shift + width <= 64)
+		{
+			uint64		w = 0;
+			int			nb = (shift + width + 7) >> 3;
+			int			k;
+
+			for (k = 0; k < nb; k++)
+				w |= (uint64) bits[byte + k] << (k * 8);
+			v = (w >> shift) & mask;
+		}
+		else
+		{
+			uint64		lo = 0,
+						hi;
+			int			k;
+
+			for (k = 0; k < 8; k++)
+				lo |= (uint64) bits[byte + k] << (k * 8);
+			hi = bits[byte + 8];
+			v = ((lo >> shift) | (hi << (64 - shift))) & mask;
+		}
+		out[i] = v;
+		bitpos += width;
+	}
+	return 1 + (n * width + 7) / 8;
+}
+
+/* Byte length of a FOR column of n values, given its leading width byte -- used
+ * to skip a column (e.g. tf/doclen) without unpacking any value. */
+static inline int
+bm25_for_bytelen(const unsigned char *buf, int n)
+{
+	int			width = buf[0];
+
+	return (width == 0) ? 1 : 1 + (n * width + 7) / 8;
+}
+
+/* Random-access one value at index i from a FOR column (buf[0] = width).
+ * O(width), no full-column unpack -- lets the WAND hot path decode a posting's
+ * tf/doclen only when it is actually scored, skipping pruned blocks entirely. */
+static inline uint64
+bm25_for_get(const unsigned char *buf, int i)
+{
+	int			width = buf[0];
+	int			bitpos;
+	uint64		v = 0;
+	int			b;
+
+	if (width == 0)
+		return 0;
+	bitpos = i * width;
+	for (b = 0; b < width; b++)
+	{
+		int			abs = bitpos + b;
+
+		if (buf[1 + (abs >> 3)] & (1 << (abs & 7)))
+			v |= (uint64) 1 << b;
+	}
+	return v;
+}
+
+#endif							/* PG_FTS_FOR_H */

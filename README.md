@@ -52,6 +52,10 @@ nix run .#docs                   # validate doc/pg_fts.sgml
 make installcheck PG_CONFIG=/path/to/pg_config
 ```
 
+Standalone property-based tests (hegel-c) for the pure-C codec/automaton cores
+live in [`test/hegel/`](test/hegel/README.md); they need extra deps (hegel-c,
+libcbor, cmocka, the `hegel` binary) and are separate from `make installcheck`.
+
 ## Use
 
 ```sql
