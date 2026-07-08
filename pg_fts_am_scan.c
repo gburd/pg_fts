@@ -2714,11 +2714,7 @@ bm25_topk_visible(Relation index, FtsQuery q, int k, bool as_distance,
 
 	results = (ScoredTid *) palloc(Max(k, 1) * sizeof(ScoredTid));
 	heap = table_open(index->rd_index->indrelid, AccessShareLock);
-#if PG_VERSION_NUM >= 180000
-	fetch = table_index_fetch_begin(heap, 0);
-#else
 	fetch = table_index_fetch_begin(heap);
-#endif
 	for (i = 0; i < ncand && nvis < k; i++)
 	{
 		ItemPointerData tid = cand[i].tid;
@@ -2781,11 +2777,7 @@ bm25_count_visible(Relation index, FtsQuery q)
 	 */
 	if (recheck)
 	{
-#if PG_VERSION_NUM >= 180000
-		fetch = table_index_fetch_begin(heap, 0);
-#else
 		fetch = table_index_fetch_begin(heap);
-#endif
 		for (i = 0; i < matches.n; i++)
 		{
 			ItemPointerData tid = matches.tids[i];
@@ -2819,11 +2811,7 @@ bm25_count_visible(Relation index, FtsQuery q)
 		/* page not all-visible: probe the heap for this TID's visibility */
 		if (fetch == NULL)
 		{
-#if PG_VERSION_NUM >= 180000
-			fetch = table_index_fetch_begin(heap, 0);
-#else
 			fetch = table_index_fetch_begin(heap);
-#endif
 		}
 		{
 			ItemPointerData tid = matches.tids[i];

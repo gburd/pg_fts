@@ -21,6 +21,9 @@ jobs:
 
       - name: Install PostgreSQL 17 + server headers
         run: |
+          # Drop the runner's preinstalled third-party apt sources (Microsoft,
+          # etc.) that intermittently break `apt-get update`; we only need pgdg.
+          sudo rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources || true
           sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
           curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
           sudo apt-get update
@@ -33,6 +36,10 @@ jobs:
           make PG_CONFIG=$PGBIN/pg_config
           sudo make install PG_CONFIG=$PGBIN/pg_config
           sudo -u postgres "$PGBIN/pg_ctlcluster" 17 main start || sudo service postgresql start
+          # pg_regress (run as the postgres user) writes its output under the
+          # checkout dir, which is owned by `runner`; make it group-writable so
+          # the postgres user can create results/ there.
+          chmod -R a+w .
           sudo -u postgres make installcheck PG_CONFIG=$PGBIN/pg_config PGUSER=postgres
 
       - name: Build source distribution (PGXN zip)
