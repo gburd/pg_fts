@@ -1544,15 +1544,17 @@ bm25_endscan(IndexScanDesc scan)
 /* ----- index-maintained corpus statistics (stage 5) ----- */
 
 /*
- * Look up a term's dictionary entry (df, max_tf, first posting block) without
- * reading any postings.  Returns true if found.  This is what the lazy WAND
- * cursors need to start; postings are then paged in on demand.
+ * Look up a term's dictionary entry (df, max_tf, first posting block, and the
+ * impact-tier directory) without reading any postings.  Returns true if found.
+ * This is what the lazy WAND cursors need to start; postings are then paged in
+ * on demand.  If `tiers` is non-NULL it is filled with the term's ntiers tier
+ * descriptors (highest tf_max first) and *ntiers set; pass NULL to ignore.
  */
 static bool
 bm25_lookup_dict(Relation index, const BM25SegMeta *seg,
 				 const char *term, int termlen,
 				 uint32 *df, uint32 *max_tf, BlockNumber *firstposting,
-				 uint32 *firstoffset)
+				 uint32 *firstoffset, uint32 *ntiers, BM25Tier *tiers)
 {
 	BlockNumber blk = bm25_dict_seek(index, seg, term, termlen);
 	bool		onlyone = (seg->dictindexstart != InvalidBlockNumber);
@@ -1584,6 +1586,18 @@ bm25_lookup_dict(Relation index, const BM25SegMeta *seg,
 				*max_tf = de->max_tf;
 				*firstposting = de->firstposting;
 				*firstoffset = de->firstoffset;
+				if (ntiers)
+				{
+					uint32		nt = de->ntiers;
+					uint32		j;
+
+					if (nt > BM25_MAX_TIERS)
+						nt = BM25_MAX_TIERS;
+					*ntiers = nt;
+					if (tiers)
+						for (j = 0; j < nt; j++)
+							tiers[j] = de->tiers[j];
+				}
 				found = true;
 				break;
 			}
@@ -1600,6 +1614,8 @@ bm25_lookup_dict(Relation index, const BM25SegMeta *seg,
 	*max_tf = 0;
 	*firstposting = InvalidBlockNumber;
 	*firstoffset = 0;
+	if (ntiers)
+		*ntiers = 0;
 	return false;
 }
 
@@ -2189,10 +2205,11 @@ wand_seek(WandCursor *c, uint64 target)
 }
 
 /*
- * fts_search_wand: exact top-k identical to the accumulate path, but using
- * document-at-a-time WAND so that documents which cannot enter the current
- * top-k are skipped via the per-term max-contribution bounds.  Returns the
- * number of (tid, score) results written to *out (palloc'd), capped at k.
+ * fts_search_bmw: exact top-k identical to the accumulate path, but using
+ * document-at-a-time block-max WAND so that documents which cannot enter the
+ * current top-k are skipped via the per-term/per-tier max-contribution bounds.
+ * Returns the number of (tid, score) results written to *out (palloc'd), capped
+ * at k.
  */
 static int
 fts_search_bmw(WandCursor *cursors, int nterms, int k, ScoredTid **out)
@@ -2490,17 +2507,140 @@ fts_search_maxscore(WandCursor *cursors, int nterms, int k, ScoredTid **out)
 }
 
 /*
- * Dispatch to the top-k algorithm best suited to the query shape.  BMW excels
- * on short queries (tight block-max pruning, cheap pivot); MaxScore does
- * progressively less work as terms become non-essential, winning on long
- * queries / large k.  Both return the identical exact top-k.
+ * fts_search_tiered_single: hard top-k WeakAND early-termination for a SINGLE
+ * query term.  The term's postings are stored impact-tiered (format v4); each
+ * WandCursor here is one (segment, tf-tier) docid-ordered list carrying that
+ * tier's SOUND ceiling in max_contrib (see pg_fts_am.h BM25Tier: an avgdl-
+ * independent upper bound on every posting's BM25 contribution in that tier).
+ *
+ * We visit cursors HIGHEST-CEILING first, fully scoring each, and STOP as soon
+ * as a cursor's ceiling <= the current k-th score: because cursors are ordered
+ * by descending ceiling, that cursor and EVERY later one can only produce
+ * postings whose true score <= their ceiling <= threshold, so none can enter
+ * the top-k.  This is the flat-latency win -- a common term's huge tf=1 tier is
+ * skipped wholesale once k high-tf docs fill the heap.
+ *
+ * SOUNDNESS (no true top-k doc is ever pruned): ceiling(tier) >= impact(p) for
+ * every posting p in the tier (monotone in tf, and the dropped k1*b*|D|/avgdl
+ * term is >= 0), and ceilings are non-increasing in visit order; so a skipped
+ * posting p has impact(p) <= ceiling <= threshold = current k-th best, hence p
+ * cannot displace any heap member (replacement requires score > threshold).
+ * Every posting that COULD out-score the k-th is therefore scored, with the
+ * SAME wand_contrib_cur() the reference engine uses -> identical top-k+scores.
  */
 static int
-fts_search_wand(WandCursor *cursors, int nterms, int k, ScoredTid **out)
+fts_search_tiered_single(WandCursor *cursors, int nterms, int k, ScoredTid **out)
 {
-	if (nterms >= 4)
-		return fts_search_maxscore(cursors, nterms, k, out);
-	return fts_search_bmw(cursors, nterms, k, out);
+	ScoredTid  *heap;
+	int			nheap = 0;
+	double		threshold = 0.0;
+	int			i,
+				j,
+				t;
+
+	heap = (ScoredTid *) palloc(Max(k, 1) * sizeof(ScoredTid));
+
+	for (t = 0; t < nterms; t++)
+		wand_prime(&cursors[t]);
+
+	/* order cursors by DESCENDING ceiling (max_contrib); selection sort, small n */
+	for (i = 0; i < nterms; i++)
+		for (j = i + 1; j < nterms; j++)
+			if (cursors[j].max_contrib > cursors[i].max_contrib)
+			{
+				WandCursor	tmp = cursors[i];
+
+				cursors[i] = cursors[j];
+				cursors[j] = tmp;
+			}
+
+	for (t = 0; t < nterms; t++)
+	{
+		WandCursor *c = &cursors[t];
+
+		/*
+		 * Early-termination: heap full and this tier's ceiling cannot beat the
+		 * k-th score.  All later tiers have ceiling <= this one, so none can
+		 * either -- stop entirely.
+		 */
+		if (nheap >= k && c->max_contrib <= threshold)
+		{
+			elog(DEBUG1, "pg_fts: tiered top-k early-terminate: skipped %d of %d tier-cursors (threshold=%g, tier ceiling=%g)",
+				 nterms - t, nterms, threshold, c->max_contrib);
+			break;
+		}
+
+		/* score every posting of this tier-cursor (already tombstone-skipped
+		 * and range-clamped by wand_prime/wand_next) */
+		while (c->docid != UINT64_MAX)
+		{
+			double		score = wand_contrib_cur(c);
+			ItemPointerData tid;
+
+			bm25_docid_to_tid(c->docid, &tid);
+			if (nheap < k)
+			{
+				heap[nheap].tid = tid;
+				heap[nheap].score = score;
+				nheap++;
+				if (nheap == k)
+				{
+					threshold = heap[0].score;
+					for (i = 1; i < nheap; i++)
+						if (heap[i].score < threshold)
+							threshold = heap[i].score;
+				}
+			}
+			else if (score > threshold)
+			{
+				int			minpos = 0;
+
+				for (i = 1; i < nheap; i++)
+					if (heap[i].score < heap[minpos].score)
+						minpos = i;
+				heap[minpos].tid = tid;
+				heap[minpos].score = score;
+				threshold = heap[0].score;
+				for (i = 1; i < nheap; i++)
+					if (heap[i].score < threshold)
+						threshold = heap[i].score;
+			}
+			wand_next(c);
+		}
+	}
+
+	for (t = 0; t < nterms; t++)
+	{
+		if (cursors[t].blkbuf)
+			pfree(cursors[t].blkbuf);
+		bm25_doclen_reader_fini(&cursors[t].dlr);
+	}
+
+	qsort(heap, nheap, sizeof(ScoredTid), cmp_scored_desc);
+	*out = heap;
+	return nheap;
+}
+
+/*
+ * Dispatch to the top-k algorithm best suited to the query shape.  A single
+ * query term uses the impact-tiered early-termination path (flat latency on a
+ * common term); BMW excels on short queries (tight block-max pruning, cheap
+ * pivot); MaxScore does progressively less work as terms become non-essential,
+ * winning on long queries / large k.  All return the identical exact top-k.
+ *
+ * `nquery_terms` is the number of DISTINCT query terms (not tier-cursors): the
+ * tiered path is valid only when every cursor scores the SAME term, i.e. a
+ * single-term query (possibly fanned out over segments and tiers).
+ */
+static int
+fts_search_wand_dispatch(WandCursor *cursors, int nactive, int nquery_terms,
+						 int k, ScoredTid **out)
+{
+	if (nquery_terms == 1 && nactive > 0)
+		return fts_search_tiered_single(cursors, nactive, k, out);
+	if (nactive >= 4)
+		return fts_search_maxscore(cursors, nactive, k, out);
+	return fts_search_bmw(cursors, nactive, k, out);
 }
 
 /*
@@ -2547,7 +2687,7 @@ bm25_query_maxhits(Relation index, const BM25MetaPageData *meta,
 
 					if (bm25_lookup_dict(index, &meta->segs[s],
 										 FTS_QUERY_ITEMTEXT(q, it), it->termlen,
-										 &df, &mtf, &fb, &fo))
+										 &df, &mtf, &fb, &fo, NULL, NULL))
 						gdf += df;
 				}
 				stack[top++] = (double) gdf;
@@ -2618,8 +2758,12 @@ bm25_topk_candidates_range(Relation index, const BM25MetaPageData *meta,
 	avgdl = meta->ndocs > 0 ? meta->sumdoclen / meta->ndocs : 1.0;
 
 	nterms = fts_query_terms(q, &terms, &lens);
-	/* up to one cursor per (term, segment) */
-	cursors = (WandCursor *) palloc(Max(nterms * Max((int) meta->nsegments, 1), 1) *
+	/* up to one cursor per (term, segment, impact-tier): tiers are stored as
+	 * separate docid-ordered posting lists, and the WAND engine treats each as
+	 * an independent cursor -- a docid lands in exactly ONE tier of a term (its
+	 * tf bucket), so summing per-cursor contributions never double-counts. */
+	cursors = (WandCursor *) palloc(Max(nterms * Max((int) meta->nsegments, 1) *
+									   BM25_MAX_TIERS, 1) *
 									sizeof(WandCursor));
 
 	/* per-segment tombstones: each cursor skips docids deleted in its own
@@ -2641,6 +2785,8 @@ bm25_topk_candidates_range(Relation index, const BM25MetaPageData *meta,
 			uint32		max_tf;
 			BlockNumber firstblk;
 			uint32		firstoff;
+			uint32		ntiers;
+			BM25Tier	tiers[BM25_MAX_TIERS];
 		}		   *hit = palloc(Max(nseg, 1) * sizeof(*hit));
 
 		/* global df across all segments -> IDF (segments share the corpus) */
@@ -2648,7 +2794,8 @@ bm25_topk_candidates_range(Relation index, const BM25MetaPageData *meta,
 		{
 			hit[s].found = bm25_lookup_dict(index, &meta->segs[s], terms[t], lens[t],
 											&hit[s].df, &hit[s].max_tf,
-											&hit[s].firstblk, &hit[s].firstoff);
+											&hit[s].firstblk, &hit[s].firstoff,
+											&hit[s].ntiers, hit[s].tiers);
 			if (hit[s].found)
 				gdf += hit[s].df;
 		}
@@ -2659,46 +2806,67 @@ bm25_topk_candidates_range(Relation index, const BM25MetaPageData *meta,
 		}
 		idf = log(1.0 + (N - (double) gdf + 0.5) / ((double) gdf + 0.5));
 
-		/* one cursor per segment that contains the term */
+		/* one cursor per (segment, tier) that contains the term */
 		for (s = 0; s < nseg; s++)
 		{
-			double		mtf;
+			uint32		ti;
+			uint32		nt;
 
 			if (!hit[s].found)
 				continue;
-			mtf = (double) hit[s].max_tf;
-			cursors[nactive].index = index;
-			cursors[nactive].firstblk = hit[s].firstblk;
-			cursors[nactive].firstoff = hit[s].firstoff;
-			cursors[nactive].df = hit[s].df;
-			cursors[nactive].blkbuf = NULL;
-			cursors[nactive].blkcount = 0;
-			cursors[nactive].cur = 0;
-			cursors[nactive].docid = 0;
-			cursors[nactive].idf = idf;
-			cursors[nactive].avgdl = avgdl;
-			cursors[nactive].k1b_inv_avgdl = k1 * b / avgdl;
-			cursors[nactive].k1_1mb = k1 * (1.0 - b);
-			cursors[nactive].idf_k1p1 = idf * (k1 + 1.0);
-			cursors[nactive].max_contrib =
-				idf * mtf * (k1 + 1.0) / (mtf + k1 * (1.0 - b));
-			cursors[nactive].tombs = &tombs;
-			cursors[nactive].segidx = s;
-			cursors[nactive].docid_lo = docid_lo;
-			cursors[nactive].docid_hi = docid_hi;
-			bm25_doclen_reader_init(&cursors[nactive].dlr, index,
-									meta->segs[s].doclenstart);
+			nt = hit[s].ntiers;
+			/* Defensive: a pre-tier-directory entry (should not occur after the
+			 * v4 version guard) has ntiers==0; treat the whole term as one tier
+			 * spanning [firstblk,firstoff) with tf_max = max_tf. */
+			if (nt == 0)
 			{
-				sm_cursor_cached_t ini = SM_CURSOR_CACHED_INIT;
-
-				cursors[nactive].tombcache = ini;
+				hit[s].tiers[0].firstposting = hit[s].firstblk;
+				hit[s].tiers[0].firstoffset = hit[s].firstoff;
+				hit[s].tiers[0].df = hit[s].df;
+				hit[s].tiers[0].tf_max = hit[s].max_tf;
+				nt = 1;
 			}
-			nactive++;
+			for (ti = 0; ti < nt; ti++)
+			{
+				double		mtf = (double) hit[s].tiers[ti].tf_max;
+
+				if (hit[s].tiers[ti].df == 0)
+					continue;
+				cursors[nactive].index = index;
+				cursors[nactive].firstblk = hit[s].tiers[ti].firstposting;
+				cursors[nactive].firstoff = hit[s].tiers[ti].firstoffset;
+				cursors[nactive].df = hit[s].tiers[ti].df;
+				cursors[nactive].blkbuf = NULL;
+				cursors[nactive].blkcount = 0;
+				cursors[nactive].cur = 0;
+				cursors[nactive].docid = 0;
+				cursors[nactive].idf = idf;
+				cursors[nactive].avgdl = avgdl;
+				cursors[nactive].k1b_inv_avgdl = k1 * b / avgdl;
+				cursors[nactive].k1_1mb = k1 * (1.0 - b);
+				cursors[nactive].idf_k1p1 = idf * (k1 + 1.0);
+				/* tier ceiling: sound avgdl-independent upper bound (see
+				 * pg_fts_am.h BM25Tier), = per-tier max_contrib */
+				cursors[nactive].max_contrib =
+					idf * mtf * (k1 + 1.0) / (mtf + k1 * (1.0 - b));
+				cursors[nactive].tombs = &tombs;
+				cursors[nactive].segidx = s;
+				cursors[nactive].docid_lo = docid_lo;
+				cursors[nactive].docid_hi = docid_hi;
+				bm25_doclen_reader_init(&cursors[nactive].dlr, index,
+										meta->segs[s].doclenstart);
+				{
+					sm_cursor_cached_t ini = SM_CURSOR_CACHED_INIT;
+
+					cursors[nactive].tombcache = ini;
+				}
+				nactive++;
+			}
 		}
 		pfree(hit);
 	}
 
-	ncand = fts_search_wand(cursors, nactive, wantk, &cand);
+	ncand = fts_search_wand_dispatch(cursors, nactive, nterms, wantk, &cand);
 	bm25_tombstones_free(&tombs);
 
 	*out = cand;

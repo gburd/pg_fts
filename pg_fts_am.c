@@ -579,6 +579,15 @@ bm25_doclen_lookup(BM25DoclenReader *r, uint64 docid)
 	return 0;
 }
 
+/* Order decoded postings by docid (heap TID).  Postings are stored tf-tier
+ * ordered on disk (v4); whole-term decoders re-sort to docid order with this. */
+static int
+cmp_posting_tid(const void *a, const void *b)
+{
+	return ItemPointerCompare((ItemPointer) &((const BM25Posting *) a)->tid,
+							  (ItemPointer) &((const BM25Posting *) b)->tid);
+}
+
 /*
  * Decode exactly one term's postings from the shared posting chain: start at
  * (firstblk, firstoff) and decode consecutive blocks -- following nextblk
@@ -651,6 +660,23 @@ bm25_decode_term(Relation index, BlockNumber firstblk, uint32 firstoff,
 		blk = next;
 		off = MAXALIGN(SizeOfPageHeaderData);	/* later pages: contents start */
 	}
+
+	/*
+	 * Postings are stored tf-tier ordered on disk (format v4), NOT globally
+	 * docid-ascending.  Every whole-term consumer of this function (exact-match
+	 * TID collection, prefix, the fuzzy k-way merge, and merge-read) requires
+	 * docid-ascending postings, so restore that order here -- this makes the
+	 * tiered physical layout invisible to them, byte-for-byte identical to the
+	 * pre-v4 docid-ordered decode.  The ranked WAND path does NOT use this
+	 * function; it walks tier cursors directly.
+	 *
+	 * NB: this re-sort permutes posts[] but NOT bmax[] (the optional per-posting
+	 * block-max out param), so *blockmax is only meaningful for callers that pass
+	 * blockmax==NULL.  All current callers do; a future caller wanting both a
+	 * docid-ordered posts[] and its block-max must sort them together.
+	 */
+	if (n > 1)
+		qsort(posts, n, sizeof(BM25Posting), cmp_posting_tid);
 	*out = posts;
 	if (blockmax)
 		*blockmax = bmax;
@@ -847,10 +873,13 @@ bm25_check_meta(Page page, Relation index)
 
 /*
  * Write all postings for one term into the segment's shared posting-page chain
- * via a BM25PostWriter, returning the term's first block + byte offset.
- * Postings are docid-sorted and packed into 128-doc FOR blocks (BM25BlockHdr +
- * two frame-of-reference bit-packed columns: docid-gaps, tfs), which
- * compresses the common case of many clustered docids into a few bits each.
+ * via a BM25PostWriter.  Postings are stored IMPACT-TIERED (format v4): bucketed
+ * by term frequency into up to BM25_MAX_TIERS tiers, highest-tf tier first, and
+ * docid-ordered inside each tier as 128-doc FOR blocks (BM25BlockHdr + two
+ * frame-of-reference bit-packed columns: docid-gaps, tfs).  Each tier's start
+ * (block + byte offset), tf_max and posting count are returned for the term's
+ * dictionary tier directory; a ranked single-term scan walks tiers highest-
+ * ceiling first and early-terminates once k results beat a tier's ceiling.
  * (|D| is written separately to the per-segment doclen sidecar, once per doc.)
  */
 typedef struct BM25PostingSort
@@ -861,15 +890,48 @@ typedef struct BM25PostingSort
 	ItemPointerData tid;
 }			BM25PostingSort;
 
-static int
-cmp_posting_docid(const void *a, const void *b)
+/*
+ * Map a term frequency to an impact-tier index (0 = highest impact).  Tiers
+ * separate the tf distribution so a common term's tf=1 mass sits in ONE low
+ * tier below the sparse high-tf tail -- exactly the separation the reverted
+ * docid-ordered block directory lacked.  Buckets are fixed tf ranges so the
+ * mapping is drift-free (no avgdl dependence); a tier's ceiling is derived at
+ * scan time from the tier's real tf_max, so the exact bucket edges only affect
+ * pruning tightness, never correctness.  Returns a value in [0, BM25_MAX_TIERS).
+ */
+static inline int
+bm25_tf_tier(uint32 tf)
 {
-	uint64		da = ((const BM25PostingSort *) a)->docid;
-	uint64		db = ((const BM25PostingSort *) b)->docid;
+	if (tf >= 32)
+		return 0;
+	if (tf >= 16)
+		return 1;
+	if (tf >= 8)
+		return 2;
+	if (tf >= 4)
+		return 3;
+	if (tf == 3)
+		return 4;
+	if (tf == 2)
+		return 5;
+	return 6;					/* tf == 1 (the common-term mass) */
+}
 
-	if (da < db)
+/* Sort key: impact tier ascending (highest-tf tier first), docid ascending
+ * within a tier.  This is the physical order postings are written in. */
+static int
+cmp_posting_tier(const void *a, const void *b)
+{
+	const BM25PostingSort *pa = (const BM25PostingSort *) a;
+	const BM25PostingSort *pb = (const BM25PostingSort *) b;
+	int			ta = bm25_tf_tier(pa->tf);
+	int			tb = bm25_tf_tier(pb->tf);
+
+	if (ta != tb)
+		return (ta < tb) ? -1 : 1;
+	if (pa->docid < pb->docid)
 		return -1;
-	if (da > db)
+	if (pa->docid > pb->docid)
 		return 1;
 	return 0;
 }
@@ -911,20 +973,28 @@ pw_finish(BM25PostWriter *pw)
 }
 
 /*
- * Append one term's postings to the shared writer.  Returns the block and byte
- * offset where the term's first block begins (for its dictionary entry).
+ * Append one term's postings to the shared writer, IMPACT-TIERED.  Postings are
+ * sorted into tf-tiers (highest-tf tier first, docid-ordered within a tier) and
+ * written as 128-doc FOR blocks; a block never spans a tier boundary, so every
+ * block's docids are monotone and it belongs to exactly one tier.  Fills
+ * *ntiers and tiers[] with each tier's (tf_max, df, firstblk, firstoff);
+ * the returned firstblk/firstoff report the term's overall start (tier 0's
+ * start) for back-compatible whole-term decoders.
  */
 static void
 bm25_write_postings(BM25PostWriter *pw, BuildTerm *bt,
-					BlockNumber *firstblk, uint32 *firstoff)
+					BlockNumber *firstblk, uint32 *firstoff,
+					uint32 *ntiers, BM25Tier *tiers)
 {
 	Relation	index = pw->index;
 	BM25PostingSort *sorted;
 	int			i;
 	bool		start_recorded = false;
+	int			cur_tier = -1;
 
 	*firstblk = InvalidBlockNumber;
 	*firstoff = 0;
+	*ntiers = 0;
 
 	sorted = (BM25PostingSort *) palloc(Max(bt->nposts, 1) * sizeof(BM25PostingSort));
 	for (i = 0; i < bt->nposts; i++)
@@ -935,7 +1005,7 @@ bm25_write_postings(BM25PostWriter *pw, BuildTerm *bt,
 		sorted[i].tid = bt->tids[i];
 	}
 	if (bt->nposts > 1)
-		qsort(sorted, bt->nposts, sizeof(BM25PostingSort), cmp_posting_docid);
+		qsort(sorted, bt->nposts, sizeof(BM25PostingSort), cmp_posting_tier);
 
 	i = 0;
 	while (i < bt->nposts)
@@ -949,13 +1019,15 @@ bm25_write_postings(BM25PostWriter *pw, BuildTerm *bt,
 		uint64		blk_first_docid = sorted[i].docid;
 		uint64		prev_docid = sorted[i].docid;
 		int			bcount = 0;
+		int			blk_tier = bm25_tf_tier(sorted[i].tf);
 		char	   *pageend;
 		Size		need;
 		char	   *dst;
 		BM25BlockHdr *bh;
 
-		/* gather up to BM25_BLOCK_SIZE postings into columns (SoA) */
-		while (i < bt->nposts && bcount < BM25_BLOCK_SIZE)
+		/* gather up to BM25_BLOCK_SIZE postings of the SAME tier into columns */
+		while (i < bt->nposts && bcount < BM25_BLOCK_SIZE &&
+			   bm25_tf_tier(sorted[i].tf) == blk_tier)
 		{
 			gaps[bcount] = sorted[i].docid - prev_docid;	/* first gap is 0 */
 			tfs[bcount] = sorted[i].tf;
@@ -999,12 +1071,36 @@ bm25_write_postings(BM25PostWriter *pw, BuildTerm *bt,
 			bm25_init_page(pw->page, BM25_POSTING);
 		}
 
-		/* record the term's start at its first block */
+		/* record the term's overall start at its first block */
 		if (!start_recorded)
 		{
 			*firstblk = BufferGetBlockNumber(pw->buffer);
 			*firstoff = (uint32) ((PageHeader) pw->page)->pd_lower;
 			start_recorded = true;
+		}
+
+		/* open a new tier directory entry when this block starts a new tier */
+		if (blk_tier != cur_tier)
+		{
+			if (*ntiers < BM25_MAX_TIERS)
+			{
+				BM25Tier   *td = &tiers[*ntiers];
+
+				td->tf_max = 0;
+				td->df = 0;
+				td->firstposting = BufferGetBlockNumber(pw->buffer);
+				td->firstoffset = (uint32) ((PageHeader) pw->page)->pd_lower;
+				(*ntiers)++;
+			}
+			cur_tier = blk_tier;
+		}
+		if (*ntiers > 0)
+		{
+			BM25Tier   *td = &tiers[*ntiers - 1];
+
+			td->df += (uint32) bcount;
+			if (blk_max_tf > td->tf_max)
+				td->tf_max = blk_max_tf;
 		}
 
 		dst = (char *) pw->page + ((PageHeader) pw->page)->pd_lower;
@@ -1179,6 +1275,7 @@ bm25_write_doclens(Relation index, BM25BuildState *bs)
 static BlockNumber
 bm25_write_dictionary(Relation index, BM25BuildState *bs,
 					  BlockNumber *postings, uint32 *offsets,
+					  uint32 *ntiers, BM25Tier *tiers,
 					  BlockNumber *indexstart)
 {
 	BlockNumber first = InvalidBlockNumber;
@@ -1245,6 +1342,7 @@ bm25_write_dictionary(Relation index, BM25BuildState *bs,
 			BM25DictEntry *de = (BM25DictEntry *) dst;
 			int			p;
 			uint32		maxtf = 0;
+			uint32		nt = ntiers[i];
 
 			de->termlen = bt->len;
 			de->df = bt->nposts;
@@ -1252,6 +1350,9 @@ bm25_write_dictionary(Relation index, BM25BuildState *bs,
 				if (bt->tfs[p] > maxtf)
 					maxtf = bt->tfs[p];
 			de->max_tf = maxtf;
+			de->ntiers = nt;
+			for (p = 0; p < (int) nt && p < BM25_MAX_TIERS; p++)
+				de->tiers[p] = tiers[i * BM25_MAX_TIERS + p];
 			de->firstposting = postings[i];
 			de->firstoffset = offsets[i];
 			memcpy(de->term, bt->term, bt->len);
@@ -1340,18 +1441,24 @@ bm25_write_segment(Relation index, BM25BuildState *bs, BM25SegMeta *seg)
 {
 	BlockNumber *postings;
 	uint32	   *offsets;
+	uint32	   *ntiers;
+	BM25Tier   *tiers;
 	BM25PostWriter pw;
 	int			i;
 
 	postings = (BlockNumber *) palloc(Max(bs->nterms, 1) * sizeof(BlockNumber));
 	offsets = (uint32 *) palloc(Max(bs->nterms, 1) * sizeof(uint32));
+	ntiers = (uint32 *) palloc(Max(bs->nterms, 1) * sizeof(uint32));
+	tiers = (BM25Tier *) palloc(Max(bs->nterms, 1) * BM25_MAX_TIERS * sizeof(BM25Tier));
 	pw_begin(&pw, index);
 	for (i = 0; i < bs->nterms; i++)
-		bm25_write_postings(&pw, &bs->terms[i], &postings[i], &offsets[i]);
+		bm25_write_postings(&pw, &bs->terms[i], &postings[i], &offsets[i],
+							&ntiers[i], &tiers[i * BM25_MAX_TIERS]);
 	pw_finish(&pw);
 
 	MemSet(seg, 0, sizeof(BM25SegMeta));
-	seg->dictstart = bm25_write_dictionary(index, bs, postings, offsets, &seg->dictindexstart);
+	seg->dictstart = bm25_write_dictionary(index, bs, postings, offsets,
+										   ntiers, tiers, &seg->dictindexstart);
 	seg->trgmstart = bm25_write_trigrams(index, bs);
 	seg->doclenstart = bm25_write_doclens(index, bs);
 	seg->livedocs = InvalidBlockNumber;
@@ -1362,6 +1469,8 @@ bm25_write_segment(Relation index, BM25BuildState *bs, BM25SegMeta *seg)
 	seg->livedocslen = 0;
 	pfree(postings);
 	pfree(offsets);
+	pfree(ntiers);
+	pfree(tiers);
 }
 
 /*

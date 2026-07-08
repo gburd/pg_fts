@@ -21,7 +21,7 @@
 #include "storage/itemptr.h"
 
 #define BM25_MAGIC			0x42324635	/* "B2F5" */
-#define BM25_VERSION		3		/* v3: per-segment doclen sidecar (doclen out of postings) */
+#define BM25_VERSION		4		/* v4: impact-tiered postings (postings tf-tier ordered per term) */
 #define BM25_METAPAGE_BLKNO	0
 
 /* page opaque flags */
@@ -91,14 +91,53 @@ typedef struct BM25MetaPageData
 #define BM25PageGetMeta(page) \
 	((BM25MetaPageData *) PageGetContents(page))
 
+/*
+ * Impact tiers (format v4).  A term's postings are stored tf-tier ordered:
+ * grouped into up to BM25_MAX_TIERS buckets by term frequency, highest-tf tier
+ * first, and docid-ordered inside each tier.  The dictionary entry carries a
+ * small inline tier directory: for each tier its max tf, its posting count, and
+ * where its first posting block lives.  Impact of a posting is
+ *
+ *     idf * tf*(k1+1) / (tf + k1*(1-b) + k1*b*|D|/avgdl)
+ *
+ * which is monotonically INCREASING in tf and DECREASING in |D|; idf is
+ * constant across a term's postings.  A SOUND upper bound ("ceiling") for every
+ * posting in a tier -- and for every LATER tier, since tiers are ordered by
+ * descending tf_max -- is obtained by taking that tier's tf_max and dropping
+ * the non-negative k1*b*|D|/avgdl term (its minimum over all |D|>=0, avgdl>0 is
+ * 0, which only RAISES the bound):
+ *
+ *     ceiling(tier) = idf * tf_max*(k1+1) / (tf_max + k1*(1-b))
+ *
+ * This is exactly the term-wide max_contrib formula, evaluated per tier with
+ * that tier's tf_max.  It is a sound upper bound REGARDLESS of N/avgdl drift
+ * (avgdl and |D| appear only in the dropped >=0 term), so tiered early-
+ * termination never prunes a true top-k result.  Because tiers are separated by
+ * tf_max (integer, monotone), a common term's tf=1 mass lands in one tier below
+ * the high-tf tail -- so once k results beat a tier's ceiling ALL remaining
+ * tiers can be skipped, unlike the reverted docid-ordered block directory whose
+ * per-block bounds all sat in one thin band.
+ */
+#define BM25_MAX_TIERS		8
+
+typedef struct BM25Tier
+{
+	uint32		tf_max;			/* max tf in this tier (ceiling driver) */
+	uint32		df;				/* postings in this tier */
+	uint32		firstoffset;	/* byte offset of the tier's first block */
+	BlockNumber firstposting;	/* first posting page of this tier */
+} BM25Tier;
+
 /* a dictionary entry; term text is inline, length termlen */
 typedef struct BM25DictEntry
 {
 	uint32		termlen;
-	uint32		df;				/* document frequency */
+	uint32		df;				/* document frequency (sum over tiers) */
 	uint32		max_tf;			/* max tf across postings (WAND impact bound) */
 	uint32		firstoffset;	/* byte offset of the term's first block in firstposting */
-	BlockNumber firstposting;	/* first posting page for this term */
+	BlockNumber firstposting;	/* first posting page for this term (tier 0's start) */
+	uint32		ntiers;			/* impact tiers, highest tf_max first (v4) */
+	BM25Tier	tiers[BM25_MAX_TIERS];
 	char		term[FLEXIBLE_ARRAY_MEMBER];
 } BM25DictEntry;
 
