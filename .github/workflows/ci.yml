@@ -51,11 +51,12 @@ jobs:
           # of the right major, exports PG* env (PGHOST/PGPORT/PGUSER as a
           # superuser), runs the command, and tears the cluster down. This is
           # the portable way to run `make installcheck` on Debian/pgdg PG.
-          # REGRESS + ISOLATION are the correctness gate; TAP_TESTS=0 keeps the
-          # crash-recovery/replication TAP harness (which needs its own cluster
-          # setup) from gating here — it is exercised separately below.
+          # REGRESS + ISOLATION are the correctness gate.  PGXS checks
+          # TAP_TESTS with ifdef (a CLI TAP_TESTS=0 is ignored), but the prove
+          # recipe honors PROVE_TESTS; pointing it at a non-existent glob makes
+          # the TAP stage a no-op here.  The real TAP run is the next step.
           pg_virtualenv -v ${{ matrix.pg }} \
-            make installcheck TAP_TESTS=0 PG_CONFIG=$PGBIN/pg_config
+            make installcheck PROVE_TESTS='t/_skip_in_gate_*.pl' PG_CONFIG=$PGBIN/pg_config
 
       - name: TAP tests (crash recovery, replication) — non-fatal
         continue-on-error: true
