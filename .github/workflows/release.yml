@@ -36,12 +36,9 @@ jobs:
           PGBIN=/usr/lib/postgresql/17/bin
           make PG_CONFIG=$PGBIN/pg_config
           sudo make install PG_CONFIG=$PGBIN/pg_config
-          sudo -u postgres "$PGBIN/pg_ctlcluster" 17 main start || sudo service postgresql start
-          # pg_regress (run as the postgres user) writes its output under the
-          # checkout dir, which is owned by `runner`; make it group-writable so
-          # the postgres user can create results/ there.
-          chmod -R a+w .
-          sudo -u postgres make installcheck PG_CONFIG=$PGBIN/pg_config PGUSER=postgres
+          sudo pg_createcluster 17 main --start || sudo pg_ctlcluster 17 main start || sudo service postgresql start
+          sudo chmod -R a+rwx .
+          sudo -u postgres make installcheck PG_CONFIG=$PGBIN/pg_config PGUSER=postgres PGHOST=/var/run/postgresql
 
       - name: Build source distribution (PGXN zip)
         id: dist
