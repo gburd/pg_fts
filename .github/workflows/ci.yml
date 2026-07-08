@@ -48,17 +48,14 @@ jobs:
         run: |
           PGBIN=/usr/lib/postgresql/${{ matrix.pg }}/bin
           # pgdg installs the server but does not always leave a running
-          # cluster; (re)create and start one. pg_ctlcluster/pg_createcluster
+          # cluster; (re)create and start one. pg_createcluster/pg_ctlcluster
           # come from postgresql-common and live on PATH, not in $PGBIN.
           sudo pg_createcluster ${{ matrix.pg }} main --start || sudo pg_ctlcluster ${{ matrix.pg }} main start || sudo service postgresql start
-          # pg_regress runs as the postgres user and writes results/ under the
-          # checkout dir (owned by runner); run installcheck from a world-
-          # writable temp dir tree so the postgres user can create its output.
-          sudo chmod -R a+rwx .
-          sudo -u postgres make installcheck \
-            PG_CONFIG=$PGBIN/pg_config \
-            PGUSER=postgres \
-            PGHOST=/var/run/postgresql
+          # Give the runner OS user a superuser role so installcheck can run as
+          # the checkout owner (pg_regress writes results/ into the checkout,
+          # which the postgres OS user cannot traverse under /home/runner).
+          sudo -u postgres createuser -s "$USER" || true
+          make installcheck PG_CONFIG=$PGBIN/pg_config PGHOST=/var/run/postgresql PGDATABASE=postgres
 
       - name: Show diffs on failure
         if: failure()

@@ -37,8 +37,8 @@ jobs:
           make PG_CONFIG=$PGBIN/pg_config
           sudo make install PG_CONFIG=$PGBIN/pg_config
           sudo pg_createcluster 17 main --start || sudo pg_ctlcluster 17 main start || sudo service postgresql start
-          sudo chmod -R a+rwx .
-          sudo -u postgres make installcheck PG_CONFIG=$PGBIN/pg_config PGUSER=postgres PGHOST=/var/run/postgresql
+          sudo -u postgres createuser -s "$USER" || true
+          make installcheck PG_CONFIG=$PGBIN/pg_config PGHOST=/var/run/postgresql PGDATABASE=postgres
 
       - name: Build source distribution (PGXN zip)
         id: dist
