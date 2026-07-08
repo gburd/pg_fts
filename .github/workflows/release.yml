@@ -29,7 +29,7 @@ jobs:
           curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            postgresql-17 postgresql-server-dev-17 gcc make zip
+            postgresql-17 postgresql-server-dev-17 gcc make zip libipc-run-perl
 
       - name: Build + test (gate the release)
         run: |
