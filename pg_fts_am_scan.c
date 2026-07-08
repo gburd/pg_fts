@@ -33,7 +33,8 @@ static bool bm25_trgm_candidates(Relation index, BlockNumber trgmstart,
 								 const char *term, int termlen,
 								 int min_trigrams, bool is_regex, TidSet *out);
 static void bm25_collect_matches(Relation index, FtsQuery query, TidSet *out, bool *recheck);
-static double bm25_query_maxhits(Relation index, FtsQuery q, double N);
+static double bm25_query_maxhits(Relation index, const BM25MetaPageData *meta,
+								 FtsQuery q, double N);
 /* forward decl: blob reader (pg_fts_trgm_index.c, included after this file) */
 static uint8 *bm25_read_blob(Relation index, BlockNumber blk, Size len);
 
@@ -52,9 +53,11 @@ typedef struct ScoredTid
 	double		score;
 }			ScoredTid;
 
-static int bm25_topk_visible(Relation index, FtsQuery q, int k,
+static int bm25_topk_visible(Relation index, const BM25MetaPageData *meta,
+							 FtsQuery q, int k,
 							 bool as_distance, ScoredTid **out);
-static int bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
+static int bm25_topk_candidates_range(Relation index, const BM25MetaPageData *meta,
+									  FtsQuery q, int wantk,
 									  uint64 docid_lo, uint64 docid_hi,
 									  ScoredTid **out);
 
@@ -1239,7 +1242,7 @@ bm25_gettuple(IndexScanDesc scan, ScanDirection dir)
 
 		bm25_read_meta(scan->indexRelation, &m0);
 		N = m0.ndocs < 1.0 ? 1.0 : m0.ndocs;
-		so->maxhits = bm25_query_maxhits(scan->indexRelation, so->query, N);
+		so->maxhits = bm25_query_maxhits(scan->indexRelation, &m0, so->query, N);
 		/*
 		 * Start k at a full first page (100).  Measured trade: vs k=64 this costs
 		 * the top-10 case ~1ms, but serves the entire LIMIT 11..100 range in ONE
@@ -1250,7 +1253,7 @@ bm25_gettuple(IndexScanDesc scan, ScanDirection dir)
 		so->curk = 100;
 		if ((double) so->curk > so->maxhits)
 			so->curk = Max((int) so->maxhits, 1);
-		so->nordered = bm25_topk_visible(scan->indexRelation, so->query,
+		so->nordered = bm25_topk_visible(scan->indexRelation, &m0, so->query,
 										 so->curk, true, &so->ordered);
 		so->ordpos = 0;
 		so->orderInit = true;
@@ -1265,7 +1268,9 @@ bm25_gettuple(IndexScanDesc scan, ScanDirection dir)
 	if (so->ordpos >= so->nordered && so->nordered == so->curk)
 	{
 		int			prev = so->ordpos;
+		BM25MetaPageData m1;
 
+		bm25_read_meta(scan->indexRelation, &m1);
 		/*
 		 * Grow k for deeper scrolling, but cap it: (a) never past the query's
 		 * provable max hits (no more results exist), and (b) never past an
@@ -1283,7 +1288,7 @@ bm25_gettuple(IndexScanDesc scan, ScanDirection dir)
 			so->curk = Max((int) so->maxhits, 1);
 		if (so->curk > BM25_MAX_ORDERK)
 			so->curk = BM25_MAX_ORDERK;
-		so->nordered = bm25_topk_visible(scan->indexRelation, so->query,
+		so->nordered = bm25_topk_visible(scan->indexRelation, &m1, so->query,
 										 so->curk, true, &so->ordered);
 		so->ordpos = prev;		/* resume after the rows already emitted */
 	}
@@ -2500,9 +2505,9 @@ fts_search_wand(WandCursor *cursors, int nterms, int k, ScoredTid **out)
  * one WAND pass (avoiding the adaptive-k recompute) when the result is small.
  */
 static double
-bm25_query_maxhits(Relation index, FtsQuery q, double N)
+bm25_query_maxhits(Relation index, const BM25MetaPageData *meta,
+				   FtsQuery q, double N)
 {
-	BM25MetaPageData meta;
 	double	   *stack;
 	int			top = 0;
 	uint32		i;
@@ -2510,7 +2515,6 @@ bm25_query_maxhits(Relation index, FtsQuery q, double N)
 
 	if (q->nitems == 0)
 		return 0;
-	bm25_read_meta(index, &meta);
 	stack = (double *) palloc(q->nitems * sizeof(double));
 
 	for (i = 0; i < q->nitems; i++)
@@ -2526,14 +2530,14 @@ bm25_query_maxhits(Relation index, FtsQuery q, double N)
 				uint32		gdf = 0;
 				uint32		s;
 
-				for (s = 0; s < meta.nsegments; s++)
+				for (s = 0; s < meta->nsegments; s++)
 				{
 					uint32		df,
 								mtf;
 					BlockNumber fb;
 					uint32		fo;
 
-					if (bm25_lookup_dict(index, &meta.segs[s],
+					if (bm25_lookup_dict(index, &meta->segs[s],
 										 FTS_QUERY_ITEMTEXT(q, it), it->termlen,
 										 &df, &mtf, &fb, &fo))
 						gdf += df;
@@ -2582,10 +2586,10 @@ bm25_query_maxhits(Relation index, FtsQuery q, double N)
  * intentionally, since pending is transient and bounded.
  */
 static int
-bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
+bm25_topk_candidates_range(Relation index, const BM25MetaPageData *meta,
+						   FtsQuery q, int wantk,
 						   uint64 docid_lo, uint64 docid_hi, ScoredTid **out)
 {
-	BM25MetaPageData meta;
 	double		N,
 				avgdl;
 	const char **terms;
@@ -2602,59 +2606,63 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 	if (wantk < 1)
 		wantk = 1;
 
-	bm25_read_meta(index, &meta);
-	N = meta.ndocs < 1.0 ? 1.0 : meta.ndocs;
-	avgdl = meta.ndocs > 0 ? meta.sumdoclen / meta.ndocs : 1.0;
+	N = meta->ndocs < 1.0 ? 1.0 : meta->ndocs;
+	avgdl = meta->ndocs > 0 ? meta->sumdoclen / meta->ndocs : 1.0;
 
 	nterms = fts_query_terms(q, &terms, &lens);
 	/* up to one cursor per (term, segment) */
-	cursors = (WandCursor *) palloc(Max(nterms * Max((int) meta.nsegments, 1), 1) *
+	cursors = (WandCursor *) palloc(Max(nterms * Max((int) meta->nsegments, 1), 1) *
 									sizeof(WandCursor));
 
 	/* per-segment tombstones: each cursor skips docids deleted in its own
 	 * segment, so reused heap TIDs live in another segment still rank */
-	bm25_tombstones_load(index, &meta, &tombs);
+	bm25_tombstones_load(index, meta, &tombs);
 
 	for (t = 0; t < nterms; t++)
 	{
 		uint32		gdf = 0;
 		uint32		s;
+		uint32		nseg = meta->nsegments;
 		double		idf;
 		double		b = 0.75;
-
-		/* global df across all segments -> IDF (segments share the corpus) */
-		for (s = 0; s < meta.nsegments; s++)
+		/* one dict lookup per (term, segment), reused for idf AND cursor setup */
+		struct
 		{
-			uint32		df,
-						max_tf;
+			bool		found;
+			uint32		df;
+			uint32		max_tf;
 			BlockNumber firstblk;
 			uint32		firstoff;
+		}		   *hit = palloc(Max(nseg, 1) * sizeof(*hit));
 
-			if (bm25_lookup_dict(index, &meta.segs[s], terms[t], lens[t],
-								 &df, &max_tf, &firstblk, &firstoff))
-				gdf += df;
+		/* global df across all segments -> IDF (segments share the corpus) */
+		for (s = 0; s < nseg; s++)
+		{
+			hit[s].found = bm25_lookup_dict(index, &meta->segs[s], terms[t], lens[t],
+											&hit[s].df, &hit[s].max_tf,
+											&hit[s].firstblk, &hit[s].firstoff);
+			if (hit[s].found)
+				gdf += hit[s].df;
 		}
 		if (gdf == 0)
+		{
+			pfree(hit);
 			continue;			/* term absent in every segment */
+		}
 		idf = log(1.0 + (N - (double) gdf + 0.5) / ((double) gdf + 0.5));
 
 		/* one cursor per segment that contains the term */
-		for (s = 0; s < meta.nsegments; s++)
+		for (s = 0; s < nseg; s++)
 		{
-			uint32		df,
-						max_tf;
-			BlockNumber firstblk;
-			uint32		firstoff;
 			double		mtf;
 
-			if (!bm25_lookup_dict(index, &meta.segs[s], terms[t], lens[t],
-								  &df, &max_tf, &firstblk, &firstoff))
+			if (!hit[s].found)
 				continue;
-			mtf = (double) max_tf;
+			mtf = (double) hit[s].max_tf;
 			cursors[nactive].index = index;
-			cursors[nactive].firstblk = firstblk;
-			cursors[nactive].firstoff = firstoff;
-			cursors[nactive].df = df;
+			cursors[nactive].firstblk = hit[s].firstblk;
+			cursors[nactive].firstoff = hit[s].firstoff;
+			cursors[nactive].df = hit[s].df;
 			cursors[nactive].blkbuf = NULL;
 			cursors[nactive].blkcount = 0;
 			cursors[nactive].cur = 0;
@@ -2677,6 +2685,7 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 			}
 			nactive++;
 		}
+		pfree(hit);
 	}
 
 	ncand = fts_search_wand(cursors, nactive, wantk, &cand);
@@ -2695,7 +2704,8 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
  * descending score.
  */
 static int
-bm25_topk_visible(Relation index, FtsQuery q, int k, bool as_distance,
+bm25_topk_visible(Relation index, const BM25MetaPageData *meta,
+				  FtsQuery q, int k, bool as_distance,
 				  ScoredTid **out)
 {
 	ScoredTid  *cand;
@@ -2707,20 +2717,23 @@ bm25_topk_visible(Relation index, FtsQuery q, int k, bool as_distance,
 	Snapshot	snap = GetActiveSnapshot();
 	Relation	heap;
 	IndexFetchTableData *fetch;
+	TupleTableSlot *slot;
 
-	ncand = bm25_topk_candidates_range(index, q, wantk, 0, UINT64_MAX, &cand);
+	ncand = bm25_topk_candidates_range(index, meta, q, wantk, 0, UINT64_MAX, &cand);
 	if (k < 1)
 		k = 1;
 
 	results = (ScoredTid *) palloc(Max(k, 1) * sizeof(ScoredTid));
 	heap = table_open(index->rd_index->indrelid, AccessShareLock);
 	fetch = table_index_fetch_begin(heap);
+	/* One reusable slot for the whole visibility loop (cleared between fetches)
+	 * rather than a create/drop per candidate. */
+	slot = table_slot_create(heap, NULL);
 	for (i = 0; i < ncand && nvis < k; i++)
 	{
 		ItemPointerData tid = cand[i].tid;
 		bool		call_again = false;
 		bool		all_dead = false;
-		TupleTableSlot *slot = table_slot_create(heap, NULL);
 
 		if (table_index_fetch_tuple(fetch, &tid, snap, slot,
 									&call_again, &all_dead))
@@ -2730,8 +2743,9 @@ bm25_topk_visible(Relation index, FtsQuery q, int k, bool as_distance,
 				results[nvis].score = 1.0 / (1.0 + cand[i].score);
 			nvis++;
 		}
-		ExecDropSingleTupleTableSlot(slot);
+		ExecClearTuple(slot);
 	}
+	ExecDropSingleTupleTableSlot(slot);
 	table_index_fetch_end(fetch);
 	table_close(heap, AccessShareLock);
 
@@ -2881,6 +2895,7 @@ fts_search(PG_FUNCTION_ARGS)
 		Relation	index;
 		int			nvis;
 		TupleDesc	tupdesc;
+		BM25MetaPageData meta;
 
 		funcctx = SRF_FIRSTCALL_INIT();
 		oldctx = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
@@ -2890,7 +2905,8 @@ fts_search(PG_FUNCTION_ARGS)
 		funcctx->tuple_desc = BlessTupleDesc(tupdesc);
 
 		index = index_open(indexoid, AccessShareLock);
-		nvis = bm25_topk_visible(index, q, k, false, &results);
+		bm25_read_meta(index, &meta);
+		nvis = bm25_topk_visible(index, &meta, q, k, false, &results);
 		index_close(index, AccessShareLock);
 
 		funcctx->max_calls = nvis;
