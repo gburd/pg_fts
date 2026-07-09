@@ -758,3 +758,49 @@ EXPLAIN (COSTS OFF) SELECT count(*) FROM cnt
 RESET enable_seqscan;
 DROP TABLE cnt;
 
+-- ============================================================================
+-- Ranked index scan must respect boolean AND/NOT/PHRASE structure.
+-- The `<=>` ordering scan flattened the query to its terms and ranked the
+-- disjunction, so AND/NOT queries could return docs that fail `@@@` (e.g.
+-- `a & !b` ranking docs that contain b).  Every doc a ranked scan returns must
+-- satisfy `@@@`.  The AM ordering path (bm25_gettuple) is only reached when the
+-- planner picks an "Index Scan ... Order By" on the fts index -- that needs a
+-- stored ftsdoc column (not an expression index) AND the `WHERE d @@@ q`
+-- restriction alongside `ORDER BY d <=> q`.  Without both, the planner falls
+-- back to a Seq Scan + Sort over the `<=>` operator (which never enters the AM
+-- candidate path), so we assert the plan first, then assert zero violations.
+CREATE TABLE bp (id serial, d ftsdoc);
+INSERT INTO bp(d) SELECT to_ftsdoc('alpha gamma d'||g)       FROM generate_series(1,40) g;  -- alpha, no beta
+INSERT INTO bp(d) SELECT to_ftsdoc('alpha beta d'||g)        FROM generate_series(1,40) g;  -- alpha AND beta
+INSERT INTO bp(d) SELECT to_ftsdoc('beta delta d'||g)        FROM generate_series(1,40) g;  -- beta, no alpha
+INSERT INTO bp(d) SELECT to_ftsdoc('alpha beta gamma d'||g)  FROM generate_series(1,20) g;  -- all three
+CREATE INDEX bp_fts ON bp USING fts (d);
+ANALYZE bp;
+SET enable_seqscan=off; SET enable_bitmapscan=off; SET enable_indexscan=on;
+-- the plan MUST be the AM ordering Index Scan (no Sort); otherwise the filter
+-- code is never exercised and the test would silently pass on the buggy engine.
+EXPLAIN (COSTS OFF) SELECT id FROM bp WHERE d @@@ 'alpha & !beta'::ftsquery
+  ORDER BY d <=> 'alpha & !beta'::ftsquery LIMIT 20;
+-- NOT: `alpha & !beta` ranked top-20 must contain NO doc with beta (0 violations).
+SELECT count(*) AS not_violations FROM (
+  SELECT d FROM bp WHERE d @@@ 'alpha & !beta'::ftsquery
+  ORDER BY d <=> 'alpha & !beta'::ftsquery LIMIT 20
+) s WHERE NOT (s.d @@@ 'alpha & !beta'::ftsquery);
+-- AND: `alpha & beta & gamma` ranked top-20 must contain only docs with all three.
+SELECT count(*) AS and3_violations FROM (
+  SELECT d FROM bp WHERE d @@@ 'alpha & beta & gamma'::ftsquery
+  ORDER BY d <=> 'alpha & beta & gamma'::ftsquery LIMIT 20
+) s WHERE NOT (s.d @@@ 'alpha & beta & gamma'::ftsquery);
+-- every ranked row must satisfy @@@ for the AND query (retrieval == match set).
+SELECT count(*) AS and_atatat_violations FROM (
+  SELECT id, d FROM bp WHERE d @@@ 'alpha & beta'::ftsquery
+  ORDER BY d <=> 'alpha & beta'::ftsquery LIMIT 20
+) s WHERE NOT (s.d @@@ 'alpha & beta'::ftsquery);
+-- grow-k must terminate and return all matches when LIMIT exceeds the match
+-- count: only 40 docs satisfy `alpha & !beta`, so LIMIT 500 returns exactly 40.
+SELECT count(*) AS not_all_matches FROM (
+  SELECT d FROM bp WHERE d @@@ 'alpha & !beta'::ftsquery
+  ORDER BY d <=> 'alpha & !beta'::ftsquery LIMIT 500
+) s;
+RESET enable_seqscan; RESET enable_bitmapscan; RESET enable_indexscan;
+DROP TABLE bp;

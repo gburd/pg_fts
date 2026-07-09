@@ -2182,13 +2182,99 @@ wand_seek(WandCursor *c, uint64 target)
 }
 
 /*
+ * DocidFilter: an optional docid-membership gate for the ranked scan.
+ *
+ * A candidate doc may enter the top-k heap only if its docid is a member.
+ * `docids` is sorted ascending (membership = binary search).  A NULL filter
+ * means "admit everything" -- the pure-OR fast path, where the term
+ * disjunction the WAND engine ranks IS the boolean match set, so no gating is
+ * needed and there is zero overhead.  For any non-pure-OR query (AND/NOT/
+ * PHRASE/prefix/fuzzy/regex) the filter carries the exact @@@ boolean match
+ * set (from bm25_collect_matches), so the ranked traversal -- otherwise
+ * disjunctive -- returns only docs @@@ accepts.
+ */
+typedef struct DocidFilter
+{
+	const uint64 *docids;		/* sorted ascending, or NULL for "admit all" */
+	int			n;
+} DocidFilter;
+
+/* True if docid is admitted by the filter (NULL filter admits everything). */
+static inline bool
+docid_admitted(const DocidFilter *f, uint64 docid)
+{
+	int			lo,
+				hi;
+
+	if (f == NULL || f->docids == NULL)
+		return true;			/* pure-OR fast path: no gating */
+	lo = 0;
+	hi = f->n - 1;
+	while (lo <= hi)
+	{
+		int			mid = lo + (hi - lo) / 2;
+		uint64		v = f->docids[mid];
+
+		if (v == docid)
+			return true;
+		else if (v < docid)
+			lo = mid + 1;
+		else
+			hi = mid - 1;
+	}
+	return false;
+}
+
+/*
+ * fts_query_is_pure_or: true iff the query's boolean structure is a plain
+ * disjunction of plain terms -- only OR operators, and every operand is an
+ * exact term (no PREFIX/FUZZY/REGEX flag, no AND/NOT/PHRASE).  For such a
+ * query the WAND term-disjunction == the @@@ match set, so the ranked scan
+ * needs no membership filter.  Any other shape (AND/NOT/PHRASE, or a
+ * prefix/fuzzy/regex operand, whose contribution the scorer flattens but @@@
+ * evaluates as a set) is NOT pure OR and must be filtered.
+ */
+static bool
+fts_query_is_pure_or(FtsQuery q)
+{
+	uint32		i;
+
+	if (q == NULL || q->nitems == 0)
+		return true;
+	for (i = 0; i < q->nitems; i++)
+	{
+		FtsQueryItem *it = &q->items[i];
+
+		if (it->type == FTS_QI_VAL)
+		{
+			if (it->flags & (FTS_QF_PREFIX | FTS_QF_FUZZY | FTS_QF_REGEX))
+				return false;
+		}
+		else					/* operator */
+		{
+			if (it->op != FTS_OP_OR)
+				return false;
+		}
+	}
+	return true;
+}
+
+/*
  * fts_search_wand: exact top-k identical to the accumulate path, but using
  * document-at-a-time WAND so that documents which cannot enter the current
  * top-k are skipped via the per-term max-contribution bounds.  Returns the
  * number of (tid, score) results written to *out (palloc'd), capped at k.
+ *
+ * `filter` (may be NULL) gates heap admission by docid membership: a
+ * fully-scored candidate enters the top-k only if the filter admits its docid.
+ * This threads the exact @@@ boolean match set into the proven single-pass
+ * WAND/MaxScore traversal WITHOUT changing the traversal or the block-skip /
+ * threshold math -- filtered docs simply never reach the heap (and so never
+ * raise the threshold).
  */
 static int
-fts_search_bmw(WandCursor *cursors, int nterms, int k, ScoredTid **out)
+fts_search_bmw(WandCursor *cursors, int nterms, int k, const DocidFilter *filter,
+			   ScoredTid **out)
 {
 	ScoredTid  *heap;			/* min-heap of current top-k by score */
 	int			nheap = 0;
@@ -2282,7 +2368,13 @@ fts_search_bmw(WandCursor *cursors, int nterms, int k, ScoredTid **out)
 				if (cursors[i].docid == pivot_docid)
 					score += wand_contrib_cur(&cursors[i]);
 
-			/* push into the top-k min-heap */
+			/* push into the top-k min-heap -- but only if the docid is admitted
+			 * by the boolean match-set filter.  A rejected doc does NOT count
+			 * toward k and does NOT raise the threshold; the traversal and its
+			 * block-skip math are unchanged (the threshold may just stay lower
+			 * longer, which only costs pruning, never correctness). */
+			if (docid_admitted(filter, pivot_docid))
+			{
 			if (nheap < k)
 			{
 				heap[nheap].tid = tid;
@@ -2310,6 +2402,7 @@ fts_search_bmw(WandCursor *cursors, int nterms, int k, ScoredTid **out)
 					if (heap[i].score < threshold)
 						threshold = heap[i].score;
 			}
+			}					/* end docid_admitted gate */
 
 			/* advance every cursor positioned at the pivot */
 			for (i = 0; i < nterms; i++)
@@ -2354,7 +2447,8 @@ fts_search_bmw(WandCursor *cursors, int nterms, int k, ScoredTid **out)
  * queries); identical exact top-k.
  */
 static int
-fts_search_maxscore(WandCursor *cursors, int nterms, int k, ScoredTid **out)
+fts_search_maxscore(WandCursor *cursors, int nterms, int k,
+					const DocidFilter *filter, ScoredTid **out)
 {
 	ScoredTid  *heap;
 	int			nheap = 0;
@@ -2427,6 +2521,12 @@ fts_search_maxscore(WandCursor *cursors, int nterms, int k, ScoredTid **out)
 					score += wand_contrib_cur(&cursors[i]);
 			}
 
+			/* gate heap admission by the boolean match-set filter: a rejected
+			 * doc never enters the heap and never raises the threshold.  The
+			 * essential/non-essential traversal (incl. the non-essential seeks
+			 * above) is unchanged -- only heap insertion is gated. */
+			if (docid_admitted(filter, cand))
+			{
 			if (nheap < k)
 			{
 				ItemPointerData tid;
@@ -2459,6 +2559,7 @@ fts_search_maxscore(WandCursor *cursors, int nterms, int k, ScoredTid **out)
 					if (heap[i].score < threshold)
 						threshold = heap[i].score;
 			}
+			}					/* end docid_admitted gate */
 		}
 
 		/* advance every essential cursor sitting at cand */
@@ -2483,11 +2584,12 @@ fts_search_maxscore(WandCursor *cursors, int nterms, int k, ScoredTid **out)
  * queries / large k.  Both return the identical exact top-k.
  */
 static int
-fts_search_wand(WandCursor *cursors, int nterms, int k, ScoredTid **out)
+fts_search_wand(WandCursor *cursors, int nterms, int k,
+				const DocidFilter *filter, ScoredTid **out)
 {
 	if (nterms >= 4)
-		return fts_search_maxscore(cursors, nterms, k, out);
-	return fts_search_bmw(cursors, nterms, k, out);
+		return fts_search_maxscore(cursors, nterms, k, filter, out);
+	return fts_search_bmw(cursors, nterms, k, filter, out);
 }
 
 /*
@@ -2594,6 +2696,9 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 	WandCursor *cursors;
 	ScoredTid  *cand;
 	BM25Tombstones tombs;
+	DocidFilter filter;
+	DocidFilter *filterp = NULL;
+	uint64	   *filter_docids = NULL;
 	int			ncand;
 	int			t,
 				nactive = 0;
@@ -2605,6 +2710,52 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 	bm25_read_meta(index, &meta);
 	N = meta.ndocs < 1.0 ? 1.0 : meta.ndocs;
 	avgdl = meta.ndocs > 0 ? meta.sumdoclen / meta.ndocs : 1.0;
+
+	/*
+	 * Boolean-structure filter.  The WAND cursors below rank the term
+	 * DISJUNCTION (fts_query_terms flattens operators), which equals the @@@
+	 * match set only for a pure-OR query.  For any AND/NOT/PHRASE (or a
+	 * prefix/fuzzy/regex operand) the disjunction is a SUPERSET of the match
+	 * set, so we compute the exact @@@ match set once and pass it as a docid-
+	 * membership gate on heap admission.  Pure-OR keeps the fast path (NULL
+	 * filter, zero overhead, byte-identical top-k).
+	 */
+	if (!fts_query_is_pure_or(q))
+	{
+		TidSet		matches;
+		bool		recheck;
+		int			i;
+
+		bm25_collect_matches(index, q, &matches, &recheck);
+		/*
+		 * matches is the SAME boolean set @@@ uses through this index (it is
+		 * built by the identical evaluator).  For fuzzy/regex/NOT-universe it
+		 * may over-generate exactly as index-@@@ does (recheck), and for a
+		 * PHRASE it is the AND-set (adjacency is not enforced here, matching
+		 * index-@@@).  So gating on it makes the ranked scan at least as
+		 * correct as @@@ -- it never returns a doc @@@ would reject.
+		 *
+		 * TidSet is TID-sorted and bm25_tid_to_docid is monotonic in TID
+		 * order, so the docid array comes out sorted (binary-searchable).
+		 */
+		if (matches.n > 0)
+		{
+			filter_docids = (uint64 *) palloc(matches.n * sizeof(uint64));
+			for (i = 0; i < matches.n; i++)
+				filter_docids[i] = bm25_tid_to_docid(&matches.tids[i]);
+		}
+		filter.docids = filter_docids;
+		filter.n = matches.n;
+		filterp = &filter;
+		/* empty match set: nothing satisfies @@@, so no candidates */
+		if (matches.n == 0)
+		{
+			if (matches.tids)
+				pfree(matches.tids);
+			*out = NULL;
+			return 0;
+		}
+	}
 
 	nterms = fts_query_terms(q, &terms, &lens);
 	/* up to one cursor per (term, segment) */
@@ -2679,8 +2830,10 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 		}
 	}
 
-	ncand = fts_search_wand(cursors, nactive, wantk, &cand);
+	ncand = fts_search_wand(cursors, nactive, wantk, filterp, &cand);
 	bm25_tombstones_free(&tombs);
+	if (filter_docids)
+		pfree(filter_docids);
 
 	*out = cand;
 	return ncand;
