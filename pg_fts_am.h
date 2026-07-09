@@ -21,7 +21,7 @@
 #include "storage/itemptr.h"
 
 #define BM25_MAGIC			0x42324635	/* "B2F5" */
-#define BM25_VERSION		4		/* v4: impact-tiered postings (postings tf-tier ordered per term) */
+#define BM25_VERSION		2		/* v2: segmented layout */
 #define BM25_METAPAGE_BLKNO	0
 
 /* page opaque flags */
@@ -33,7 +33,6 @@
 #define BM25_TRGM_DATA		(1 << 5)	/* trigram sparsemap blob page */
 #define BM25_LIVEDOCS		(1 << 6)	/* per-segment tombstone bitmap page */
 #define BM25_DICTINDEX		(1 << 7)	/* sparse block index over dict pages */
-#define BM25_DOCLEN			(1 << 8)	/* per-segment doclen sidecar page */
 
 typedef struct BM25PageOpaqueData
 {
@@ -68,7 +67,6 @@ typedef struct BM25SegMeta
 	uint32		ndeleted;		/* tombstoned docs (for merge accounting) */
 	uint32		livedocslen;	/* serialized size of the livedocs tombstone blob */
 	BlockNumber dictindexstart; /* sparse block index over dict pages (Invalid = none) */
-	BlockNumber doclenstart;	/* first doclen-sidecar page (Invalid = none) */
 } BM25SegMeta;
 
 #define BM25_MAX_SEGMENTS 128	/* fits the metapage (~6KB of ~8KB); the size-
@@ -91,53 +89,14 @@ typedef struct BM25MetaPageData
 #define BM25PageGetMeta(page) \
 	((BM25MetaPageData *) PageGetContents(page))
 
-/*
- * Impact tiers (format v4).  A term's postings are stored tf-tier ordered:
- * grouped into up to BM25_MAX_TIERS buckets by term frequency, highest-tf tier
- * first, and docid-ordered inside each tier.  The dictionary entry carries a
- * small inline tier directory: for each tier its max tf, its posting count, and
- * where its first posting block lives.  Impact of a posting is
- *
- *     idf * tf*(k1+1) / (tf + k1*(1-b) + k1*b*|D|/avgdl)
- *
- * which is monotonically INCREASING in tf and DECREASING in |D|; idf is
- * constant across a term's postings.  A SOUND upper bound ("ceiling") for every
- * posting in a tier -- and for every LATER tier, since tiers are ordered by
- * descending tf_max -- is obtained by taking that tier's tf_max and dropping
- * the non-negative k1*b*|D|/avgdl term (its minimum over all |D|>=0, avgdl>0 is
- * 0, which only RAISES the bound):
- *
- *     ceiling(tier) = idf * tf_max*(k1+1) / (tf_max + k1*(1-b))
- *
- * This is exactly the term-wide max_contrib formula, evaluated per tier with
- * that tier's tf_max.  It is a sound upper bound REGARDLESS of N/avgdl drift
- * (avgdl and |D| appear only in the dropped >=0 term), so tiered early-
- * termination never prunes a true top-k result.  Because tiers are separated by
- * tf_max (integer, monotone), a common term's tf=1 mass lands in one tier below
- * the high-tf tail -- so once k results beat a tier's ceiling ALL remaining
- * tiers can be skipped, unlike the reverted docid-ordered block directory whose
- * per-block bounds all sat in one thin band.
- */
-#define BM25_MAX_TIERS		8
-
-typedef struct BM25Tier
-{
-	uint32		tf_max;			/* max tf in this tier (ceiling driver) */
-	uint32		df;				/* postings in this tier */
-	uint32		firstoffset;	/* byte offset of the tier's first block */
-	BlockNumber firstposting;	/* first posting page of this tier */
-} BM25Tier;
-
 /* a dictionary entry; term text is inline, length termlen */
 typedef struct BM25DictEntry
 {
 	uint32		termlen;
-	uint32		df;				/* document frequency (sum over tiers) */
+	uint32		df;				/* document frequency */
 	uint32		max_tf;			/* max tf across postings (WAND impact bound) */
 	uint32		firstoffset;	/* byte offset of the term's first block in firstposting */
-	BlockNumber firstposting;	/* first posting page for this term (tier 0's start) */
-	uint32		ntiers;			/* impact tiers, highest tf_max first (v4) */
-	BM25Tier	tiers[BM25_MAX_TIERS];
+	BlockNumber firstposting;	/* first posting page for this term */
 	char		term[FLEXIBLE_ARRAY_MEMBER];
 } BM25DictEntry;
 
@@ -157,29 +116,26 @@ typedef struct BM25DictIndexEntry
 	char		term[FLEXIBLE_ARRAY_MEMBER];
 } BM25DictIndexEntry;
 
-/* a posting: which heap tuple and its term frequency (|D| lives in the
- * per-segment doclen sidecar, keyed by docid, not in the posting stream). */
+/* a posting: which heap tuple, its term frequency, and the document length */
 typedef struct BM25Posting
 {
 	ItemPointerData tid;
 	uint32		tf;
-	uint32		doclen;			/* |D|: filled by callers that need it (merge/read);
-								 * NOT stored in the posting stream anymore */
+	uint32		doclen;			/* |D|: total tokens in the document */
 } BM25Posting;
 
 /*
  * Posting pages hold one or more fixed-size BLOCKS of up to BM25_BLOCK_SIZE
  * postings (the Lucene/Tantivy 128-doc block design).  Each block is a
- * BM25BlockHdr followed by TWO FOR (frame-of-reference) bit-packed columns --
- * docid-gaps and tfs; docid gaps are relative to first_docid within the block.
- * (Prior to v3 a third column stored |D| once per posting -- once per
- * document*distinct-term pair, ~40% of the index; it is now a per-segment
- * doclen sidecar keyed by docid, stored once per document.)  Per-block
- * max_tf/min_doclen give block-max WAND a tight impact bound (finer than
- * per-page), and first_docid lets a cursor skip an entire block whose docids
- * are all below a target.  min_doclen is retained as a per-block aggregate
- * computed at write time from the sidecar doclens -- it stays in the header
- * (tiny) so WAND block-max bounds need no sidecar read while pruning.
+ * BM25BlockHdr followed by three FOR (frame-of-reference) bit-packed columns --
+ * docid-gaps, tfs, doclens; docid gaps are relative to first_docid within the
+ * block.  Per-block max_tf/min_doclen give block-max WAND a tight impact bound
+ * (finer than per-page), and first_docid lets a cursor skip an entire block
+ * whose docids are all below a target.  (The columns are already narrow -- tf
+ * and doclen are small and docid gaps are tiny within a common term's dense
+ * blocks -- so patched-FOR/PFOR outlier extraction was measured to save only
+ * ~7% of the column bytes, under ~0.5% of the whole index, not worth the
+ * hot-path decode complexity; plain FOR is kept.)
  */
 #define BM25_BLOCK_SIZE 128
 
@@ -225,27 +181,6 @@ typedef struct BM25TrgmEntry
 	uint32		smlen;			/* serialized sparsemap length in bytes */
 	BlockNumber firstdata;		/* first BM25_TRGM_DATA page of the term-ord set */
 } BM25TrgmEntry;
-
-/*
- * Doclen sidecar: a per-segment array mapping docid -> |D|, stored ONCE per
- * document (not once per posting).  A segment's distinct docids are gathered at
- * write/merge time, sorted ascending, and packed into fixed BM25_BLOCK_SIZE-doc
- * CHUNKS chained across doclen pages.  Each chunk is a BM25DoclenChunkHdr
- * followed by two FOR columns: docid-gaps (from first_docid) and doclens.
- * Chunks are docid-ordered, so a lookup binary-searches a tiny in-memory chunk
- * directory (one first_docid per chunk, built once when a scan first touches
- * the sidecar) to the covering chunk, then random-accesses the doclen at the
- * matching offset.  A scan cursor walks docids ascending, so it caches the
- * current decoded chunk and advances forward -- one ReadBuffer per ~128 scored
- * postings, not one per posting.
- */
-typedef struct BM25DoclenChunkHdr
-{
-	uint32		count;			/* docids in this chunk (<= BM25_BLOCK_SIZE) */
-	uint32		first_docid_hi;
-	uint32		first_docid_lo;
-	uint32		bytelen;		/* byte length of the two FOR columns that follow */
-} BM25DoclenChunkHdr;
 
 /* scan functions (pg_fts_am_scan.c, #included into pg_fts_am.c) */
 extern IndexScanDesc bm25_beginscan(Relation r, int nkeys, int norderbys);

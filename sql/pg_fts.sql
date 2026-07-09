@@ -402,41 +402,6 @@ SELECT count(*) AS matched
 FROM fts_search('lazy_bm25', 'term'::ftsquery, 5000) r JOIN lazy l ON l.ctid = r.ctid;
 DROP TABLE lazy;
 
--- Impact-tiered postings + hard top-k early-termination (format v4): a common
--- term whose postings span many impact tiers must rank IDENTICALLY to a brute-
--- force BM25 ORDER BY.  The tf spread (1..8) forces several tiers; the tiered
--- single-term scan early-terminates once k high-tf docs beat the tf=1 tier
--- ceiling, and must still return the exact top-k in the exact order.
-CREATE TABLE tier (id serial, body text, d ftsdoc);
--- inline to_ftsdoc at INSERT (no UPDATE churn), so the built index maps to live
--- ctids directly and the JOIN below is exact
-INSERT INTO tier (body, d)
-  SELECT 'common filler doc ' || g, to_ftsdoc('common filler doc ' || g)
-  FROM generate_series(1, 400) g;                                  -- tf=1 mass
-INSERT INTO tier (body, d) VALUES
-  ('c8', to_ftsdoc('common common common common common common common common')),  -- tf 8
-  ('c4', to_ftsdoc('common common common common')),                              -- tf 4
-  ('c3', to_ftsdoc('common common common')),                                     -- tf 3
-  ('c2', to_ftsdoc('common common'));                                            -- tf 2
-CREATE INDEX tier_bm25 ON tier USING fts (d);
--- the four high-tf docs (ids 401..404) must be the top-4, in descending tf
-SELECT t.id
-FROM fts_search('tier_bm25', 'common'::ftsquery, 4) r JOIN tier t ON t.ctid = r.ctid
-ORDER BY r.score DESC, t.id;
--- oracle: the index top-10 set is identical to a brute-force BM25 ORDER BY over
--- ALL matches (proves early-termination dropped no true top-k doc)
-WITH stats AS (SELECT count(*)::float8 n, avg(ftsdoc_length(d))::float8 avgdl FROM tier),
-     brute AS (
-       SELECT t.id FROM tier t, stats s WHERE t.d @@@ 'common'::ftsquery
-       ORDER BY fts_bm25(t.d, 'common'::ftsquery, s.n, s.avgdl,
-                         ARRAY[(SELECT fts_index_df('tier_bm25','common'::ftsquery))]) DESC,
-                t.id
-       LIMIT 10),
-     idx AS (SELECT t.id FROM fts_search('tier_bm25','common'::ftsquery,10) r JOIN tier t ON t.ctid=r.ctid)
-SELECT (SELECT array_agg(id ORDER BY id) FROM brute)
-     = (SELECT array_agg(id ORDER BY id) FROM idx) AS tiered_topk_matches_oracle;
-DROP TABLE tier;
-
 -- NEAR(a b, k): proximity within k tokens.
 -- 'quick ... fox' are 3 tokens apart in 'the quick brown red fox'
 SELECT to_ftsdoc('the quick brown red fox') @@@ 'NEAR(quick fox, 3)'::ftsquery AS near_hit;

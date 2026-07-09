@@ -33,8 +33,7 @@ static bool bm25_trgm_candidates(Relation index, BlockNumber trgmstart,
 								 const char *term, int termlen,
 								 int min_trigrams, bool is_regex, TidSet *out);
 static void bm25_collect_matches(Relation index, FtsQuery query, TidSet *out, bool *recheck);
-static double bm25_query_maxhits(Relation index, const BM25MetaPageData *meta,
-								 FtsQuery q, double N);
+static double bm25_query_maxhits(Relation index, FtsQuery q, double N);
 /* forward decl: blob reader (pg_fts_trgm_index.c, included after this file) */
 static uint8 *bm25_read_blob(Relation index, BlockNumber blk, Size len);
 
@@ -53,11 +52,9 @@ typedef struct ScoredTid
 	double		score;
 }			ScoredTid;
 
-static int bm25_topk_visible(Relation index, const BM25MetaPageData *meta,
-							 FtsQuery q, int k,
+static int bm25_topk_visible(Relation index, FtsQuery q, int k,
 							 bool as_distance, ScoredTid **out);
-static int bm25_topk_candidates_range(Relation index, const BM25MetaPageData *meta,
-									  FtsQuery q, int wantk,
+static int bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 									  uint64 docid_lo, uint64 docid_hi,
 									  ScoredTid **out);
 
@@ -359,7 +356,7 @@ bm25_lookup_term(Relation index, const BM25SegMeta *seg,
 			/* read exactly this term's df postings from the shared chain */
 			BM25Posting *post;
 			int			np = bm25_decode_term(index, firstposting, firstoffset,
-										  df, &post, NULL, NULL);
+										  df, &post, NULL);
 			ItemPointerData *tids = palloc(Max(np, 1) * sizeof(ItemPointerData));
 			int			n = 0;
 			int			i;
@@ -593,7 +590,7 @@ bm25_lookup_prefix(Relation index, const BM25SegMeta *seg,
 				BM25Posting *post;
 				int			np = bm25_decode_term(index, de->firstposting,
 												  de->firstoffset, de->df,
-												  &post, NULL, NULL);
+												  &post, NULL);
 				int			k;
 
 				for (k = 0; k < np; k++)
@@ -820,7 +817,7 @@ bm25_fuzzy_terms(Relation index, const BM25SegMeta *seg,
 				BM25Posting *post;
 				int			np = bm25_decode_term(index, de->firstposting,
 												  de->firstoffset, de->df,
-												  &post, NULL, NULL);
+												  &post, NULL);
 
 				/* keep this term's docid-sorted TIDs as a run for k-way merge */
 				if (np > 0)
@@ -1038,7 +1035,7 @@ bm25_universe(Relation index, BlockNumber dictstart)
 			BM25Posting *post;
 			int			np = bm25_decode_term(index, de->firstposting,
 											  de->firstoffset, de->df,
-											  &post, NULL, NULL);
+											  &post, NULL);
 			int			k;
 
 			for (k = 0; k < np; k++)
@@ -1242,7 +1239,7 @@ bm25_gettuple(IndexScanDesc scan, ScanDirection dir)
 
 		bm25_read_meta(scan->indexRelation, &m0);
 		N = m0.ndocs < 1.0 ? 1.0 : m0.ndocs;
-		so->maxhits = bm25_query_maxhits(scan->indexRelation, &m0, so->query, N);
+		so->maxhits = bm25_query_maxhits(scan->indexRelation, so->query, N);
 		/*
 		 * Start k at a full first page (100).  Measured trade: vs k=64 this costs
 		 * the top-10 case ~1ms, but serves the entire LIMIT 11..100 range in ONE
@@ -1253,7 +1250,7 @@ bm25_gettuple(IndexScanDesc scan, ScanDirection dir)
 		so->curk = 100;
 		if ((double) so->curk > so->maxhits)
 			so->curk = Max((int) so->maxhits, 1);
-		so->nordered = bm25_topk_visible(scan->indexRelation, &m0, so->query,
+		so->nordered = bm25_topk_visible(scan->indexRelation, so->query,
 										 so->curk, true, &so->ordered);
 		so->ordpos = 0;
 		so->orderInit = true;
@@ -1268,9 +1265,7 @@ bm25_gettuple(IndexScanDesc scan, ScanDirection dir)
 	if (so->ordpos >= so->nordered && so->nordered == so->curk)
 	{
 		int			prev = so->ordpos;
-		BM25MetaPageData m1;
 
-		bm25_read_meta(scan->indexRelation, &m1);
 		/*
 		 * Grow k for deeper scrolling, but cap it: (a) never past the query's
 		 * provable max hits (no more results exist), and (b) never past an
@@ -1288,7 +1283,7 @@ bm25_gettuple(IndexScanDesc scan, ScanDirection dir)
 			so->curk = Max((int) so->maxhits, 1);
 		if (so->curk > BM25_MAX_ORDERK)
 			so->curk = BM25_MAX_ORDERK;
-		so->nordered = bm25_topk_visible(scan->indexRelation, &m1, so->query,
+		so->nordered = bm25_topk_visible(scan->indexRelation, so->query,
 										 so->curk, true, &so->ordered);
 		so->ordpos = prev;		/* resume after the rows already emitted */
 	}
@@ -1544,17 +1539,15 @@ bm25_endscan(IndexScanDesc scan)
 /* ----- index-maintained corpus statistics (stage 5) ----- */
 
 /*
- * Look up a term's dictionary entry (df, max_tf, first posting block, and the
- * impact-tier directory) without reading any postings.  Returns true if found.
- * This is what the lazy WAND cursors need to start; postings are then paged in
- * on demand.  If `tiers` is non-NULL it is filled with the term's ntiers tier
- * descriptors (highest tf_max first) and *ntiers set; pass NULL to ignore.
+ * Look up a term's dictionary entry (df, max_tf, first posting block) without
+ * reading any postings.  Returns true if found.  This is what the lazy WAND
+ * cursors need to start; postings are then paged in on demand.
  */
 static bool
 bm25_lookup_dict(Relation index, const BM25SegMeta *seg,
 				 const char *term, int termlen,
 				 uint32 *df, uint32 *max_tf, BlockNumber *firstposting,
-				 uint32 *firstoffset, uint32 *ntiers, BM25Tier *tiers)
+				 uint32 *firstoffset)
 {
 	BlockNumber blk = bm25_dict_seek(index, seg, term, termlen);
 	bool		onlyone = (seg->dictindexstart != InvalidBlockNumber);
@@ -1586,18 +1579,6 @@ bm25_lookup_dict(Relation index, const BM25SegMeta *seg,
 				*max_tf = de->max_tf;
 				*firstposting = de->firstposting;
 				*firstoffset = de->firstoffset;
-				if (ntiers)
-				{
-					uint32		nt = de->ntiers;
-					uint32		j;
-
-					if (nt > BM25_MAX_TIERS)
-						nt = BM25_MAX_TIERS;
-					*ntiers = nt;
-					if (tiers)
-						for (j = 0; j < nt; j++)
-							tiers[j] = de->tiers[j];
-				}
 				found = true;
 				break;
 			}
@@ -1614,8 +1595,6 @@ bm25_lookup_dict(Relation index, const BM25SegMeta *seg,
 	*max_tf = 0;
 	*firstposting = InvalidBlockNumber;
 	*firstoffset = 0;
-	if (ntiers)
-		*ntiers = 0;
 	return false;
 }
 
@@ -1821,15 +1800,14 @@ typedef struct WandCursor
 
 	/*
 	 * Current block only, decoded LAZILY: docids are unpacked eagerly (needed
-	 * to pivot/skip), but tf stays bit-packed in blkbuf and is extracted
-	 * per-posting on demand (bm25_for_get) only when a posting is actually
-	 * scored -- so blocks pruned by block-max never pay for tf.  |D| is no
-	 * longer in the block stream; it is looked up from the per-segment doclen
-	 * sidecar (dlr) by docid, only for scored postings.
+	 * to pivot/skip), but tf and doclen stay bit-packed in blkbuf and are
+	 * extracted per-posting on demand (bm25_for_get) only when a posting is
+	 * actually scored -- so blocks pruned by block-max never pay for tf/dl.
 	 */
 	unsigned char *blkbuf;		/* copy of the current block's FOR payload */
 	uint64		docids[BM25_BLOCK_SIZE];	/* decoded docids of current block */
 	uint32		tfoff;			/* offset of tf column within blkbuf */
+	uint32		dloff;			/* offset of doclen column within blkbuf */
 	int			blkcount;		/* postings in the current block */
 	uint32		blk_max_tf;		/* block-max tf (from header) */
 	uint32		blk_min_dl;		/* block-min |D| (from header) */
@@ -1845,7 +1823,6 @@ typedef struct WandCursor
 	BM25Tombstones *tombs;		/* loaded per-segment tombstones (or NULL) */
 	uint32		segidx;			/* which segment this cursor's postings belong to */
 	sm_cursor_cached_t tombcache;	/* stack MRU chunk cache for tombstone lookups */
-	BM25DoclenReader dlr;		/* per-segment doclen sidecar reader (docid -> |D|) */
 	/*
 	 * Optional docid range [docid_lo, docid_hi) for a parallel worker's slice.
 	 * docid_lo = 0 and docid_hi = UINT64_MAX means "whole term" (the serial
@@ -1890,6 +1867,7 @@ wand_load_block(WandCursor *c)
 	uint64		base;
 	int			cnt;
 	int			glen;
+	int			tflen;
 	int			i;
 
 	if (c->blkbuf)
@@ -1945,11 +1923,12 @@ wand_load_block(WandCursor *c)
 	c->blkbuf = (unsigned char *) palloc(bh->bytelen);
 	memcpy(c->blkbuf, stream, bh->bytelen);
 
-	/* eagerly decode ONLY docids (gaps); record the tf column offset for lazy
-	 * per-posting access -- pruned blocks never touch tf.  |D| is in the
-	 * sidecar now, not the block. */
+	/* eagerly decode ONLY docids (gaps); record tf/dl column offsets for lazy
+	 * per-posting access -- pruned blocks never touch tf/dl */
 	glen = bm25_for_unpack(c->blkbuf, cnt, gaps);
+	tflen = bm25_for_bytelen(c->blkbuf + glen, cnt);
 	c->tfoff = (uint32) glen;
+	c->dloff = (uint32) (glen + tflen);
 
 	base = ((uint64) bh->first_docid_hi << 32) | bh->first_docid_lo;
 	for (i = 0; i < cnt; i++)
@@ -2081,16 +2060,14 @@ wand_skip_block(WandCursor *c)
 	wand_skip_own_tombstoned(c);
 }
 
-/* Exact BM25 contribution of the current posting.  tf is extracted from the
- * block's still-packed FOR column ON DEMAND (bm25_for_get) -- only for postings
- * actually scored; |D| is looked up from the per-segment doclen sidecar by
- * docid (the cursor caches the current sidecar chunk, so ascending scans stay
- * O(1) per posting).  Pruned blocks never touch tf or the sidecar. */
+/* Exact BM25 contribution of the current posting.  tf and |D| are extracted
+ * from the block's still-packed FOR columns ON DEMAND (bm25_for_get) -- only
+ * for postings actually scored, so pruned blocks never decode tf/dl. */
 static inline double
 wand_contrib_cur(WandCursor *c)
 {
 	double		tf = (double) bm25_for_get(c->blkbuf + c->tfoff, c->cur);
-	double		dl = (double) bm25_doclen_lookup(&c->dlr, c->docid);
+	double		dl = (double) bm25_for_get(c->blkbuf + c->dloff, c->cur);
 	double		norm = tf + c->k1_1mb + c->k1b_inv_avgdl * dl;
 
 	return c->idf_k1p1 * tf / norm;
@@ -2205,11 +2182,10 @@ wand_seek(WandCursor *c, uint64 target)
 }
 
 /*
- * fts_search_bmw: exact top-k identical to the accumulate path, but using
- * document-at-a-time block-max WAND so that documents which cannot enter the
- * current top-k are skipped via the per-term/per-tier max-contribution bounds.
- * Returns the number of (tid, score) results written to *out (palloc'd), capped
- * at k.
+ * fts_search_wand: exact top-k identical to the accumulate path, but using
+ * document-at-a-time WAND so that documents which cannot enter the current
+ * top-k are skipped via the per-term max-contribution bounds.  Returns the
+ * number of (tid, score) results written to *out (palloc'd), capped at k.
  */
 static int
 fts_search_bmw(WandCursor *cursors, int nterms, int k, ScoredTid **out)
@@ -2357,11 +2333,8 @@ fts_search_bmw(WandCursor *cursors, int nterms, int k, ScoredTid **out)
 
 	/* release any still-loaded block buffers */
 	for (t = 0; t < nterms; t++)
-	{
 		if (cursors[t].blkbuf)
 			pfree(cursors[t].blkbuf);
-		bm25_doclen_reader_fini(&cursors[t].dlr);
-	}
 
 	qsort(heap, nheap, sizeof(ScoredTid), cmp_scored_desc);
 	*out = heap;
@@ -2495,11 +2468,8 @@ fts_search_maxscore(WandCursor *cursors, int nterms, int k, ScoredTid **out)
 	}
 
 	for (t = 0; t < nterms; t++)
-	{
 		if (cursors[t].blkbuf)
 			pfree(cursors[t].blkbuf);
-		bm25_doclen_reader_fini(&cursors[t].dlr);
-	}
 
 	qsort(heap, nheap, sizeof(ScoredTid), cmp_scored_desc);
 	*out = heap;
@@ -2507,140 +2477,17 @@ fts_search_maxscore(WandCursor *cursors, int nterms, int k, ScoredTid **out)
 }
 
 /*
- * fts_search_tiered_single: hard top-k WeakAND early-termination for a SINGLE
- * query term.  The term's postings are stored impact-tiered (format v4); each
- * WandCursor here is one (segment, tf-tier) docid-ordered list carrying that
- * tier's SOUND ceiling in max_contrib (see pg_fts_am.h BM25Tier: an avgdl-
- * independent upper bound on every posting's BM25 contribution in that tier).
- *
- * We visit cursors HIGHEST-CEILING first, fully scoring each, and STOP as soon
- * as a cursor's ceiling <= the current k-th score: because cursors are ordered
- * by descending ceiling, that cursor and EVERY later one can only produce
- * postings whose true score <= their ceiling <= threshold, so none can enter
- * the top-k.  This is the flat-latency win -- a common term's huge tf=1 tier is
- * skipped wholesale once k high-tf docs fill the heap.
- *
- * SOUNDNESS (no true top-k doc is ever pruned): ceiling(tier) >= impact(p) for
- * every posting p in the tier (monotone in tf, and the dropped k1*b*|D|/avgdl
- * term is >= 0), and ceilings are non-increasing in visit order; so a skipped
- * posting p has impact(p) <= ceiling <= threshold = current k-th best, hence p
- * cannot displace any heap member (replacement requires score > threshold).
- * Every posting that COULD out-score the k-th is therefore scored, with the
- * SAME wand_contrib_cur() the reference engine uses -> identical top-k+scores.
+ * Dispatch to the top-k algorithm best suited to the query shape.  BMW excels
+ * on short queries (tight block-max pruning, cheap pivot); MaxScore does
+ * progressively less work as terms become non-essential, winning on long
+ * queries / large k.  Both return the identical exact top-k.
  */
 static int
-fts_search_tiered_single(WandCursor *cursors, int nterms, int k, ScoredTid **out)
+fts_search_wand(WandCursor *cursors, int nterms, int k, ScoredTid **out)
 {
-	ScoredTid  *heap;
-	int			nheap = 0;
-	double		threshold = 0.0;
-	int			i,
-				j,
-				t;
-
-	heap = (ScoredTid *) palloc(Max(k, 1) * sizeof(ScoredTid));
-
-	for (t = 0; t < nterms; t++)
-		wand_prime(&cursors[t]);
-
-	/* order cursors by DESCENDING ceiling (max_contrib); selection sort, small n */
-	for (i = 0; i < nterms; i++)
-		for (j = i + 1; j < nterms; j++)
-			if (cursors[j].max_contrib > cursors[i].max_contrib)
-			{
-				WandCursor	tmp = cursors[i];
-
-				cursors[i] = cursors[j];
-				cursors[j] = tmp;
-			}
-
-	for (t = 0; t < nterms; t++)
-	{
-		WandCursor *c = &cursors[t];
-
-		/*
-		 * Early-termination: heap full and this tier's ceiling cannot beat the
-		 * k-th score.  All later tiers have ceiling <= this one, so none can
-		 * either -- stop entirely.
-		 */
-		if (nheap >= k && c->max_contrib <= threshold)
-		{
-			elog(DEBUG1, "pg_fts: tiered top-k early-terminate: skipped %d of %d tier-cursors (threshold=%g, tier ceiling=%g)",
-				 nterms - t, nterms, threshold, c->max_contrib);
-			break;
-		}
-
-		/* score every posting of this tier-cursor (already tombstone-skipped
-		 * and range-clamped by wand_prime/wand_next) */
-		while (c->docid != UINT64_MAX)
-		{
-			double		score = wand_contrib_cur(c);
-			ItemPointerData tid;
-
-			bm25_docid_to_tid(c->docid, &tid);
-			if (nheap < k)
-			{
-				heap[nheap].tid = tid;
-				heap[nheap].score = score;
-				nheap++;
-				if (nheap == k)
-				{
-					threshold = heap[0].score;
-					for (i = 1; i < nheap; i++)
-						if (heap[i].score < threshold)
-							threshold = heap[i].score;
-				}
-			}
-			else if (score > threshold)
-			{
-				int			minpos = 0;
-
-				for (i = 1; i < nheap; i++)
-					if (heap[i].score < heap[minpos].score)
-						minpos = i;
-				heap[minpos].tid = tid;
-				heap[minpos].score = score;
-				threshold = heap[0].score;
-				for (i = 1; i < nheap; i++)
-					if (heap[i].score < threshold)
-						threshold = heap[i].score;
-			}
-			wand_next(c);
-		}
-	}
-
-	for (t = 0; t < nterms; t++)
-	{
-		if (cursors[t].blkbuf)
-			pfree(cursors[t].blkbuf);
-		bm25_doclen_reader_fini(&cursors[t].dlr);
-	}
-
-	qsort(heap, nheap, sizeof(ScoredTid), cmp_scored_desc);
-	*out = heap;
-	return nheap;
-}
-
-/*
- * Dispatch to the top-k algorithm best suited to the query shape.  A single
- * query term uses the impact-tiered early-termination path (flat latency on a
- * common term); BMW excels on short queries (tight block-max pruning, cheap
- * pivot); MaxScore does progressively less work as terms become non-essential,
- * winning on long queries / large k.  All return the identical exact top-k.
- *
- * `nquery_terms` is the number of DISTINCT query terms (not tier-cursors): the
- * tiered path is valid only when every cursor scores the SAME term, i.e. a
- * single-term query (possibly fanned out over segments and tiers).
- */
-static int
-fts_search_wand_dispatch(WandCursor *cursors, int nactive, int nquery_terms,
-						 int k, ScoredTid **out)
-{
-	if (nquery_terms == 1 && nactive > 0)
-		return fts_search_tiered_single(cursors, nactive, k, out);
-	if (nactive >= 4)
-		return fts_search_maxscore(cursors, nactive, k, out);
-	return fts_search_bmw(cursors, nactive, k, out);
+	if (nterms >= 4)
+		return fts_search_maxscore(cursors, nterms, k, out);
+	return fts_search_bmw(cursors, nterms, k, out);
 }
 
 /*
@@ -2653,9 +2500,9 @@ fts_search_wand_dispatch(WandCursor *cursors, int nactive, int nquery_terms,
  * one WAND pass (avoiding the adaptive-k recompute) when the result is small.
  */
 static double
-bm25_query_maxhits(Relation index, const BM25MetaPageData *meta,
-				   FtsQuery q, double N)
+bm25_query_maxhits(Relation index, FtsQuery q, double N)
 {
+	BM25MetaPageData meta;
 	double	   *stack;
 	int			top = 0;
 	uint32		i;
@@ -2663,6 +2510,7 @@ bm25_query_maxhits(Relation index, const BM25MetaPageData *meta,
 
 	if (q->nitems == 0)
 		return 0;
+	bm25_read_meta(index, &meta);
 	stack = (double *) palloc(q->nitems * sizeof(double));
 
 	for (i = 0; i < q->nitems; i++)
@@ -2678,16 +2526,16 @@ bm25_query_maxhits(Relation index, const BM25MetaPageData *meta,
 				uint32		gdf = 0;
 				uint32		s;
 
-				for (s = 0; s < meta->nsegments; s++)
+				for (s = 0; s < meta.nsegments; s++)
 				{
 					uint32		df,
 								mtf;
 					BlockNumber fb;
 					uint32		fo;
 
-					if (bm25_lookup_dict(index, &meta->segs[s],
+					if (bm25_lookup_dict(index, &meta.segs[s],
 										 FTS_QUERY_ITEMTEXT(q, it), it->termlen,
-										 &df, &mtf, &fb, &fo, NULL, NULL))
+										 &df, &mtf, &fb, &fo))
 						gdf += df;
 				}
 				stack[top++] = (double) gdf;
@@ -2734,10 +2582,10 @@ bm25_query_maxhits(Relation index, const BM25MetaPageData *meta,
  * intentionally, since pending is transient and bounded.
  */
 static int
-bm25_topk_candidates_range(Relation index, const BM25MetaPageData *meta,
-						   FtsQuery q, int wantk,
+bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 						   uint64 docid_lo, uint64 docid_hi, ScoredTid **out)
 {
+	BM25MetaPageData meta;
 	double		N,
 				avgdl;
 	const char **terms;
@@ -2754,119 +2602,84 @@ bm25_topk_candidates_range(Relation index, const BM25MetaPageData *meta,
 	if (wantk < 1)
 		wantk = 1;
 
-	N = meta->ndocs < 1.0 ? 1.0 : meta->ndocs;
-	avgdl = meta->ndocs > 0 ? meta->sumdoclen / meta->ndocs : 1.0;
+	bm25_read_meta(index, &meta);
+	N = meta.ndocs < 1.0 ? 1.0 : meta.ndocs;
+	avgdl = meta.ndocs > 0 ? meta.sumdoclen / meta.ndocs : 1.0;
 
 	nterms = fts_query_terms(q, &terms, &lens);
-	/* up to one cursor per (term, segment, impact-tier): tiers are stored as
-	 * separate docid-ordered posting lists, and the WAND engine treats each as
-	 * an independent cursor -- a docid lands in exactly ONE tier of a term (its
-	 * tf bucket), so summing per-cursor contributions never double-counts. */
-	cursors = (WandCursor *) palloc(Max(nterms * Max((int) meta->nsegments, 1) *
-									   BM25_MAX_TIERS, 1) *
+	/* up to one cursor per (term, segment) */
+	cursors = (WandCursor *) palloc(Max(nterms * Max((int) meta.nsegments, 1), 1) *
 									sizeof(WandCursor));
 
 	/* per-segment tombstones: each cursor skips docids deleted in its own
 	 * segment, so reused heap TIDs live in another segment still rank */
-	bm25_tombstones_load(index, meta, &tombs);
+	bm25_tombstones_load(index, &meta, &tombs);
 
 	for (t = 0; t < nterms; t++)
 	{
 		uint32		gdf = 0;
 		uint32		s;
-		uint32		nseg = meta->nsegments;
 		double		idf;
 		double		b = 0.75;
-		/* one dict lookup per (term, segment), reused for idf AND cursor setup */
-		struct
-		{
-			bool		found;
-			uint32		df;
-			uint32		max_tf;
-			BlockNumber firstblk;
-			uint32		firstoff;
-			uint32		ntiers;
-			BM25Tier	tiers[BM25_MAX_TIERS];
-		}		   *hit = palloc(Max(nseg, 1) * sizeof(*hit));
 
 		/* global df across all segments -> IDF (segments share the corpus) */
-		for (s = 0; s < nseg; s++)
+		for (s = 0; s < meta.nsegments; s++)
 		{
-			hit[s].found = bm25_lookup_dict(index, &meta->segs[s], terms[t], lens[t],
-											&hit[s].df, &hit[s].max_tf,
-											&hit[s].firstblk, &hit[s].firstoff,
-											&hit[s].ntiers, hit[s].tiers);
-			if (hit[s].found)
-				gdf += hit[s].df;
+			uint32		df,
+						max_tf;
+			BlockNumber firstblk;
+			uint32		firstoff;
+
+			if (bm25_lookup_dict(index, &meta.segs[s], terms[t], lens[t],
+								 &df, &max_tf, &firstblk, &firstoff))
+				gdf += df;
 		}
 		if (gdf == 0)
-		{
-			pfree(hit);
 			continue;			/* term absent in every segment */
-		}
 		idf = log(1.0 + (N - (double) gdf + 0.5) / ((double) gdf + 0.5));
 
-		/* one cursor per (segment, tier) that contains the term */
-		for (s = 0; s < nseg; s++)
+		/* one cursor per segment that contains the term */
+		for (s = 0; s < meta.nsegments; s++)
 		{
-			uint32		ti;
-			uint32		nt;
+			uint32		df,
+						max_tf;
+			BlockNumber firstblk;
+			uint32		firstoff;
+			double		mtf;
 
-			if (!hit[s].found)
+			if (!bm25_lookup_dict(index, &meta.segs[s], terms[t], lens[t],
+								  &df, &max_tf, &firstblk, &firstoff))
 				continue;
-			nt = hit[s].ntiers;
-			/* Defensive: a pre-tier-directory entry (should not occur after the
-			 * v4 version guard) has ntiers==0; treat the whole term as one tier
-			 * spanning [firstblk,firstoff) with tf_max = max_tf. */
-			if (nt == 0)
+			mtf = (double) max_tf;
+			cursors[nactive].index = index;
+			cursors[nactive].firstblk = firstblk;
+			cursors[nactive].firstoff = firstoff;
+			cursors[nactive].df = df;
+			cursors[nactive].blkbuf = NULL;
+			cursors[nactive].blkcount = 0;
+			cursors[nactive].cur = 0;
+			cursors[nactive].docid = 0;
+			cursors[nactive].idf = idf;
+			cursors[nactive].avgdl = avgdl;
+			cursors[nactive].k1b_inv_avgdl = k1 * b / avgdl;
+			cursors[nactive].k1_1mb = k1 * (1.0 - b);
+			cursors[nactive].idf_k1p1 = idf * (k1 + 1.0);
+			cursors[nactive].max_contrib =
+				idf * mtf * (k1 + 1.0) / (mtf + k1 * (1.0 - b));
+			cursors[nactive].tombs = &tombs;
+			cursors[nactive].segidx = s;
+			cursors[nactive].docid_lo = docid_lo;
+			cursors[nactive].docid_hi = docid_hi;
 			{
-				hit[s].tiers[0].firstposting = hit[s].firstblk;
-				hit[s].tiers[0].firstoffset = hit[s].firstoff;
-				hit[s].tiers[0].df = hit[s].df;
-				hit[s].tiers[0].tf_max = hit[s].max_tf;
-				nt = 1;
-			}
-			for (ti = 0; ti < nt; ti++)
-			{
-				double		mtf = (double) hit[s].tiers[ti].tf_max;
+				sm_cursor_cached_t ini = SM_CURSOR_CACHED_INIT;
 
-				if (hit[s].tiers[ti].df == 0)
-					continue;
-				cursors[nactive].index = index;
-				cursors[nactive].firstblk = hit[s].tiers[ti].firstposting;
-				cursors[nactive].firstoff = hit[s].tiers[ti].firstoffset;
-				cursors[nactive].df = hit[s].tiers[ti].df;
-				cursors[nactive].blkbuf = NULL;
-				cursors[nactive].blkcount = 0;
-				cursors[nactive].cur = 0;
-				cursors[nactive].docid = 0;
-				cursors[nactive].idf = idf;
-				cursors[nactive].avgdl = avgdl;
-				cursors[nactive].k1b_inv_avgdl = k1 * b / avgdl;
-				cursors[nactive].k1_1mb = k1 * (1.0 - b);
-				cursors[nactive].idf_k1p1 = idf * (k1 + 1.0);
-				/* tier ceiling: sound avgdl-independent upper bound (see
-				 * pg_fts_am.h BM25Tier), = per-tier max_contrib */
-				cursors[nactive].max_contrib =
-					idf * mtf * (k1 + 1.0) / (mtf + k1 * (1.0 - b));
-				cursors[nactive].tombs = &tombs;
-				cursors[nactive].segidx = s;
-				cursors[nactive].docid_lo = docid_lo;
-				cursors[nactive].docid_hi = docid_hi;
-				bm25_doclen_reader_init(&cursors[nactive].dlr, index,
-										meta->segs[s].doclenstart);
-				{
-					sm_cursor_cached_t ini = SM_CURSOR_CACHED_INIT;
-
-					cursors[nactive].tombcache = ini;
-				}
-				nactive++;
+				cursors[nactive].tombcache = ini;
 			}
+			nactive++;
 		}
-		pfree(hit);
 	}
 
-	ncand = fts_search_wand_dispatch(cursors, nactive, nterms, wantk, &cand);
+	ncand = fts_search_wand(cursors, nactive, wantk, &cand);
 	bm25_tombstones_free(&tombs);
 
 	*out = cand;
@@ -2882,8 +2695,7 @@ bm25_topk_candidates_range(Relation index, const BM25MetaPageData *meta,
  * descending score.
  */
 static int
-bm25_topk_visible(Relation index, const BM25MetaPageData *meta,
-				  FtsQuery q, int k, bool as_distance,
+bm25_topk_visible(Relation index, FtsQuery q, int k, bool as_distance,
 				  ScoredTid **out)
 {
 	ScoredTid  *cand;
@@ -2895,9 +2707,8 @@ bm25_topk_visible(Relation index, const BM25MetaPageData *meta,
 	Snapshot	snap = GetActiveSnapshot();
 	Relation	heap;
 	IndexFetchTableData *fetch;
-	TupleTableSlot *slot;
 
-	ncand = bm25_topk_candidates_range(index, meta, q, wantk, 0, UINT64_MAX, &cand);
+	ncand = bm25_topk_candidates_range(index, q, wantk, 0, UINT64_MAX, &cand);
 	if (k < 1)
 		k = 1;
 
@@ -2908,14 +2719,12 @@ bm25_topk_visible(Relation index, const BM25MetaPageData *meta,
 #else
 	fetch = table_index_fetch_begin(heap);
 #endif
-	/* One reusable slot for the whole visibility loop (cleared between fetches)
-	 * rather than a create/drop per candidate. */
-	slot = table_slot_create(heap, NULL);
 	for (i = 0; i < ncand && nvis < k; i++)
 	{
 		ItemPointerData tid = cand[i].tid;
 		bool		call_again = false;
 		bool		all_dead = false;
+		TupleTableSlot *slot = table_slot_create(heap, NULL);
 
 		if (table_index_fetch_tuple(fetch, &tid, snap, slot,
 									&call_again, &all_dead))
@@ -2925,9 +2734,8 @@ bm25_topk_visible(Relation index, const BM25MetaPageData *meta,
 				results[nvis].score = 1.0 / (1.0 + cand[i].score);
 			nvis++;
 		}
-		ExecClearTuple(slot);
+		ExecDropSingleTupleTableSlot(slot);
 	}
-	ExecDropSingleTupleTableSlot(slot);
 	table_index_fetch_end(fetch);
 	table_close(heap, AccessShareLock);
 
@@ -3085,7 +2893,6 @@ fts_search(PG_FUNCTION_ARGS)
 		Relation	index;
 		int			nvis;
 		TupleDesc	tupdesc;
-		BM25MetaPageData meta;
 
 		funcctx = SRF_FIRSTCALL_INIT();
 		oldctx = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
@@ -3095,8 +2902,7 @@ fts_search(PG_FUNCTION_ARGS)
 		funcctx->tuple_desc = BlessTupleDesc(tupdesc);
 
 		index = index_open(indexoid, AccessShareLock);
-		bm25_read_meta(index, &meta);
-		nvis = bm25_topk_visible(index, &meta, q, k, false, &results);
+		nvis = bm25_topk_visible(index, q, k, false, &results);
 		index_close(index, AccessShareLock);
 
 		funcctx->max_calls = nvis;
