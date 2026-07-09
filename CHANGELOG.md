@@ -2,6 +2,22 @@
 
 All notable changes to pg_fts are documented here.
 
+## 0.2.1
+
+Bug-fix release. The fix is entirely in the shared library; no SQL objects
+change and existing `fts` indexes need no REINDEX (on-disk format unchanged from
+0.2.0). `ALTER EXTENSION pg_fts UPDATE TO '0.2.1'` after installing the new
+library.
+
+- **Ranked `<=>` scan now respects boolean AND/NOT/PHRASE structure.** The
+  `ORDER BY d <=> q LIMIT k` ordering scan previously ranked the term
+  *disjunction* (it flattened the query to its terms) and never intersected with
+  the boolean match set that `@@@` uses, so AND/NOT/PHRASE queries could return
+  documents that fail `@@@` — e.g. `a & !b` ranked documents that *contain* `b`.
+  The ranked scan now gates results by the exact `@@@` match set, so every row
+  it returns satisfies `@@@`. `@@@` matching and pure-OR / single-term ranking
+  were already correct and are unchanged.
+
 ## 0.2.0
 
 **Breaking:** the index access method was renamed **`bm25` → `fts`**
