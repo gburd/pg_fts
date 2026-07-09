@@ -54,6 +54,7 @@
 #include "commands/defrem.h"
 #include "commands/vacuum.h"
 #include "executor/tuptable.h"
+#include "executor/executor.h"
 #include "executor/instrument.h"
 #include "funcapi.h"
 #include "miscadmin.h"

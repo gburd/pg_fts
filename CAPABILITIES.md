@@ -18,6 +18,7 @@ citations are to the tree this document was generated against. All
 | BM25F multi-field weighting | Yes | `fts_bm25f(ftsdoc[], ftsquery, weights, ...)` `pg_fts--1.11--1.12.sql:9` |
 | Phrase queries (`"a b c"`) via per-term positions | Yes | ftsdoc format v2 (stage 1.9), README line 28; `sql/pg_fts.sql:206-215` |
 | Prefix (`term*`), fuzzy (`term~k`), regex (`/re/`) | Yes | README lines 31-34; sequential + index paths, `sql/pg_fts.sql:147-271`; trigram pre-filter `pg_fts_trgm_index.c` |
+| Ranked (`<=>`) over fuzzy/prefix/regex returns a correct **subset** | Partial | the ranked WAND path builds cursors from the literal term, so docs matching only via an expansion aren't ranked; results are always correct (never a non-match) but may be incomplete. Use `@@@` for exhaustive fuzzy/prefix/regex retrieval. PHRASE/NEAR/boolean ranking is exact (`bm25_recheck_exact`, `pg_fts_am_scan.c`) |
 | Highlight / snippet | Yes | `fts_highlight`, `fts_snippet` `pg_fts--1.4--1.5.sql:6,13` |
 | Fast bulk count (`fts_count(regclass, ftsquery)`) | Yes | `pg_fts--1.18--1.19.sql:9`; visibility-map-aware, heap probed only for not-all-visible pages |
 | MVCC-correct deletes (tombstones) | Yes | `bm25_bulkdelete` per-segment livedocs tombstone bitmap `pg_fts_am.c:1843-1853`; scans/counts subtract, merge drops |

@@ -33,6 +33,7 @@ static bool bm25_trgm_candidates(Relation index, BlockNumber trgmstart,
 								 const char *term, int termlen,
 								 int min_trigrams, bool is_regex, TidSet *out);
 static void bm25_collect_matches(Relation index, FtsQuery query, TidSet *out, bool *recheck);
+static void bm25_recheck_exact(Relation index, FtsQuery query, TidSet *set);
 static double bm25_query_maxhits(Relation index, FtsQuery q, double N);
 /* forward decl: blob reader (pg_fts_trgm_index.c, included after this file) */
 static uint8 *bm25_read_blob(Relation index, BlockNumber blk, Size len);
@@ -1322,6 +1323,7 @@ bm25_collect_matches(Relation index, FtsQuery query, TidSet *out, bool *recheck)
 	BM25Tombstones seg_tombs;
 	bool		has_fuzzy_regex = false;
 	bool		has_not = false;
+	bool		has_phrase = false;
 	bool		need_recheck = false;
 	uint32		i;
 	uint32		s;
@@ -1343,6 +1345,8 @@ bm25_collect_matches(Relation index, FtsQuery query, TidSet *out, bool *recheck)
 
 		if (it->type == FTS_QI_OPR && it->op == FTS_OP_NOT)
 			has_not = true;
+		if (it->type == FTS_QI_OPR && it->op == FTS_OP_PHRASE)
+			has_phrase = true;
 		if (it->type == FTS_QI_VAL && (it->flags & (FTS_QF_FUZZY | FTS_QF_REGEX)))
 			has_fuzzy_regex = true;
 	}
@@ -1449,7 +1453,14 @@ bm25_collect_matches(Relation index, FtsQuery query, TidSet *out, bool *recheck)
 			{
 				bm25_filter_tombstoned_seg(&seg_tombs, s, &result);
 				if (result.n > 0)
-					acc = tidset_or(acc, result);	/* exact -- no recheck */
+				{
+					/* PHRASE/NEAR is evaluated as AND here (the index has no
+					 * positions); the heap ftsdoc carries positions, so a
+					 * bitmap-heap recheck of @@@ enforces adjacency exactly. */
+					if (has_phrase)
+						need_recheck = true;
+					acc = tidset_or(acc, result);
+				}
 			}
 		}
 	}
@@ -1530,6 +1541,83 @@ bm25_getbitmap(IndexScanDesc scan, TIDBitmap *tbm)
 		tbm_add_tuples(tbm, matches.tids, matches.n, recheck);
 	return matches.n;
 }
+
+/*
+ * bm25_recheck_exact: shrink `set` to the EXACT @@@ match set.
+ *
+ * bm25_collect_matches returns recheck=true for queries the index over-
+ * generates (PHRASE/NEAR: adjacency not enforced by the positionless posting
+ * lists; FUZZY/REGEX: the trigram funnel yields candidates).  The bitmap-heap
+ * scan hands these to the executor with a recheck flag so it re-evaluates @@@
+ * against the heap ftsdoc.  The ranked <=> scan and fts_count() have no
+ * executor recheck, so they must do it here: recompute the indexed ftsdoc from
+ * each candidate's live heap tuple (evaluating the index expression, exactly
+ * as build/insert do) and drop any that fail fts_doc_matches.  After this the
+ * TID set is precisely what "WHERE d @@@ q" (with heap recheck) admits.
+ *
+ * Non-live tuples (not visible / vacuumed) are dropped too; the caller's own
+ * MVCC visibility pass would drop them anyway, so this never widens the set.
+ */
+static void
+bm25_recheck_exact(Relation index, FtsQuery query, TidSet *set)
+{
+	Relation	heap;
+	IndexInfo  *indexInfo;
+	EState	   *estate;
+	ExprContext *econtext;
+	TupleTableSlot *slot;
+	IndexFetchTableData *fetch;
+	Snapshot	snap = GetActiveSnapshot();
+	Datum		values[INDEX_MAX_KEYS];
+	bool		isnull[INDEX_MAX_KEYS];
+	int			i,
+				keep = 0;
+
+	if (set->n == 0)
+		return;
+
+	heap = table_open(index->rd_index->indrelid, AccessShareLock);
+	indexInfo = BuildIndexInfo(index);
+	estate = CreateExecutorState();
+	econtext = GetPerTupleExprContext(estate);
+	slot = table_slot_create(heap, NULL);
+	econtext->ecxt_scantuple = slot;
+#if PG_VERSION_NUM >= 190000
+	fetch = table_index_fetch_begin(heap, SO_NONE);
+#else
+	fetch = table_index_fetch_begin(heap);
+#endif
+
+	for (i = 0; i < set->n; i++)
+	{
+		ItemPointerData tid = set->tids[i];
+		bool		call_again = false;
+		bool		all_dead = false;
+
+		ExecClearTuple(slot);
+		if (table_index_fetch_tuple(fetch, &tid, snap, slot,
+									&call_again, &all_dead))
+		{
+			FtsDoc		doc;
+
+			FormIndexDatum(indexInfo, slot, estate, values, isnull);
+			if (!isnull[0])
+			{
+				doc = (FtsDoc) PG_DETOAST_DATUM(values[0]);
+				if (fts_doc_matches(doc, query))
+					set->tids[keep++] = set->tids[i];
+			}
+		}
+		ResetExprContext(econtext);
+	}
+
+	table_index_fetch_end(fetch);
+	ExecDropSingleTupleTableSlot(slot);
+	FreeExecutorState(estate);
+	table_close(heap, AccessShareLock);
+	set->n = keep;
+}
+
 void
 bm25_endscan(IndexScanDesc scan)
 {
@@ -2729,15 +2817,27 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 		bm25_collect_matches(index, q, &matches, &recheck);
 		/*
 		 * matches is the SAME boolean set @@@ uses through this index (it is
-		 * built by the identical evaluator).  For fuzzy/regex/NOT-universe it
-		 * may over-generate exactly as index-@@@ does (recheck), and for a
-		 * PHRASE it is the AND-set (adjacency is not enforced here, matching
-		 * index-@@@).  So gating on it makes the ranked scan at least as
-		 * correct as @@@ -- it never returns a doc @@@ would reject.
+		 * built by the identical evaluator).  For fuzzy/regex/NOT-universe and
+		 * PHRASE/NEAR it OVER-generates (recheck=true): fuzzy/regex is a
+		 * trigram-funnel candidate set, and a PHRASE is the AND-set (the
+		 * positionless posting lists cannot enforce adjacency).  The bitmap-
+		 * heap scan resolves this with an executor recheck of @@@; the ranked
+		 * scan has none, so we recheck here -- shrink matches to the EXACT set
+		 * against the heap ftsdoc.  After this the docid filter is precise, so
+		 * the ranked scan never admits a doc "WHERE d @@@ q" would reject.
+		 *
+		 * COMPLETENESS caveat: the WAND cursors are built from the LITERAL query
+		 * terms (fts_query_terms), so a doc that matches only via a fuzzy/prefix/
+		 * regex EXPANSION (no posting for the literal term) is never generated as
+		 * a ranked candidate.  The recheck only shrinks, so ranked fuzzy/prefix/
+		 * regex results are a correct SUBSET of the @@@ matches, not the full set.
+		 * PHRASE/NEAR/boolean are exact.  Use @@@ for exhaustive fuzzy/prefix.
 		 *
 		 * TidSet is TID-sorted and bm25_tid_to_docid is monotonic in TID
 		 * order, so the docid array comes out sorted (binary-searchable).
 		 */
+		if (recheck)
+			bm25_recheck_exact(index, q, &matches);
 		if (matches.n > 0)
 		{
 			filter_docids = (uint64 *) palloc(matches.n * sizeof(uint64));
@@ -2904,9 +3004,11 @@ bm25_topk_visible(Relation index, FtsQuery q, int k, bool as_distance,
  * whole run of TIDs counts without touching the heap; only pages the VM does
  * not mark all-visible are probed with table_index_fetch_tuple.  This is the
  * count-pushdown path the CustomScan uses to answer count(*) at index speed.
- * If `recheck` is set (fuzzy/regex/NOT over-generation), a matched TID must
- * additionally pass the exact qual -- but those paths return recheck=false for
- * single-term fuzzy and exact boolean, so the common count cases are pure.
+ * If `recheck` is set (fuzzy/regex/NOT/PHRASE over-generation), the collected
+ * TIDs are a SUPERSET of the exact matches, so bm25_recheck_exact() shrinks
+ * them to the precise set (recomputing the heap ftsdoc and re-running @@@)
+ * before the visibility count.  Without recheck the collected TIDs are already
+ * exact and we only need visibility.
  */
 static int64
 bm25_count_visible(Relation index, FtsQuery q)
@@ -2921,44 +3023,22 @@ bm25_count_visible(Relation index, FtsQuery q)
 	int			i;
 
 	bm25_collect_matches(index, q, &matches, &recheck);
+	/*
+	 * Shrink over-generated sets (fuzzy/regex/PHRASE/NEAR) to the exact @@@
+	 * match set against the heap ftsdoc; after this the count is precise.
+	 */
+	if (recheck)
+		bm25_recheck_exact(index, q, &matches);
 	if (matches.n == 0)
 		return 0;
 
 	heap = table_open(index->rd_index->indrelid, AccessShareLock);
 
 	/*
-	 * If any term over-generated (recheck), we cannot count from the index
-	 * alone -- fall back to fetching + rechecking each candidate.  (Rare: only
-	 * regex, NOT, or funnel-fallback fuzzy.)  Otherwise the collected TIDs are
-	 * exactly the matches and we only need visibility.
+	 * The collected TIDs are now exactly the matches (over-generation already
+	 * rechecked above), so we only need visibility.  Count visible via the VM,
+	 * heap-probing only pages the map does not mark all-visible.
 	 */
-	if (recheck)
-	{
-#if PG_VERSION_NUM >= 190000
-		fetch = table_index_fetch_begin(heap, SO_NONE);
-#else
-		fetch = table_index_fetch_begin(heap);
-#endif
-		for (i = 0; i < matches.n; i++)
-		{
-			ItemPointerData tid = matches.tids[i];
-			bool		ca = false,
-						ad = false;
-			TupleTableSlot *slot = table_slot_create(heap, NULL);
-
-			/* NB: recheck of the actual qual would go here; today recheck=true
-			 * only for paths not reachable by count-pushdown gating, so this is
-			 * a visibility-only fallback */
-			if (table_index_fetch_tuple(fetch, &tid, snap, slot, &ca, &ad))
-				count++;
-			ExecDropSingleTupleTableSlot(slot);
-		}
-		table_index_fetch_end(fetch);
-		table_close(heap, AccessShareLock);
-		return count;
-	}
-
-	/* exact matches: count visible via the VM, heap-probing only dirty pages */
 	for (i = 0; i < matches.n; i++)
 	{
 		BlockNumber blk = ItemPointerGetBlockNumber(&matches.tids[i]);

@@ -26,7 +26,10 @@
 #include "tsearch/ts_utils.h"
 #include "utils/builtins.h"
 
-/* qsort_arg comparator: elements are indices into a ParsedWord array (arg) */
+/* qsort_arg comparator: elements are indices into a ParsedWord array (arg).
+ * Ties on (text, len) break by token position so a distinct-term run comes out
+ * with its positions ascending -- phrase_step requires each term's position
+ * list to be ascending (this mirrors cmp_rawterm in pg_fts_analyze.c). */
 static int
 cmp_word_idx(const void *a, const void *b, void *arg)
 {
@@ -38,7 +41,17 @@ cmp_word_idx(const void *a, const void *b, void *arg)
 
 	if (c != 0)
 		return c;
-	return wa->len - wb->len;
+	if (wa->len != wb->len)
+		return wa->len - wb->len;
+	/* same term: order by position so positions come out ascending.
+	 * parsetext() fills pos.pos with a plain 1-based token ordinal via
+	 * LIMITPOS() (no weight bits, capped at MAXENTRYPOS-1); alen==0 so the
+	 * apos array form is never used on this path. */
+	if (wa->pos.pos < wb->pos.pos)
+		return -1;
+	if (wa->pos.pos > wb->pos.pos)
+		return 1;
+	return 0;
 }
 
 /*
@@ -46,7 +59,9 @@ cmp_word_idx(const void *a, const void *b, void *arg)
  * sorted and may contain duplicates and multiple variants per position, so we
  * sort, deduplicate and count term frequency, exactly like the simple
  * analyzer.  doclen is the number of token positions, which parsetext tracks
- * in prs->pos.
+ * in prs->pos.  Per-token positions are stored (FTS_DOCF_POSITIONS) so phrase
+ * and NEAR queries enforce adjacency on this path too; parsetext() fills each
+ * ParsedWord.pos.pos with a 1-based token ordinal.
  */
 static FtsDoc
 ftsdoc_from_parsed(ParsedText *prs)
@@ -58,10 +73,14 @@ ftsdoc_from_parsed(ParsedText *prs)
 	int			ndistinct = 0;
 	Size		lexbytes = 0;
 	FtsDoc		doc;
+	Size		posbase;
 	Size		total;
+	int			npos;
 	FtsTermEntry *entries;
 	char	   *lexemes;
+	uint32	   *positions;
 	uint32		off;
+	uint32		pidx;
 
 	if (nw == 0)
 	{
@@ -76,7 +95,7 @@ ftsdoc_from_parsed(ParsedText *prs)
 		return doc;
 	}
 
-	/* index-sort words by (text, len) without disturbing the array */
+	/* index-sort words by (text, len, pos) without disturbing the array */
 	order = (int *) palloc(nw * sizeof(int));
 	for (i = 0; i < nw; i++)
 		order[i] = i;
@@ -106,21 +125,28 @@ ftsdoc_from_parsed(ParsedText *prs)
 
 	total = FTS_DOC_HDRSIZE +
 		(Size) ndistinct * sizeof(FtsTermEntry) + lexbytes;
+	/* one stored position per token; npos == nw (sum of tf over all terms) */
+	npos = nw;
+	posbase = MAXALIGN(total);
+	total = posbase + (Size) npos * sizeof(uint32);
 	doc = (FtsDoc) palloc0(total);
 	SET_VARSIZE(doc, total);
 	doc->version = FTS_DOC_VERSION;
-	doc->flags = 0;
+	doc->flags = FTS_DOCF_POSITIONS;
 	doc->nterms = ndistinct;
 	doc->doclen = (uint32) prs->pos;
 	doc->lexbytes = lexbytes;
 
 	entries = FTS_DOC_ENTRIES(doc);
 	lexemes = FTS_DOC_LEXEMES(doc);
+	positions = FTS_DOC_POSITIONS(doc);
 	off = 0;
+	pidx = 0;
 	ndistinct = 0;
 	for (i = 0; i < nw;)
 	{
 		int			run = 1;
+		int			k;
 		ParsedWord *w = &words[order[i]];
 
 		while (i + run < nw)
@@ -138,8 +164,12 @@ ftsdoc_from_parsed(ParsedText *prs)
 		entries[ndistinct].off = off;
 		entries[ndistinct].len = w->len;
 		entries[ndistinct].tf = run;
+		entries[ndistinct].posoff = pidx;
 		memcpy(lexemes + off, w->word, w->len);
 		off += w->len;
+		/* cmp_word_idx broke ties by pos, so this run is already ascending */
+		for (k = 0; k < run; k++)
+			positions[pidx++] = words[order[i + k]].pos.pos;
 		ndistinct++;
 		i += run;
 	}

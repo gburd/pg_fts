@@ -585,12 +585,96 @@ SELECT id FROM ph WHERE d @@@ '"quick brown"'::ftsquery ORDER BY id;   -- 1 and 
  id 
 ----
   1
-  2
   3
-(3 rows)
+(2 rows)
 
 RESET enable_seqscan;
 DROP TABLE ph;
+-- regconfig analyzer must also carry positions so phrase/NEAR enforce
+-- adjacency (v0.2.1 bug: to_ftsdoc(regconfig,text) stored no positions, so
+-- phrases silently degraded to AND).  'simple' config: no stemming/stopwords,
+-- positions map 1:1 to input words.
+-- adjacent phrase matches
+SELECT to_ftsdoc('simple'::regconfig, 'quick brown fox')
+       @@@ to_ftsquery('simple'::regconfig, '"quick brown"') AS cfg_adj_hit;   -- t
+ cfg_adj_hit 
+-------------
+ t
+(1 row)
+
+-- non-adjacent must NOT match (was t before the fix -- the bug -- now f)
+SELECT to_ftsdoc('simple'::regconfig, 'quick red slow brown')
+       @@@ to_ftsquery('simple'::regconfig, '"quick brown"') AS cfg_nonadj_miss; -- f
+ cfg_nonadj_miss 
+-----------------
+ f
+(1 row)
+
+-- three-word phrase: only consecutive matches
+SELECT to_ftsdoc('simple'::regconfig, 'a b c')
+       @@@ to_ftsquery('simple'::regconfig, '"a b c"') AS cfg_three_hit;   -- t
+ cfg_three_hit 
+---------------
+ t
+(1 row)
+
+SELECT to_ftsdoc('simple'::regconfig, 'a x b c')
+       @@@ to_ftsquery('simple'::regconfig, '"a b c"') AS cfg_three_miss;  -- f
+ cfg_three_miss 
+----------------
+ f
+(1 row)
+
+-- repeated term at non-sequential positions: "quick" at pos 1 and 3; the
+-- per-term position list must be ascending [1,3] for phrase_step to work
+SELECT to_ftsdoc('simple'::regconfig, 'quick brown quick fox')
+       @@@ to_ftsquery('simple'::regconfig, '"quick brown"') AS cfg_rep_hit;   -- t
+ cfg_rep_hit 
+-------------
+ t
+(1 row)
+
+SELECT to_ftsdoc('simple'::regconfig, 'quick brown quick fox')
+       @@@ to_ftsquery('simple'::regconfig, '"quick fox"') AS cfg_rep_hit2;    -- t
+ cfg_rep_hit2 
+--------------
+ t
+(1 row)
+
+-- NEAR on the regconfig analyzer: within k true, beyond k false
+SELECT to_ftsdoc('simple'::regconfig, 'quick brown red fox')
+       @@@ to_ftsquery('simple'::regconfig, 'NEAR(quick fox, 3)') AS cfg_near_hit;  -- t
+ cfg_near_hit 
+--------------
+ t
+(1 row)
+
+SELECT to_ftsdoc('simple'::regconfig, 'quick brown red fox')
+       @@@ to_ftsquery('simple'::regconfig, 'NEAR(quick fox, 2)') AS cfg_near_miss; -- f
+ cfg_near_miss 
+---------------
+ f
+(1 row)
+
+-- index-backed phrase on a regconfig-analyzed column: recheck must exclude
+-- non-adjacent docs
+CREATE TABLE phc (id serial, d ftsdoc);
+INSERT INTO phc (d) VALUES
+  (to_ftsdoc('simple'::regconfig, 'quick brown fox')),      -- 1: adjacent
+  (to_ftsdoc('simple'::regconfig, 'quick red slow brown')), -- 2: not adjacent
+  (to_ftsdoc('simple'::regconfig, 'quick brown bear'));     -- 3: adjacent
+CREATE INDEX phc_bm25 ON phc USING fts (d);
+SET enable_seqscan = off;
+SELECT id FROM phc WHERE d @@@ to_ftsquery('simple'::regconfig, '"quick brown"')
+  ORDER BY id;   -- 1 and 3 only
+ id 
+----
+  1
+  3
+(2 rows)
+
+RESET enable_seqscan;
+DROP TABLE phc;
 -- external-content indexing via an expression index.
 -- The bm25 index stores only postings (no document text), so indexing
 -- to_ftsdoc(body) over a plain text column is the external-content model:
@@ -1740,3 +1824,134 @@ SELECT count(*) AS not_all_matches FROM (
 
 RESET enable_seqscan; RESET enable_bitmapscan; RESET enable_indexscan;
 DROP TABLE bp;
+-- ----------------------------------------------------------------------------
+-- Ranked index scan must ALSO enforce PHRASE/NEAR adjacency and FUZZY/REGEX
+-- edit-distance -- not just boolean AND/NOT.  bm25_collect_matches returns the
+-- over-generated set (PHRASE = AND-set with adjacency unenforced; fuzzy/regex =
+-- trigram-funnel candidates) with recheck=true.  The bitmap @@@ path resolves
+-- this with an executor recheck; the ranked <=> scan has none, so the AM must
+-- recheck the exact @@@ test against the heap ftsdoc before ranking.  Before
+-- the fix, a ranked `"quick brown"` over the rows below returned all 20
+-- non-adjacent "quick red slow brown" docs; it must now return 0.
+CREATE TABLE rp (id serial, d ftsdoc);
+-- 20 NON-adjacent docs (both terms present, not consecutive): the AND-set, and
+-- the phrase-recheck must reject every one.
+INSERT INTO rp(d) SELECT to_ftsdoc('simple'::regconfig, 'quick red slow brown d'||g)
+  FROM generate_series(1,20) g;
+-- 5 ADJACENT docs ("quick brown" consecutive): the true phrase matches.
+INSERT INTO rp(d) SELECT to_ftsdoc('simple'::regconfig, 'quick brown fox d'||g)
+  FROM generate_series(1,5) g;
+CREATE INDEX rp_fts ON rp USING fts (d);
+ANALYZE rp;
+SET enable_seqscan=off; SET enable_bitmapscan=off; SET enable_indexscan=on;
+-- plan MUST be the AM ordering Index Scan (no Sort), else the recheck code is
+-- never exercised and a buggy engine would pass silently.
+EXPLAIN (COSTS OFF) SELECT id FROM rp
+  WHERE d @@@ to_ftsquery('simple'::regconfig, '"quick brown"')
+  ORDER BY d <=> to_ftsquery('simple'::regconfig, '"quick brown"') LIMIT 50;
+                            QUERY PLAN                             
+-------------------------------------------------------------------
+ Limit
+   ->  Index Scan using rp_fts on rp
+         Index Cond: (d @@@ '(''quick'' <-> ''brown'')'::ftsquery)
+         Order By: (d <=> '(''quick'' <-> ''brown'')'::ftsquery)
+(4 rows)
+
+-- PHRASE: ranked top-50 must contain ZERO non-adjacent docs (was 20 pre-fix).
+SELECT count(*) AS phrase_violations FROM (
+  SELECT d FROM rp WHERE d @@@ to_ftsquery('simple'::regconfig, '"quick brown"')
+  ORDER BY d <=> to_ftsquery('simple'::regconfig, '"quick brown"') LIMIT 50
+) s WHERE NOT (s.d @@@ to_ftsquery('simple'::regconfig, '"quick brown"'));
+ phrase_violations 
+-------------------
+                 0
+(1 row)
+
+-- and it returns exactly the 5 true adjacent matches (grow-k terminates even
+-- though the exact set (5) is far smaller than the AND-set (25)).
+SELECT count(*) AS phrase_matches FROM (
+  SELECT d FROM rp WHERE d @@@ to_ftsquery('simple'::regconfig, '"quick brown"')
+  ORDER BY d <=> to_ftsquery('simple'::regconfig, '"quick brown"') LIMIT 500
+) s;
+ phrase_matches 
+----------------
+              5
+(1 row)
+
+-- NEAR: within-k admits, beyond-k rejects, all on the ranked path.
+-- "quick" and "brown" are adjacent in the 5 rows (distance 1) and 3 apart in
+-- the 20 rows ("quick red slow brown").  NEAR(...,3) admits all 25; NEAR(...,1)
+-- admits only the 5 adjacent ones.
+SELECT count(*) AS near3_matches FROM (
+  SELECT d FROM rp WHERE d @@@ to_ftsquery('simple'::regconfig, 'NEAR(quick brown, 3)')
+  ORDER BY d <=> to_ftsquery('simple'::regconfig, 'NEAR(quick brown, 3)') LIMIT 500
+) s;
+ near3_matches 
+---------------
+            25
+(1 row)
+
+SELECT count(*) AS near1_matches FROM (
+  SELECT d FROM rp WHERE d @@@ to_ftsquery('simple'::regconfig, 'NEAR(quick brown, 1)')
+  ORDER BY d <=> to_ftsquery('simple'::regconfig, 'NEAR(quick brown, 1)') LIMIT 500
+) s;
+ near1_matches 
+---------------
+             5
+(1 row)
+
+SELECT count(*) AS near1_violations FROM (
+  SELECT d FROM rp WHERE d @@@ to_ftsquery('simple'::regconfig, 'NEAR(quick brown, 1)')
+  ORDER BY d <=> to_ftsquery('simple'::regconfig, 'NEAR(quick brown, 1)') LIMIT 500
+) s WHERE NOT (s.d @@@ to_ftsquery('simple'::regconfig, 'NEAR(quick brown, 1)'));
+ near1_violations 
+------------------
+                0
+(1 row)
+
+RESET enable_seqscan; RESET enable_bitmapscan; RESET enable_indexscan;
+DROP TABLE rp;
+-- FUZZY ranked scan: the trigram funnel over-generates candidates (recheck),
+-- so the ranked scan must apply the exact edit-distance test.  All rows share
+-- trigrams with the query term but only some are within edit distance 1.
+CREATE TABLE rf (id serial, d ftsdoc);
+INSERT INTO rf(d) VALUES
+  (to_ftsdoc('document zulu')),   -- 1: exact "document" (edit distance 0)
+  (to_ftsdoc('documemt zulu')),   -- 2: "documemt" (distance 1: t<-m... n->m)
+  (to_ftsdoc('documenta zulu')),  -- 3: "documenta" (distance 1: trailing a)
+  (to_ftsdoc('doc zulu')),        -- 4: "doc" shares trigrams, distance > 1
+  (to_ftsdoc('dokumemt zulu'));   -- 5: "dokumemt" (distance 2) -- candidate, rejected
+CREATE INDEX rf_fts ON rf USING fts (d);
+ANALYZE rf;
+SET enable_seqscan=off; SET enable_bitmapscan=off; SET enable_indexscan=on;
+-- ranked `document~1`: every returned row must truly be within edit distance 1
+-- (the funnel yields more candidates; the recheck drops docs 4 and 5).
+SELECT count(*) AS fuzzy_violations FROM (
+  SELECT d FROM rf WHERE d @@@ 'document~1'::ftsquery
+  ORDER BY d <=> 'document~1'::ftsquery LIMIT 500
+) s WHERE NOT (s.d @@@ 'document~1'::ftsquery);
+ fuzzy_violations 
+------------------
+                0
+(1 row)
+
+-- ranked fuzzy/prefix/regex return a correct SUBSET of the @@@ matches, not the
+-- identical set: the ranked WAND path builds cursors from the literal query term
+-- (fts_query_terms), so a doc that matches only via a fuzzy/prefix/regex
+-- EXPANSION (no posting for the literal term) is never generated as a ranked
+-- candidate.  bm25_recheck_exact only ever shrinks, so every returned row is a
+-- true match (fuzzy_violations = 0 above) but the ranked count can be < the
+-- bitmap @@@ count.  Hence f, by design (a known limitation, documented in
+-- CAPABILITIES.md / ROADMAP.md); use @@@ for exhaustive fuzzy/prefix retrieval.
+SELECT (SELECT count(*) FROM (
+          SELECT d FROM rf WHERE d @@@ 'document~1'::ftsquery
+          ORDER BY d <=> 'document~1'::ftsquery LIMIT 500) s)
+     = (SELECT count(*) FROM rf WHERE d @@@ 'document~1'::ftsquery)
+     AS fuzzy_ranked_eq_bitmap;
+ fuzzy_ranked_eq_bitmap 
+------------------------
+ f
+(1 row)
+
+RESET enable_seqscan; RESET enable_bitmapscan; RESET enable_indexscan;
+DROP TABLE rf;
