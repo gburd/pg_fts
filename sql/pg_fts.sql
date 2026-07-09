@@ -1,4 +1,4 @@
-CREATE EXTENSION pg_fts VERSION '0.2.1';
+CREATE EXTENSION pg_fts VERSION '0.2.2';
 
 -- ftsdoc: analysis, output shows terms with term frequencies
 SELECT to_ftsdoc('The quick brown fox, the QUICK fox!');

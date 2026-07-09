@@ -2,6 +2,30 @@
 
 All notable changes to pg_fts are documented here.
 
+## 0.2.2
+
+Bug-fix release. The fix is in the shared library; no SQL objects change.
+`ALTER EXTENSION pg_fts UPDATE TO '0.2.2'` after installing the new library.
+
+- **Phrase (`"a b c"`) and NEAR queries now enforce term adjacency on all query
+  paths.** They previously degraded to AND (matching any document containing the
+  terms, regardless of order/adjacency) on the primary `to_ftsdoc(regconfig,
+  text)` path — e.g. `to_ftsdoc('english', body)` — because that analyzer did not
+  store token positions; and the index candidate path did not request the heap
+  recheck that would have enforced adjacency, so non-adjacent documents leaked
+  through `@@@`, the bitmap scan, and the ranked `<=>` scan alike. Now: the
+  config analyzer stores positions; `@@@`/bitmap enforce adjacency via the
+  executor recheck; and the ranked `<=>` scan and `fts_count()` recheck the exact
+  match set against the heap document (`bm25_recheck_exact`). Phrase / NEAR /
+  boolean ranking is exact on all paths.
+- No REINDEX required (bm25 on-disk format unchanged). Phrase correctness on a
+  *stored* `ftsdoc` column populated by the old analyzer requires re-analyzing
+  those rows; expression indexes on `to_ftsdoc(...)` are correct immediately.
+- Known limitation (documented): ranked `<=>` over fuzzy/prefix/regex returns a
+  correct *subset* of the `@@@` matches (never a wrong document, but may be
+  incomplete, since the ranked scan builds cursors from the literal term). Use
+  `@@@` for exhaustive fuzzy/prefix/regex retrieval.
+
 ## 0.2.1
 
 Bug-fix release. The fix is entirely in the shared library; no SQL objects
