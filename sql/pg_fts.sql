@@ -934,3 +934,78 @@ SELECT (SELECT count(*) FROM (
      AS fuzzy_ranked_eq_bitmap;
 RESET enable_seqscan; RESET enable_bitmapscan; RESET enable_indexscan;
 DROP TABLE rf;
+
+
+-- ============================================================================
+-- Ranked <=> parity: the ordering index scan must return the same top-k SET
+-- as an exact brute-force BM25 score sort (distinct scores => deterministic).
+-- Guards the WAND/MaxScore recall + the 0.2.1 boolean-structure gate.
+-- ranked <=> ordering scan must equal the fair brute-force BM25 top-k SET.
+-- Distinct scores (unique tf per doc) => deterministic, no tie ambiguity.
+-- Index MUST be flushed (VACUUM) so the ranked path covers all docs; pending
+-- docs are intentionally not ranked (CAPABILITIES.md), so a flush is part of
+-- the contract this test checks.
+CREATE TABLE rankparity (id int, d ftsdoc);
+-- unique alpha tf per doc (1..600) -> strictly distinct single-term scores;
+-- every 4th doc also carries beta/delta/epsilon for OR/AND/4-term coverage.
+INSERT INTO rankparity(id, d)
+SELECT g, to_ftsdoc(repeat('alpha ', g) ||
+       (CASE WHEN g % 4 = 0 THEN 'beta delta epsilon ' ELSE '' END))
+FROM generate_series(1, 600) g;
+-- rare term, distinct tf
+INSERT INTO rankparity(id, d)
+SELECT 10000+g, to_ftsdoc(repeat('gamma ', g)) FROM generate_series(1, 12) g;
+CREATE INDEX rankparity_idx ON rankparity USING fts (d);
+VACUUM rankparity;   -- flush: ranked path covers all docs
+ANALYZE rankparity;
+
+-- returns the number of index-top-k rows NOT in the fair-oracle top-k (expect 0)
+CREATE OR REPLACE FUNCTION _rank_miss(qtext text, kk int) RETURNS int
+LANGUAGE plpgsql AS $$
+DECLARE nd float8; ad float8; dfs float8[]; ntie int; nmiss int;
+BEGIN
+  SELECT ndocs, avgdl INTO nd, ad FROM fts_index_stats('rankparity_idx');
+  SELECT fts_index_df('rankparity_idx', qtext::ftsquery) INTO dfs;
+  -- distinct-score guard: the test is only meaningful with 0 ties
+  EXECUTE format($f$SELECT count(*) FROM (
+     SELECT round(fts_bm25(d,%L::ftsquery,%s,%s,%L)::numeric,12) sc
+     FROM rankparity WHERE d @@@ %L::ftsquery) z GROUP BY sc HAVING count(*)>1$f$,
+     qtext,nd,ad,dfs,qtext) INTO ntie;
+  IF COALESCE(ntie,0) <> 0 THEN
+    RAISE EXCEPTION 'rank parity test corpus has % score ties for %', ntie, qtext;
+  END IF;
+  SET LOCAL enable_seqscan = off; SET LOCAL enable_bitmapscan = off;
+  EXECUTE format($f$
+    SELECT count(*) FROM (
+      SELECT id FROM rankparity WHERE d @@@ %L::ftsquery
+      ORDER BY d <=> %L::ftsquery LIMIT %s) ix
+    WHERE ix.id NOT IN (
+      SELECT id FROM rankparity WHERE d @@@ %L::ftsquery
+      ORDER BY fts_bm25(d,%L::ftsquery,%s,%s,%L) DESC, id LIMIT %s)$f$,
+    qtext, qtext, kk, qtext, qtext, nd, ad, dfs, kk) INTO nmiss;
+  RETURN nmiss;
+END $$;
+
+SELECT _rank_miss('alpha',1)                          AS common_k1,   -- 0
+       _rank_miss('alpha',10)                         AS common_k10,  -- 0
+       _rank_miss('alpha',50)                         AS common_k50,  -- 0
+       _rank_miss('alpha',100)                        AS common_k100, -- 0
+       _rank_miss('gamma',10)                         AS rare_k10,    -- 0
+       _rank_miss('alpha | beta',50)                  AS or_k50,      -- 0
+       _rank_miss('alpha & beta',50)                  AS and_k50,     -- 0
+       _rank_miss('alpha & beta & delta & epsilon',50) AS and4_k50;   -- 0 (MaxScore)
+
+-- boolean-structure gate (v0.2.2 DocidFilter): AND/NOT top-k rows must satisfy @@@
+SET enable_seqscan = off; SET enable_bitmapscan = off;
+SELECT count(*) AS and_bool_violations FROM (
+  SELECT d FROM rankparity WHERE d @@@ 'alpha & beta'::ftsquery
+  ORDER BY d <=> 'alpha & beta'::ftsquery LIMIT 50) x
+WHERE NOT (x.d @@@ 'alpha & beta'::ftsquery);          -- 0
+SELECT count(*) AS not_bool_violations FROM (
+  SELECT d FROM rankparity WHERE d @@@ 'alpha & !beta'::ftsquery
+  ORDER BY d <=> 'alpha & !beta'::ftsquery LIMIT 50) x
+WHERE NOT (x.d @@@ 'alpha & !beta'::ftsquery);         -- 0
+
+RESET enable_seqscan; RESET enable_bitmapscan;
+DROP FUNCTION _rank_miss(text,int);
+DROP TABLE rankparity;
