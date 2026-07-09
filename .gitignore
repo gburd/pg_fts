@@ -31,3 +31,6 @@ AGENTS.md
 .kiro/
 .pi/
 
+
+# make dist source-distribution artifact
+pg_fts-*.zip
