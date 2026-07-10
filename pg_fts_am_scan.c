@@ -1885,6 +1885,7 @@ typedef struct WandCursor
 	BlockNumber firstblk;		/* first posting block for the term */
 	uint32		firstoff;		/* byte offset of the term's first block */
 	uint32		df;				/* term document frequency (postings to read) */
+	int			termidx;		/* ordinal VAL/term index (for the BoolGate) */
 
 	/*
 	 * Current block only, decoded LAZILY: docids are unpacked eagerly (needed
@@ -2348,6 +2349,127 @@ fts_query_is_pure_or(FtsQuery q)
 }
 
 /*
+ * fts_query_is_pure_boolean: true iff the query is a boolean combination
+ * (AND/OR/NOT, no PHRASE/NEAR) of PLAIN term operands (no PREFIX/FUZZY/REGEX).
+ * For such a query, a doc's @@@ membership is a pure function of WHICH query
+ * terms are present in the doc -- exactly what the WAND scan knows at each
+ * pivot (which cursors sit at the pivot docid).  So membership can be decided
+ * LAZILY at heap-admission time by evaluating the query's RPN over term
+ * presence, instead of pre-collecting the whole @@@ match set.
+ *
+ * Broader than fts_query_is_pure_or (which is the all-OR special case).  Any
+ * PHRASE/NEAR operator, or any prefix/fuzzy/regex operand, is NOT pure boolean
+ * -- those need positions or term-expansion the cursor-presence test cannot
+ * see, so they keep the collect+recheck+DocidFilter path.
+ */
+static bool
+fts_query_is_pure_boolean(FtsQuery q)
+{
+	uint32		i;
+
+	if (q == NULL || q->nitems == 0)
+		return true;
+	for (i = 0; i < q->nitems; i++)
+	{
+		FtsQueryItem *it = &q->items[i];
+
+		if (it->type == FTS_QI_VAL)
+		{
+			if (it->flags & (FTS_QF_PREFIX | FTS_QF_FUZZY | FTS_QF_REGEX))
+				return false;
+		}
+		else					/* operator */
+		{
+			if (it->op != FTS_OP_AND && it->op != FTS_OP_OR &&
+				it->op != FTS_OP_NOT)
+				return false;	/* PHRASE/NEAR */
+		}
+	}
+	return true;
+}
+
+/*
+ * BoolGate: lazy boolean @@@ membership over term presence at a pivot docid.
+ *
+ * For a pure-boolean query (see fts_query_is_pure_boolean) the DocidFilter's
+ * pre-collected match set is unnecessary: at each scored pivot the WAND scan
+ * already knows which query terms are present (a cursor sits at pivot_docid).
+ * `present[t]` (indexed by the ordinal VAL/term index that fts_query_terms
+ * assigns) is set by the caller, then bool_gate_admits evaluates the query's
+ * RPN with each VAL leaf = present[its term index] and AND/OR/NOT combining.
+ * This is the exact @@@ truth value for the doc, computed WITHOUT a collect
+ * pass.  `q` is pure boolean, so the stack machine mirrors fts_doc_matches's
+ * boolean cases (no phrase, no prefix/fuzzy/regex leaves).
+ */
+typedef struct BoolGate
+{
+	FtsQuery	q;				/* pure-boolean query (NULL => no gate) */
+	bool	   *present;			/* present[termidx], nterms entries */
+	bool	   *stack;			/* scratch RPN stack, nitems entries */
+	int			nterms;
+}			BoolGate;
+
+/*
+ * Evaluate the pure-boolean query's RPN over the current present[] flags.
+ * Leaf VAL i (i = ordinal among VAL items) is true iff present[i]; AND/OR/NOT
+ * combine.  Returns the doc's @@@ membership.  NULL gate admits everything.
+ */
+static inline bool
+bool_gate_admits(const BoolGate *g)
+{
+	FtsQuery	q;
+	bool	   *st;
+	int			top = 0;
+	int			vi = 0;
+	uint32		i;
+
+	if (g == NULL || g->q == NULL)
+		return true;
+	q = g->q;
+	st = g->stack;
+	for (i = 0; i < q->nitems; i++)
+	{
+		FtsQueryItem *it = &q->items[i];
+
+		if (it->type == FTS_QI_VAL)
+			st[top++] = g->present[vi++];
+		else if (it->op == FTS_OP_NOT)
+			st[top - 1] = !st[top - 1];
+		else if (it->op == FTS_OP_AND)
+		{
+			st[top - 2] = st[top - 2] && st[top - 1];
+			top--;
+		}
+		else					/* FTS_OP_OR */
+		{
+			st[top - 2] = st[top - 2] || st[top - 1];
+			top--;
+		}
+	}
+	return top == 1 ? st[0] : false;
+}
+
+/*
+ * Fill the gate's present[] from which cursors sit at `pivot_docid`, then
+ * evaluate.  A term is present iff ANY of its (per-segment) cursors is at the
+ * pivot.  NULL gate admits everything (pure-OR / DocidFilter path).
+ */
+static inline bool
+bmw_gate_admits(BoolGate *g, WandCursor *cursors, int nterms, uint64 pivot_docid)
+{
+	int			i;
+
+	if (g == NULL || g->q == NULL)
+		return true;
+	for (i = 0; i < g->nterms; i++)
+		g->present[i] = false;
+	for (i = 0; i < nterms; i++)
+		if (cursors[i].docid == pivot_docid)
+			g->present[cursors[i].termidx] = true;
+	return bool_gate_admits(g);
+}
+
+/*
  * fts_search_wand: exact top-k identical to the accumulate path, but using
  * document-at-a-time WAND so that documents which cannot enter the current
  * top-k are skipped via the per-term max-contribution bounds.  Returns the
@@ -2362,7 +2484,7 @@ fts_query_is_pure_or(FtsQuery q)
  */
 static int
 fts_search_bmw(WandCursor *cursors, int nterms, int k, const DocidFilter *filter,
-			   ScoredTid **out)
+			   BoolGate *gate, ScoredTid **out)
 {
 	ScoredTid  *heap;			/* min-heap of current top-k by score */
 	int			nheap = 0;
@@ -2457,11 +2579,18 @@ fts_search_bmw(WandCursor *cursors, int nterms, int k, const DocidFilter *filter
 					score += wand_contrib_cur(&cursors[i]);
 
 			/* push into the top-k min-heap -- but only if the docid is admitted
-			 * by the boolean match-set filter.  A rejected doc does NOT count
-			 * toward k and does NOT raise the threshold; the traversal and its
-			 * block-skip math are unchanged (the threshold may just stay lower
-			 * longer, which only costs pruning, never correctness). */
-			if (docid_admitted(filter, pivot_docid))
+			 * by the boolean match-set gate.  Two equivalent gates:
+			 *  - DocidFilter (filter): binary-search a pre-collected @@@ set
+			 *    (used for non-pure-boolean: phrase/near/prefix/fuzzy/regex).
+			 *  - BoolGate (gate): evaluate the query's RPN LAZILY over which
+			 *    terms have a cursor at the pivot (pure-boolean AND/NOT); no
+			 *    collect pass.  For pure-OR both are NULL (admit all).
+			 * A rejected doc does NOT count toward k and does NOT raise the
+			 * threshold; the traversal and its block-skip math are unchanged
+			 * (the threshold may just stay lower longer, costing pruning only,
+			 * never correctness). */
+			if (docid_admitted(filter, pivot_docid) &&
+				bmw_gate_admits(gate, cursors, nterms, pivot_docid))
 			{
 			if (nheap < k)
 			{
@@ -2536,7 +2665,7 @@ fts_search_bmw(WandCursor *cursors, int nterms, int k, const DocidFilter *filter
  */
 static int
 fts_search_maxscore(WandCursor *cursors, int nterms, int k,
-					const DocidFilter *filter, ScoredTid **out)
+					const DocidFilter *filter, BoolGate *gate, ScoredTid **out)
 {
 	ScoredTid  *heap;
 	int			nheap = 0;
@@ -2609,11 +2738,14 @@ fts_search_maxscore(WandCursor *cursors, int nterms, int k,
 					score += wand_contrib_cur(&cursors[i]);
 			}
 
-			/* gate heap admission by the boolean match-set filter: a rejected
-			 * doc never enters the heap and never raises the threshold.  The
-			 * essential/non-essential traversal (incl. the non-essential seeks
-			 * above) is unchanged -- only heap insertion is gated. */
-			if (docid_admitted(filter, cand))
+			/* gate heap admission by the boolean match-set (DocidFilter for
+			 * non-pure-boolean, or the lazy BoolGate over term-presence at cand
+			 * for pure-boolean AND/NOT).  A rejected doc never enters the heap
+			 * and never raises the threshold.  The essential/non-essential
+			 * traversal (incl. the non-essential seeks above) is unchanged --
+			 * only heap insertion is gated. */
+			if (docid_admitted(filter, cand) &&
+				bmw_gate_admits(gate, cursors, nterms, cand))
 			{
 			if (nheap < k)
 			{
@@ -2673,11 +2805,11 @@ fts_search_maxscore(WandCursor *cursors, int nterms, int k,
  */
 static int
 fts_search_wand(WandCursor *cursors, int nterms, int k,
-				const DocidFilter *filter, ScoredTid **out)
+				const DocidFilter *filter, BoolGate *gate, ScoredTid **out)
 {
 	if (nterms >= 4)
-		return fts_search_maxscore(cursors, nterms, k, filter, out);
-	return fts_search_bmw(cursors, nterms, k, filter, out);
+		return fts_search_maxscore(cursors, nterms, k, filter, gate, out);
+	return fts_search_bmw(cursors, nterms, k, filter, gate, out);
 }
 
 /*
@@ -2787,6 +2919,8 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 	DocidFilter filter;
 	DocidFilter *filterp = NULL;
 	uint64	   *filter_docids = NULL;
+	BoolGate	gate;
+	BoolGate   *gatep = NULL;
 	int			ncand;
 	int			t,
 				nactive = 0;
@@ -2800,15 +2934,33 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 	avgdl = meta.ndocs > 0 ? meta.sumdoclen / meta.ndocs : 1.0;
 
 	/*
-	 * Boolean-structure filter.  The WAND cursors below rank the term
-	 * DISJUNCTION (fts_query_terms flattens operators), which equals the @@@
-	 * match set only for a pure-OR query.  For any AND/NOT/PHRASE (or a
-	 * prefix/fuzzy/regex operand) the disjunction is a SUPERSET of the match
-	 * set, so we compute the exact @@@ match set once and pass it as a docid-
-	 * membership gate on heap admission.  Pure-OR keeps the fast path (NULL
-	 * filter, zero overhead, byte-identical top-k).
+	 * Boolean-structure gating.  The WAND cursors below rank the term
+	 * DISJUNCTION (fts_query_terms flattens operators), a SUPERSET of the @@@
+	 * match set for any non-pure-OR query, so heap admission must be gated to
+	 * the exact @@@ set.  Two gates, both byte-identical top-k:
+	 *
+	 *  - PURE-BOOLEAN (AND/OR/NOT over plain terms, no phrase/prefix/fuzzy/
+	 *    regex): the LAZY BoolGate.  A doc's @@@ truth is a pure function of
+	 *    which query terms are present, which the WAND scan already knows at
+	 *    each pivot (which cursors sit at the pivot).  So evaluate the query's
+	 *    RPN over cursor-presence at admission time -- NO collect pass.  This
+	 *    removes the redundant bm25_collect_matches materialization that made
+	 *    ranked AND/NOT slow (e.g. `year & hungary` no longer materializes all
+	 *    735k `year` postings before the WAND scan).
+	 *
+	 *  - NON-PURE-BOOLEAN (phrase/near/prefix/fuzzy/regex present): the exact
+	 *    @@@ set must be computed (positions / term-expansion the cursor test
+	 *    cannot see) -- keep bm25_collect_matches + recheck + DocidFilter.
+	 *
+	 *  - PURE-OR: neither gate (the disjunction IS the @@@ set); NULL, zero
+	 *    overhead, as before.
 	 */
-	if (!fts_query_is_pure_or(q))
+	if (!fts_query_is_pure_or(q) && fts_query_is_pure_boolean(q))
+	{
+		/* lazy path: gate built after cursors so nterms is known */
+		gatep = &gate;
+	}
+	else if (!fts_query_is_pure_or(q))
 	{
 		TidSet		matches;
 		bool		recheck;
@@ -2906,6 +3058,7 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 			cursors[nactive].firstblk = firstblk;
 			cursors[nactive].firstoff = firstoff;
 			cursors[nactive].df = df;
+			cursors[nactive].termidx = t;
 			cursors[nactive].blkbuf = NULL;
 			cursors[nactive].blkcount = 0;
 			cursors[nactive].cur = 0;
@@ -2930,10 +3083,24 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 		}
 	}
 
-	ncand = fts_search_wand(cursors, nactive, wantk, filterp, &cand);
+	/* build the lazy BoolGate now that nterms is known (pure-boolean path) */
+	if (gatep != NULL)
+	{
+		gate.q = q;
+		gate.nterms = nterms;
+		gate.present = (bool *) palloc0(Max(nterms, 1) * sizeof(bool));
+		gate.stack = (bool *) palloc(Max(q->nitems, 1) * sizeof(bool));
+	}
+
+	ncand = fts_search_wand(cursors, nactive, wantk, filterp, gatep, &cand);
 	bm25_tombstones_free(&tombs);
 	if (filter_docids)
 		pfree(filter_docids);
+	if (gatep != NULL)
+	{
+		pfree(gate.present);
+		pfree(gate.stack);
+	}
 
 	*out = cand;
 	return ncand;
