@@ -33,14 +33,6 @@ is_token_byte(unsigned char c)
 		(c >= '0' && c <= '9');
 }
 
-static inline char
-fold_ascii(unsigned char c)
-{
-	if (c >= 'A' && c <= 'Z')
-		return (char) (c - 'A' + 'a');
-	return (char) c;
-}
-
 /* Does the query contain a positive occurrence of (folded) term? */
 static bool
 query_has_term(FtsQuery q, const char *folded, int len)
@@ -78,8 +70,8 @@ tokenize_and_mark(const char *src, int len, FtsQuery q,
 		int			sepstart = i;
 		int			tokstart;
 		int			toklen;
+		int			foldedlen;
 		char	   *folded;
-		int			j;
 		bool		matched;
 
 		while (i < len && !is_token_byte((unsigned char) src[i]))
@@ -95,10 +87,10 @@ tokenize_and_mark(const char *src, int len, FtsQuery q,
 			i++;
 		toklen = i - tokstart;
 
-		folded = (char *) palloc(toklen);
-		for (j = 0; j < toklen; j++)
-			folded[j] = fold_ascii((unsigned char) src[tokstart + j]);
-		matched = query_has_term(q, folded, toklen);
+		/* fold identically to the analyzer; folded length may differ from the
+		 * raw run under Unicode lowercasing, so match on the folded length. */
+		folded = fold_token(src + tokstart, toklen, &foldedlen);
+		matched = query_has_term(q, folded, foldedlen);
 		pfree(folded);
 
 		sink(ctx, src, tokstart, i, matched);
