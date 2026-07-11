@@ -2,6 +2,26 @@
 
 All notable changes to pg_fts are documented here.
 
+## 0.2.4
+
+Bug-fix release. The fix is in the shared library; no SQL objects change and no
+REINDEX is required. `ALTER EXTENSION pg_fts UPDATE TO '0.2.4'`.
+
+- **Phrase / NEAR queries silently returned wrong results on a *stored* `ftsdoc`
+  column.** The positions[] region of a document was addressed as
+  `MAXALIGN(absolute-pointer)`, but the analyzers lay it out at
+  `base + MAXALIGN(offset)`. For a heap-resident (detoasted) document whose base
+  is not itself MAXALIGN'd, `MAXALIGN(base+off) != base+MAXALIGN(off)`, so the
+  position array was mis-addressed and phrase/NEAR degraded to a plain AND
+  (matching any document containing the terms, ignoring adjacency). Fixed to the
+  offset-based address. Expression indexes on `to_ftsdoc(col)` were unaffected
+  by this bug (freshly-analyzed, always-aligned documents); short documents in
+  the existing tests happened to remain aligned, which is why it was missed.
+- Note: phrase *count* over an expression index on a common two-word phrase is
+  still slow (it rechecks the whole AND-set against the heap, re-analyzing each
+  document). A positional-index format change in a later release removes that
+  heap recheck; this release only fixes the stored-column correctness bug.
+
 ## 0.2.3
 
 Performance release. The change is in the shared library; no SQL objects change,

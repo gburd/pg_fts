@@ -1,4 +1,4 @@
-CREATE EXTENSION pg_fts VERSION '0.2.3';
+CREATE EXTENSION pg_fts VERSION '0.2.4';
 -- ftsdoc: analysis, output shows terms with term frequencies
 SELECT to_ftsdoc('The quick brown fox, the QUICK fox!');
               to_ftsdoc              
@@ -675,6 +675,46 @@ SELECT id FROM phc WHERE d @@@ to_ftsquery('simple'::regconfig, '"quick brown"')
 
 RESET enable_seqscan;
 DROP TABLE phc;
+-- phrase adjacency must hold on a STORED (column-resident) ftsdoc that is long
+-- enough for its positions[] region to land at a non-MAXALIGN'd byte offset.
+-- Regression for the FTS_DOC_POSITIONS alignment bug: the accessor used
+-- MAXALIGN() of an absolute pointer, which mismatched the analyzer's
+-- offset-based layout once a detoasted/heap-read doc sat at a non-MAXALIGN'd
+-- address -- positions[] then pointed at garbage and phrase/NEAR silently
+-- degraded to AND on every stored ftsdoc (the short-doc tests above happened to
+-- land aligned and did not catch it).  Each doc below has repeated filler terms
+-- (so tf>1, several positions) plus the phrase at the end; the count must be
+-- exactly the adjacent docs, not the larger AND-set.
+CREATE TABLE phlong (id int, body text, d ftsdoc);
+INSERT INTO phlong(id, body)
+SELECT g,
+       (SELECT string_agg('flr' || (s % 5), ' ') FROM generate_series(1, 17 + g) s)
+       || CASE WHEN g % 2 = 0 THEN ' united states'          -- adjacent
+               ELSE ' united middle states' END              -- not adjacent
+FROM generate_series(1, 8) g;
+UPDATE phlong SET d = to_ftsdoc('simple'::regconfig, body);
+-- stored-column adjacency: exactly the even ids (the adjacent phrase)
+SELECT id FROM phlong
+WHERE d @@@ to_ftsquery('simple'::regconfig, '"united states"') ORDER BY id;   -- 2,4,6,8
+ id 
+----
+  2
+  4
+  6
+  8
+(4 rows)
+
+-- and the stored value must agree with a fresh re-analysis of the same body
+SELECT bool_and(
+         (d @@@ to_ftsquery('simple'::regconfig, '"united states"'))
+         = (to_ftsdoc('simple'::regconfig, body) @@@ to_ftsquery('simple'::regconfig, '"united states"'))
+       ) AS stored_matches_fresh FROM phlong;   -- t
+ stored_matches_fresh 
+----------------------
+ t
+(1 row)
+
+DROP TABLE phlong;
 -- external-content indexing via an expression index.
 -- The bm25 index stores only postings (no document text), so indexing
 -- to_ftsdoc(body) over a plain text column is the external-content model:

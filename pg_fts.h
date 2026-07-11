@@ -75,9 +75,18 @@ typedef FtsDocData *FtsDoc;
 	((char *) &(d)->entries[(d)->nterms])
 #define FTS_DOC_TERMTEXT(d, e)	(FTS_DOC_LEXEMES(d) + (e)->off)
 
-/* base of the positions[] region (valid only when FTS_DOC_HAS_POS) */
+/* base of the positions[] region (valid only when FTS_DOC_HAS_POS).
+ * Computed as doc_base + MAXALIGN(offset), matching how the analyzers lay the
+ * region out (posbase = MAXALIGN(total)).  Must NOT be MAXALIGN() of the
+ * absolute lexemes-end pointer: a detoasted/heap-read ftsdoc can sit at a
+ * non-MAXALIGN'd address, and MAXALIGN(base+off) != base+MAXALIGN(off) there,
+ * which pointed positions[] at garbage and silently degraded phrase/NEAR on
+ * every stored (column-resident) ftsdoc. */
 #define FTS_DOC_POSITIONS(d) \
-	((uint32 *) MAXALIGN((char *) FTS_DOC_LEXEMES(d) + (d)->lexbytes))
+	((uint32 *) ((char *) (d) + \
+				 MAXALIGN(FTS_DOC_HDRSIZE + \
+						  (Size) (d)->nterms * sizeof(FtsTermEntry) + \
+						  (d)->lexbytes)))
 #define FTS_DOC_TERMPOS(d, e)	(FTS_DOC_POSITIONS(d) + (e)->posoff)
 
 #define DatumGetFtsDoc(X)		((FtsDoc) PG_DETOAST_DATUM(X))
