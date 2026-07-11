@@ -76,6 +76,25 @@
 #include "utils/snapmgr.h"
 #include "utils/selfuncs.h"
 
+/* palloc/repalloc that transparently use the Huge variants past MaxAllocSize.
+ * Build-time posting arrays for a very high-df term (e.g. tokens present in
+ * millions of JSON-log lines) can exceed 1 GB, especially when the final merge
+ * concatenates a term's postings across several segments before dedup.
+ *
+ * Note: this only lifts the *byte-size* ceiling (>1 GB). The element
+ * counts (nposts/npos, int) still cap at INT_MAX (~2.1 G postings/positions
+ * per term); a single term that common would overflow the int counters (and
+ * their doubling) first. Not hit even at 20M diverse docs; widen these counts
+ * to int64 if a term ever approaches that df. */
+#define FTS_ALLOC_MAYBE_HUGE(sz) \
+	(((Size) (sz)) > MaxAllocSize \
+	 ? MemoryContextAllocHuge(CurrentMemoryContext, (sz)) \
+	 : palloc((sz)))
+#define FTS_REALLOC_MAYBE_HUGE(p, sz) \
+	(((Size) (sz)) > MaxAllocSize \
+	 ? repalloc_huge((p), (sz)) \
+	 : repalloc((p), (sz)))
+
 PG_FUNCTION_INFO_V1(fts_handler);
 
 /*
@@ -249,10 +268,10 @@ add_posting(BM25BuildState *bs, const char *term, int len,
 		{
 			bs->maxterms = bs->maxterms ? bs->maxterms * 2 : 1024;
 			if (bs->terms == NULL)
-				bs->terms = (BuildTerm *) palloc(bs->maxterms * sizeof(BuildTerm));
+				bs->terms = (BuildTerm *) FTS_ALLOC_MAYBE_HUGE(bs->maxterms * sizeof(BuildTerm));
 			else
-				bs->terms = (BuildTerm *) repalloc(bs->terms,
-												   bs->maxterms * sizeof(BuildTerm));
+				bs->terms = (BuildTerm *) FTS_REALLOC_MAYBE_HUGE(bs->terms,
+														   bs->maxterms * sizeof(BuildTerm));
 		}
 		bt = &bs->terms[bs->nterms];
 		bt->term = (char *) palloc(len);
@@ -260,9 +279,9 @@ add_posting(BM25BuildState *bs, const char *term, int len,
 		bt->len = len;
 		bt->maxposts = 4;
 		bt->nposts = 0;
-		bt->tids = (ItemPointerData *) palloc(bt->maxposts * sizeof(ItemPointerData));
-		bt->tfs = (uint32 *) palloc(bt->maxposts * sizeof(uint32));
-		bt->doclens = (uint32 *) palloc(bt->maxposts * sizeof(uint32));
+		bt->tids = (ItemPointerData *) FTS_ALLOC_MAYBE_HUGE(bt->maxposts * sizeof(ItemPointerData));
+		bt->tfs = (uint32 *) FTS_ALLOC_MAYBE_HUGE(bt->maxposts * sizeof(uint32));
+		bt->doclens = (uint32 *) FTS_ALLOC_MAYBE_HUGE(bt->maxposts * sizeof(uint32));
 		bt->positions = NULL;
 		bt->posoff = NULL;
 		bt->poscnt = NULL;
@@ -270,8 +289,8 @@ add_posting(BM25BuildState *bs, const char *term, int len,
 		bt->maxpos = 0;
 		if (bs->want_positions)
 		{
-			bt->posoff = (uint32 *) palloc(bt->maxposts * sizeof(uint32));
-			bt->poscnt = (uint32 *) palloc(bt->maxposts * sizeof(uint32));
+			bt->posoff = (uint32 *) FTS_ALLOC_MAYBE_HUGE(bt->maxposts * sizeof(uint32));
+			bt->poscnt = (uint32 *) FTS_ALLOC_MAYBE_HUGE(bt->maxposts * sizeof(uint32));
 			bt->maxpos = 8;
 			bt->positions = (uint32 *) palloc(bt->maxpos * sizeof(uint32));
 		}
@@ -284,14 +303,14 @@ add_posting(BM25BuildState *bs, const char *term, int len,
 	if (bt->nposts >= bt->maxposts)
 	{
 		bt->maxposts *= 2;
-		bt->tids = (ItemPointerData *) repalloc(bt->tids,
+		bt->tids = (ItemPointerData *) FTS_REALLOC_MAYBE_HUGE(bt->tids,
 												bt->maxposts * sizeof(ItemPointerData));
-		bt->tfs = (uint32 *) repalloc(bt->tfs, bt->maxposts * sizeof(uint32));
-		bt->doclens = (uint32 *) repalloc(bt->doclens, bt->maxposts * sizeof(uint32));
+		bt->tfs = (uint32 *) FTS_REALLOC_MAYBE_HUGE(bt->tfs, bt->maxposts * sizeof(uint32));
+		bt->doclens = (uint32 *) FTS_REALLOC_MAYBE_HUGE(bt->doclens, bt->maxposts * sizeof(uint32));
 		if (bt->posoff != NULL)
 		{
-			bt->posoff = (uint32 *) repalloc(bt->posoff, bt->maxposts * sizeof(uint32));
-			bt->poscnt = (uint32 *) repalloc(bt->poscnt, bt->maxposts * sizeof(uint32));
+			bt->posoff = (uint32 *) FTS_REALLOC_MAYBE_HUGE(bt->posoff, bt->maxposts * sizeof(uint32));
+			bt->poscnt = (uint32 *) FTS_REALLOC_MAYBE_HUGE(bt->poscnt, bt->maxposts * sizeof(uint32));
 		}
 	}
 	bt->tids[bt->nposts] = *tid;
@@ -312,7 +331,7 @@ add_posting(BM25BuildState *bs, const char *term, int len,
 		{
 			while (bt->npos + (int) tf > bt->maxpos)
 				bt->maxpos *= 2;
-			bt->positions = (uint32 *) repalloc(bt->positions,
+			bt->positions = (uint32 *) FTS_REALLOC_MAYBE_HUGE(bt->positions,
 												bt->maxpos * sizeof(uint32));
 		}
 		bt->posoff[bt->nposts] = (uint32) bt->npos;
@@ -511,11 +530,18 @@ bm25_decode_term(Relation index, BlockNumber firstblk, uint32 firstoff,
 	BlockNumber blk = firstblk;
 	uint32		off = firstoff;
 
-	posts = (BM25Posting *) palloc(Max(df, 1u) * sizeof(BM25Posting));
+	posts = (BM25Posting *) ((Size) df * sizeof(BM25Posting) > MaxAllocSize
+							 ? MemoryContextAllocHuge(CurrentMemoryContext,
+													 Max(df, 1u) * sizeof(BM25Posting))
+							 : palloc(Max(df, 1u) * sizeof(BM25Posting)));
 	if (blockmax)
-		bmax = (uint32 *) palloc(Max(df, 1u) * sizeof(uint32));
+		bmax = (uint32 *) ((Size) df * sizeof(uint32) > MaxAllocSize
+						   ? MemoryContextAllocHuge(CurrentMemoryContext, Max(df, 1u) * sizeof(uint32))
+						   : palloc(Max(df, 1u) * sizeof(uint32)));
 	if (want_positions)
-		pos_start = (int *) palloc(Max(df, 1u) * sizeof(int));
+		pos_start = (int *) ((Size) df * sizeof(int) > MaxAllocSize
+							 ? MemoryContextAllocHuge(CurrentMemoryContext, Max(df, 1u) * sizeof(int))
+							 : palloc(Max(df, 1u) * sizeof(int)));
 
 	while (blk != InvalidBlockNumber && n < (int) df)
 	{
@@ -915,7 +941,10 @@ bm25_write_postings(BM25PostWriter *pw, BuildTerm *bt,
 	*firstblk = InvalidBlockNumber;
 	*firstoff = 0;
 
-	sorted = (BM25PostingSort *) palloc(Max(bt->nposts, 1) * sizeof(BM25PostingSort));
+	sorted = (BM25PostingSort *) ((Size) bt->nposts * sizeof(BM25PostingSort) > MaxAllocSize
+								  ? MemoryContextAllocHuge(CurrentMemoryContext,
+													  Max(bt->nposts, 1) * sizeof(BM25PostingSort))
+								  : palloc(Max(bt->nposts, 1) * sizeof(BM25PostingSort)));
 	for (i = 0; i < bt->nposts; i++)
 	{
 		sorted[i].docid = bm25_tid_to_docid(&bt->tids[i]);
@@ -1701,7 +1730,7 @@ bm25_merge_selected(Relation index, const uint32 *sel, uint32 nsel)
  * atomic (no concurrent-swap race).  Result: W segments; caller may run a
  * final (cheap, W-way) pass if it wants exactly one.
  *
- * ponytail: Level-2 could recurse the parallel merge (W -> W/2 -> ... -> 1) so
+ * Future work: Level-2 could recurse the parallel merge (W -> W/2 -> ... -> 1) so
  * even the final combine parallelizes; deferred -- one parallel pass already
  * removes the dominant per-segment decode cost from the serial path.
  */

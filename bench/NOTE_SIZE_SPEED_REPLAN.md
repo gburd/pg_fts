@@ -198,7 +198,7 @@ fts_vacuum-reclaim test + a 2M build test before it can ship.
 - **Measure BEFORE / kill criterion:** measure common-term top-10 AND top-100 AND
   a high-deletion table (where over-fetch earns its keep). **If the retry path
   fires often enough to net-lose on any of these, revert.** This is a tuning
-  knob, not a fix — leave it as a `ponytail:`-style tunable, not a hardcoded
+  knob, not a fix — leave it as a tunable, not a hardcoded
   constant.
 - **Risk:** medium — smaller over-fetch means more recompute passes on
   high-deletion tables. This is the one exec change that can regress; gate hard.

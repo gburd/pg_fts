@@ -11,7 +11,7 @@
 # prints the drafted announcement and exits 0 (so a release never fails just
 # because announcing isn't configured).
 #
-# ponytail: the exact postgresql.org news-submission endpoint + form fields are
+# Note: the exact postgresql.org news-submission endpoint + form fields are
 # set the field ids via the PGORG_* env vars rather than editing this script.
 set -euo pipefail
 
@@ -104,7 +104,7 @@ curl -sS -c "$CJ" -b "$CJ" -e "$BASE/account/news/new/" -H "Origin: $BASE" \
   "$BASE/account/news/new/" >/dev/null
 
 # 3. Find the new article id, then confirm-submit it into the moderation queue.
-# ponytail: newest-id heuristic (we just created it); match on title if two runs race.
+# Note: newest-id heuristic (we just created it); match on title if two runs race.
 ID="$(curl -sS -c "$CJ" -b "$CJ" "$BASE/account/edit/news/" \
       | grep -oE '/account/news/[0-9]+/' | grep -oE '[0-9]+' | sort -rn | head -1)"
 if [ -z "$ID" ]; then

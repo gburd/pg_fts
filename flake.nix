@@ -126,7 +126,7 @@
         # standalone XML document, so it uses SGML entities like &mdash; and has
         # no DTD — xmllint --recover checks tag well-formedness and ignores the
         # undefined-entity noise.  The full PG docbook->HTML stack is ~half a GB.
-        # ponytail: well-formedness only; wire the full docbook stack if we ever
+        # Note: well-formedness only; wire the full docbook stack if we ever
         # ship rendered HTML from the flake.
         apps.docs = {
           type = "app";

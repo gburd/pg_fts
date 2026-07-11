@@ -90,6 +90,14 @@ cheaper than a heap `count(*)`.
   `MaxAllocSize` (1 GB) at 20M, which plain `palloc` rejects. `add_posting` /
   `bm25_decode_term` / `bm25_write_postings` now use the Huge allocation variants
   past 1 GB. (Reviewed + released separately.)
+- **Trigram index build is a bottleneck at large diverse vocabularies** (future
+  work, not fixed). The trigram term-set sparsemaps (`sm_add_grow`) scale
+  superlinearly on the huge common-numeric-trigram sets from IP/URL/hash tokens
+  in the JSON logs, dominating build time. Fuzzy/regex depend on the trigram
+  index; ranked/AND/count/phrase do not. A more scalable trigram build (or a
+  build-time opt-out for corpora that don't need fuzzy/regex) is the follow-up.
+  (During this run a throwaway env-gated skip was used to measure the non-trigram
+  paths; it was not shipped.)
 
 ## Not captured (run cut off)
 

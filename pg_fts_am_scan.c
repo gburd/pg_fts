@@ -3805,7 +3805,7 @@ fts_search(PG_FUNCTION_ARGS)
  */
 
 /* term -> summed-across-segments df; key is the NUL-terminated term text.
- * ponytail: a term longer than BM25_ANOM_TERMKEYLEN-1 is truncated for the df
+ * Note: a term longer than BM25_ANOM_TERMKEYLEN-1 is truncated for the df
  * key (same ceiling the build side takes at 64); two such terms sharing that
  * prefix would share a df bucket -> slightly conservative rarity.  Widen the
  * key or chain (like add_posting) if long distinct tokens must rank exactly. */

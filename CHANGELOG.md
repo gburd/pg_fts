@@ -2,6 +2,26 @@
 
 All notable changes to pg_fts are documented here.
 
+## Unreleased
+
+- **Unicode lowercasing in the built-in analyzer** (PR #4, dinesh-salve). The
+  built-in `to_ftsdoc(text)`/`to_ftsquery(text)` analyzer folded only ASCII
+  `A-Z`, so accented text never matched case-insensitively (`'CAFÉ'` missed
+  `'café'`). A shared `fold_token()` (used by the document analyzer, the query
+  lexer, and the aux tokenizer, so both sides fold identically) now lowercases
+  non-ASCII tokens per Unicode code point via `unicode_lowercase_simple()` in
+  UTF-8 databases; non-UTF-8 databases keep byte-wise ASCII folding. Simple
+  lowercasing, not full case folding (`'ß'` stays `'ß'`), matching pg_search's
+  default, and `to_ftsdoc()` stays `IMMUTABLE`. **No on-disk format change**;
+  ASCII-only indexes are unaffected. Indexes over non-ASCII text built before
+  this change should be `REINDEX`ed (their stored terms are unfolded).
+- **Build-time huge-allocation fix for very high-df terms.** At large diverse
+  corpora (found while benchmarking at 20M docs -- see `bench/RESULTS_20M.md`) a
+  single ultra-common token's build-time posting arrays can exceed `MaxAllocSize`
+  (1 GB), which plain `palloc` rejects, aborting the index build. `add_posting`,
+  `bm25_decode_term`, and `bm25_write_postings` now use the `...Huge` allocation
+  variants past 1 GB. No format change.
+
 ## 0.3.1
 
 Additive feature release. **No on-disk format change** (read-only over the

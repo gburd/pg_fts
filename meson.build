@@ -19,7 +19,7 @@
 #   ninja -C build
 #   ninja -C build install   # pg_fts.dll -> <pg>/lib, .control/.sql -> share/extension
 #
-# ponytail: build recipe only; the regress/isolation/TAP harness on Windows is
+# Note: build recipe only; the regress/isolation/TAP harness on Windows is
 # separate PGXS-style plumbing, add when installcheck actually runs on Windows.
 
 project('pg_fts', 'c',
