@@ -2,6 +2,37 @@
 
 All notable changes to pg_fts are documented here.
 
+## 0.3.0
+
+Feature release with an **on-disk index format change (BM25 v2 -> v3)**. Existing
+bm25 indexes must be **REINDEX**ed; the format guard rejects a v2 index with a
+REINDEX hint. No `ftsdoc`/`ftsquery` type change.
+
+- **Token positions in the postings, gated by a new `positions` reloption.**
+  `CREATE INDEX ... USING fts (...) WITH (positions = on)` stores per-token
+  positions in the posting blocks (a 4th, lazily-decoded frame-of-reference
+  column after docid-gaps/tf/doclen). Phrase and NEAR queries are then answered
+  **directly from the posting lists** -- intersect on docid, verify adjacency
+  from the stored positions via the same `phrase_step` logic the heap recheck
+  uses -- with **zero heap access and no recheck**. This removes the phrase/NEAR
+  count cliff (a common two-word phrase count over an expression index dropped
+  from seconds to the AND-count range in local tests) for both the expression
+  index (`to_ftsdoc(col)`) and the stored-`ftsdoc`-column shapes.
+  - **Default is `positions = off`**: positions roughly double the posting bytes
+    on high-term-frequency corpora, so the size-sensitive majority who never
+    phrase-search pay nothing. Phrase/NEAR is **always correct** either way; it
+    is only fast (index-only, no recheck) with `positions = on`. With
+    `positions = off` it falls back to the correct-but-slower heap recheck.
+  - Positions are decoded **lazily**: plain BM25 ranked / boolean AND / count
+    queries never read or decode the positions column (a `posbytelen`-guided
+    pointer skip, mirroring the existing tf/doclen skip), so a non-phrase query
+    pays ~zero for positions existing (measured: no regression vs v2 on a
+    common-term ranked/count query).
+  - `fts_vacuum` / merge carry positions through the compaction rewrite and keep
+    reclaiming space; a pathological per-(term,doc) term frequency whose
+    positions would overflow a page drops that block's positions and phrase
+    falls back to recheck for those docids (correctness preserved).
+
 ## 0.2.4
 
 Bug-fix release. The fix is in the shared library; no SQL objects change and no

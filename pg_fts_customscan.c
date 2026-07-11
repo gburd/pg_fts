@@ -47,6 +47,7 @@
 #include "utils/syscache.h"
 
 #include "pg_fts.h"
+#include "pg_fts_am.h"			/* bm25_init_reloptions */
 
 /* engine entry point implemented in pg_fts_am_scan.c (via pg_fts_am.c) */
 extern int64 bm25_count_visible_oid(Oid indexoid, FtsQuery q);
@@ -342,6 +343,7 @@ void		_PG_init(void);
 void
 _PG_init(void)
 {
+	bm25_init_reloptions();
 	RegisterCustomScanMethods(&fts_count_scan_methods);
 
 	prev_upper_paths_hook = create_upper_paths_hook;

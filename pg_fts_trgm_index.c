@@ -456,7 +456,7 @@ bm25_trgm_candidates(Relation index, BlockNumber trgmstart,
 				BM25Posting *post;
 				int			np = bm25_decode_term(index, de->firstposting,
 												  de->firstoffset, de->df,
-												  &post, NULL);
+												  &post, NULL, false, NULL);
 				int			k;
 
 				for (k = 0; k < np; k++)

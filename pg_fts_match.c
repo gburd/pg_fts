@@ -84,6 +84,37 @@ term_positions(FtsDoc doc, const char *term, int termlen, uint16 flags,
 }
 
 /*
+ * Phrase step over raw ascending position arrays: return, in out[0..*nout),
+ * the right positions p such that some left position L satisfies
+ * 0 < p - L <= distance.  out must have room for nright values.  This is the
+ * single source of truth for phrase adjacency; both the in-memory matcher
+ * (phrase_step) and the index posting-list phrase evaluator use it, so a
+ * phrase answered from the postings is byte-identical to the heap recheck.
+ */
+void
+fts_phrase_step_pos(const uint32 *left, int nleft,
+					const uint32 *right, int nright,
+					uint32 distance, uint32 *out, int *nout)
+{
+	int			li = 0,
+				ri,
+				k = 0;
+
+	for (ri = 0; ri < nright; ri++)
+	{
+		uint32		p = right[ri];
+
+		/* advance li to the first left position that could be in range */
+		while (li < nleft && left[li] + distance < p)
+			li++;
+		/* any left position L with p-distance <= L < p works */
+		if (li < nleft && left[li] < p && p - left[li] <= distance)
+			out[k++] = p;
+	}
+	*nout = k;
+}
+
+/*
  * Phrase step: given left positions (ends of the matched-so-far prefix) and
  * the right term's positions, return the right positions p such that some left
  * position L satisfies 0 < p - L <= distance.  Both inputs are ascending.
@@ -92,9 +123,6 @@ static MatchVal
 phrase_step(MatchVal left, MatchVal right, uint32 distance)
 {
 	MatchVal	r;
-	int			li = 0,
-				ri = 0,
-				k = 0;
 
 	r.present = false;
 	r.pos = NULL;
@@ -110,20 +138,9 @@ phrase_step(MatchVal left, MatchVal right, uint32 distance)
 	}
 
 	r.pos = (uint32 *) palloc(right.npos * sizeof(uint32));
-	for (ri = 0; ri < right.npos; ri++)
-	{
-		uint32		p = right.pos[ri];
-
-		/* advance li to the first left position that could be in range */
-		while (li < left.npos && left.pos[li] + distance < p)
-			li++;
-		/* any left position L with p-distance <= L < p works */
-		if (li < left.npos && left.pos[li] < p &&
-			p - left.pos[li] <= distance)
-			r.pos[k++] = p;
-	}
-	r.npos = k;
-	r.present = (k > 0);
+	fts_phrase_step_pos(left.pos, left.npos, right.pos, right.npos,
+						distance, r.pos, &r.npos);
+	r.present = (r.npos > 0);
 	return r;
 }
 

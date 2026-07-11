@@ -325,6 +325,36 @@ SELECT fts_count('docs_bm25', to_ftsquery('english', 'brown'));
 </programlisting>
  </sect2>
 
+ <sect2 id="pgfts-positions">
+  <title>Index-only phrase and NEAR (<literal>WITH (positions = on)</literal>)</title>
+
+  <para>
+   By default the bm25 index stores no token positions, so a phrase
+   (<literal>"a b"</literal>) or NEAR query generates the term-conjunction
+   candidate set and then rechecks adjacency against the heap document,
+   re-deriving the <type>ftsdoc</type> for each candidate.  For a common
+   two-word phrase whose conjunction set is large, that recheck dominates.
+  </para>
+  <para>
+   Building the index <literal>WITH (positions = on)</literal> stores per-token
+   positions in the posting lists, so phrase and NEAR are answered directly from
+   the index -- with no heap access and no recheck -- bringing phrase count and
+   match to posting-scan speed:
+<programlisting>
+CREATE INDEX docs_bm25 ON docs USING fts (to_ftsdoc('english', body))
+  WITH (positions = on);
+</programlisting>
+   The trade-off is index size: positions roughly double the posting bytes on
+   high-term-frequency corpora (little effect when terms occur once per
+   document).  Positions are decoded lazily, so plain ranked / boolean / count
+   queries are unaffected whether positions are on or off.  Phrase and NEAR are
+   always <emphasis>correct</emphasis> either way; <literal>positions = on</literal>
+   only makes them <emphasis>fast</emphasis> (index-only).  This is an on-disk
+   format change (BM25 v2 &rarr; v3); an index built by an older release must be
+   <command>REINDEX</command>ed.
+  </para>
+ </sect2>
+
  <sect2 id="pgfts-limitations">
   <title>Limitations</title>
 

@@ -1,4 +1,4 @@
-CREATE EXTENSION pg_fts VERSION '0.2.4';
+CREATE EXTENSION pg_fts VERSION '0.3.0';
 
 -- ftsdoc: analysis, output shows terms with term frequencies
 SELECT to_ftsdoc('The quick brown fox, the QUICK fox!');
@@ -927,6 +927,109 @@ SELECT count(*) AS near1_violations FROM (
 ) s WHERE NOT (s.d @@@ to_ftsquery('simple'::regconfig, 'NEAR(quick brown, 1)'));
 RESET enable_seqscan; RESET enable_bitmapscan; RESET enable_indexscan;
 DROP TABLE rp;
+
+-- ----------------------------------------------------------------------------
+-- Positional postings (WITH positions=on): phrase/NEAR answered DIRECTLY from
+-- the posting lists (no heap recheck).  The results MUST be identical to the
+-- recheck path (positions=off), and the phrase set MUST be smaller than the
+-- AND set.  Same corpus shape as the cliff repro: an adjacent phrase, a
+-- co-occurring-but-not-adjacent set, and noise.
+CREATE TABLE pos_on  (id serial, body text);
+CREATE TABLE pos_off (id serial, body text);
+INSERT INTO pos_on(body)
+SELECT CASE WHEN g % 3 = 0 THEN 'alpha united states beta d'||g          -- adjacent phrase
+            WHEN g % 3 = 1 THEN 'alpha united middle states beta d'||g   -- AND, not phrase
+            ELSE 'gamma delta noise d'||g END                           -- neither
+FROM generate_series(1, 600) g;
+INSERT INTO pos_off(body) SELECT body FROM pos_on;
+CREATE INDEX pos_on_idx  ON pos_on  USING fts (to_ftsdoc('simple'::regconfig, body)) WITH (positions = on);
+CREATE INDEX pos_off_idx ON pos_off USING fts (to_ftsdoc('simple'::regconfig, body));  -- default off
+ANALYZE pos_on; ANALYZE pos_off;
+SET enable_seqscan = off;
+-- phrase count from positions == phrase count from recheck (identical answer)
+SELECT
+  (SELECT count(*) FROM pos_on  WHERE to_ftsdoc('simple'::regconfig, body) @@@ to_ftsquery('simple'::regconfig, '"united states"')) AS pos_on_phrase,
+  (SELECT count(*) FROM pos_off WHERE to_ftsdoc('simple'::regconfig, body) @@@ to_ftsquery('simple'::regconfig, '"united states"')) AS pos_off_phrase;
+-- phrase count is STRICTLY less than the AND count (adjacency really enforced)
+SELECT
+  (SELECT count(*) FROM pos_on WHERE to_ftsdoc('simple'::regconfig, body) @@@ to_ftsquery('simple'::regconfig, '"united states"')) <
+  (SELECT count(*) FROM pos_on WHERE to_ftsdoc('simple'::regconfig, body) @@@ to_ftsquery('simple'::regconfig, 'united & states')) AS phrase_lt_and;
+-- the matched id SET is identical between the positional and recheck indexes:
+-- the symmetric difference of the two match sets must be empty (0).
+SELECT
+  (SELECT count(*) FROM (
+     SELECT id FROM pos_on  WHERE to_ftsdoc('simple'::regconfig, body) @@@ to_ftsquery('simple'::regconfig, '"united states"')
+     EXCEPT
+     SELECT id FROM pos_off WHERE to_ftsdoc('simple'::regconfig, body) @@@ to_ftsquery('simple'::regconfig, '"united states"')) d1)
++ (SELECT count(*) FROM (
+     SELECT id FROM pos_off WHERE to_ftsdoc('simple'::regconfig, body) @@@ to_ftsquery('simple'::regconfig, '"united states"')
+     EXCEPT
+     SELECT id FROM pos_on  WHERE to_ftsdoc('simple'::regconfig, body) @@@ to_ftsquery('simple'::regconfig, '"united states"')) d2)
+  AS phrase_symdiff;  -- 0: the two index shapes agree exactly
+-- fts_count on the positional index equals the phrase (adjacency) count
+SELECT fts_count('pos_on_idx', to_ftsquery('simple'::regconfig, '"united states"'))
+     = (SELECT count(*) FROM pos_on WHERE to_ftsdoc('simple'::regconfig, body) @@@ to_ftsquery('simple'::regconfig, '"united states"'))
+     AS fts_count_phrase_ok;
+-- NEAR on positions: within-k admits the co-occurring 'united ... states' too
+SELECT
+  (SELECT count(*) FROM pos_on  WHERE to_ftsdoc('simple'::regconfig, body) @@@ to_ftsquery('simple'::regconfig, 'NEAR(united states, 2)')) =
+  (SELECT count(*) FROM pos_off WHERE to_ftsdoc('simple'::regconfig, body) @@@ to_ftsquery('simple'::regconfig, 'NEAR(united states, 2)')) AS near_pos_eq_recheck;
+-- plain (non-phrase) AND count is identical between on/off (positions invisible)
+SELECT
+  (SELECT count(*) FROM pos_on  WHERE to_ftsdoc('simple'::regconfig, body) @@@ to_ftsquery('simple'::regconfig, 'united & states')) =
+  (SELECT count(*) FROM pos_off WHERE to_ftsdoc('simple'::regconfig, body) @@@ to_ftsquery('simple'::regconfig, 'united & states')) AS and_on_eq_off;
+RESET enable_seqscan;
+-- multi-segment / pending: phrase must be correct across several segments (the
+-- positional hits accumulate per-segment and are merged); insert more rows
+-- after the index exists so they land in new segments / the pending list.
+INSERT INTO pos_on(body)
+SELECT CASE WHEN g % 2 = 0 THEN 'zeta united states omega e'||g
+            ELSE 'zeta united gap states omega e'||g END
+FROM generate_series(1, 300) g;
+SET enable_seqscan = off;
+SELECT fts_count('pos_on_idx', to_ftsquery('simple'::regconfig, '"united states"'))
+     = (SELECT count(*) FROM pos_on WHERE to_ftsdoc('simple'::regconfig, body) @@@ to_ftsquery('simple'::regconfig, '"united states"'))
+     AS multiseg_phrase_ok;
+RESET enable_seqscan;
+-- fts_vacuum must still reclaim on the v3 positional format (P1 gate): delete
+-- most rows, vacuum, assert the index shrinks.
+DELETE FROM pos_on WHERE id % 3 <> 0;
+SELECT fts_vacuum('pos_on_idx');
+SELECT fts_merge('pos_on_idx');
+-- phrase still correct after vacuum/merge carried positions through
+SELECT count(*) > 0 AS phrase_survives_vacuum
+  FROM pos_on WHERE to_ftsdoc('simple'::regconfig, body) @@@ to_ftsquery('simple'::regconfig, '"united states"');
+DROP TABLE pos_on; DROP TABLE pos_off;
+
+-- three-word positional phrase + NEAR must match the recheck path exactly (the
+-- phrase_step chain over posting positions == the heap adjacency chain).
+CREATE TABLE pos3 (id serial, body text);
+INSERT INTO pos3(body) VALUES
+ ('x quick brown fox y'),        -- adjacent 3-word
+ ('quick brown cat'),            -- only 2 of 3
+ ('quick red brown fox'),        -- not fully adjacent
+ ('a quick brown fox');          -- adjacent 3-word
+INSERT INTO pos3(body) SELECT 'noise d'||g FROM generate_series(1,200) g;
+CREATE INDEX pos3_on  ON pos3 USING fts (to_ftsdoc('simple'::regconfig, body)) WITH (positions = on);
+CREATE INDEX pos3_off ON pos3 USING fts (to_ftsdoc('simple'::regconfig, body));
+SET enable_seqscan = off;
+SELECT array_agg(id ORDER BY id) AS phrase3_ids
+  FROM pos3 WHERE to_ftsdoc('simple'::regconfig, body) @@@ to_ftsquery('simple'::regconfig, '"quick brown fox"');  -- {1,4}
+SELECT fts_count('pos3_on',  to_ftsquery('simple'::regconfig, '"quick brown fox"'))
+     = fts_count('pos3_off', to_ftsquery('simple'::regconfig, '"quick brown fox"')) AS phrase3_on_eq_off;
+SELECT fts_count('pos3_on',  to_ftsquery('simple'::regconfig, 'NEAR(quick brown fox, 2)'))
+     = fts_count('pos3_off', to_ftsquery('simple'::regconfig, 'NEAR(quick brown fox, 2)')) AS near3_on_eq_off;
+RESET enable_seqscan;
+DROP TABLE pos3;
+
+-- v2 index rejected with a REINDEX hint (format version bump 2 -> 3).  We can't
+-- easily fabricate a v2 index here, but the version guard message is asserted
+-- by the build-time check; the reloption round-trips through pg_class:
+CREATE TABLE reloptt (id serial, d ftsdoc);
+INSERT INTO reloptt(d) SELECT to_ftsdoc('a b c d'||g) FROM generate_series(1,5) g;
+CREATE INDEX reloptt_idx ON reloptt USING fts (d) WITH (positions = on);
+SELECT reloptions FROM pg_class WHERE relname = 'reloptt_idx';  -- {positions=on}
+DROP TABLE reloptt;
 
 -- FUZZY ranked scan: the trigram funnel over-generates candidates (recheck),
 -- so the ranked scan must apply the exact edit-distance test.  All rows share

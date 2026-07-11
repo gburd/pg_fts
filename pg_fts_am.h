@@ -21,7 +21,7 @@
 #include "storage/itemptr.h"
 
 #define BM25_MAGIC			0x42324635	/* "B2F5" */
-#define BM25_VERSION		2		/* v2: segmented layout */
+#define BM25_VERSION		3		/* v3: segmented layout + optional token positions */
 #define BM25_METAPAGE_BLKNO	0
 
 /* page opaque flags */
@@ -116,12 +116,15 @@ typedef struct BM25DictIndexEntry
 	char		term[FLEXIBLE_ARRAY_MEMBER];
 } BM25DictIndexEntry;
 
-/* a posting: which heap tuple, its term frequency, and the document length */
+/* a posting: which heap tuple, its term frequency, and the document length.
+ * When positions are decoded (want_positions), `pos` points at the posting's
+ * `tf` ascending token positions (owned by the decoder's parallel array). */
 typedef struct BM25Posting
 {
 	ItemPointerData tid;
 	uint32		tf;
 	uint32		doclen;			/* |D|: total tokens in the document */
+	uint32	   *pos;			/* tf token positions, or NULL if not decoded */
 } BM25Posting;
 
 /*
@@ -136,6 +139,19 @@ typedef struct BM25Posting
  * blocks -- so patched-FOR/PFOR outlier extraction was measured to save only
  * ~7% of the column bytes, under ~0.5% of the whole index, not worth the
  * hot-path decode complexity; plain FOR is kept.)
+ * Posting pages hold one or more fixed-size BLOCKS of up to BM25_BLOCK_SIZE
+ * postings (the Lucene/Tantivy 128-doc block design).  Each block is a
+ * BM25BlockHdr followed by three FOR (frame-of-reference) bit-packed columns --
+ * docid-gaps, tfs, doclens; docid gaps are relative to first_docid within the
+ * block.  When the index is built WITH (positions=on) a FOURTH, lazily-decoded
+ * FOR column follows: the per-posting token positions, delta-coded within each
+ * posting (reset at each posting boundary) and FOR-packed over the whole
+ * block's Sum(tf) position values.  posbytelen in the header lets a reader that
+ * does not need positions (plain BM25/AND/count) skip the whole column in one
+ * add -- the same bytelen-skip the tf/doclen columns already use, so a
+ * non-phrase query pays ~zero for positions existing.  A single posting's
+ * positions are located by decoding the tf column (needed anyway) and walking
+ * the prefix sum, so no on-disk per-posting offset directory is stored.
  */
 #define BM25_BLOCK_SIZE 128
 
@@ -146,7 +162,12 @@ typedef struct BM25BlockHdr
 	uint32		min_doclen;		/* min |D| in this block (tightens block-max WAND) */
 	uint32		first_docid_hi;
 	uint32		first_docid_lo;
-	uint32		bytelen;		/* byte length of the varint stream that follows */
+	uint32		bytelen;		/* byte length of the three FOR columns (docid|tf|doclen) */
+	uint32		posbytelen;		/* byte length of the trailing positions FOR column
+								 * (Sum tf deltas), or 0 when the index has no
+								 * positions (WITH positions=off).  A reader that
+								 * does not need positions skips this many bytes --
+								 * the same bytelen-skip the tf/doclen columns use. */
 } BM25BlockHdr;
 
 /*
@@ -183,6 +204,7 @@ typedef struct BM25TrgmEntry
 } BM25TrgmEntry;
 
 /* scan functions (pg_fts_am_scan.c, #included into pg_fts_am.c) */
+extern void bm25_init_reloptions(void);
 extern IndexScanDesc bm25_beginscan(Relation r, int nkeys, int norderbys);
 extern void bm25_rescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
 						ScanKey orderbys, int norderbys);

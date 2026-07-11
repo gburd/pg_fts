@@ -166,7 +166,11 @@ extern FtsQuery fts_parse_query_cfg(const char *str, int len, Oid cfgId);
 
 /* pg_fts_match.c -- evaluate a parsed query against an analyzed doc */
 extern bool fts_doc_matches(FtsDoc doc, FtsQuery query);
-
+/* shared phrase adjacency over raw ascending position arrays (single source of
+ * truth for the in-memory matcher and the index posting-list phrase eval) */
+extern void fts_phrase_step_pos(const uint32 *left, int nleft,
+								const uint32 *right, int nright,
+								uint32 distance, uint32 *out, int *nout);
 /* shared: binary-search a term in a doc; returns entry or NULL */
 extern FtsTermEntry *fts_doc_lookup(FtsDoc doc, const char *term, int termlen);
 

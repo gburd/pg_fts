@@ -78,6 +78,31 @@
 
 PG_FUNCTION_INFO_V1(fts_handler);
 
+/*
+ * Reloptions for the bm25 index.  Only one knob: `positions` -- whether to
+ * store per-token positions in the postings so phrase/NEAR is answered
+ * directly from the index (no heap recheck).  Registered once from _PG_init.
+ */
+typedef struct BM25Options
+{
+	int32		vl_len_;		/* varlena header (do not touch directly!) */
+	bool		positions;		/* store token positions in postings (default off) */
+} BM25Options;
+
+static relopt_kind bm25_relopt_kind;
+
+void		bm25_init_reloptions(void);
+static bool bm25_index_wants_positions(Relation index);
+
+void
+bm25_init_reloptions(void)
+{
+	bm25_relopt_kind = add_reloption_kind();
+	add_bool_reloption(bm25_relopt_kind, "positions",
+					   "store token positions in postings for index-only phrase/NEAR",
+					   false, AccessExclusiveLock);
+}
+
 /* ----- build: collect postings from the heap ----- */
 
 typedef struct BuildTerm
@@ -88,6 +113,16 @@ typedef struct BuildTerm
 	ItemPointerData *tids;
 	uint32	   *tfs;
 	uint32	   *doclens;
+	/* token positions for this term, when the index carries positions.  Flat
+	 * arena of all postings' positions; posting i owns positions[posoff[i] ..
+	 * posoff[i]+tfs[i]).  Never reordered (postings are sorted by copying these
+	 * offsets into the sort struct), so posoff stays valid across the sort. */
+	uint32	   *positions;
+	uint32	   *posoff;		/* per-posting start index into positions[] */
+	uint32	   *poscnt;		/* per-posting stored position count (0 if dropped;
+								 * may be < tf when a source block dropped positions) */
+	int			npos;		/* total positions stored (== Sum poscnt) */
+	int			maxpos;
 	int			nposts;
 	int			maxposts;
 	int			next;			/* next BuildTerm sharing the same hash key, or -1 */
@@ -99,6 +134,8 @@ typedef struct BM25BuildState
 	BuildTerm  *terms;			/* sorted-on-flush; kept in a simple array */
 	int			nterms;
 	int			maxterms;
+	bool		want_positions;	/* index built WITH (positions=on): carry token
+								 * positions through build/merge into the postings */
 	/* build-time term list: an unsorted array collected during the heap scan,
 	 * sorted once before the dictionary is written */
 	double		ndocs;
@@ -172,7 +209,8 @@ make_termkey(TermKey *k, const char *term, int len)
 
 static void
 add_posting(BM25BuildState *bs, const char *term, int len,
-			ItemPointer tid, uint32 tf, uint32 doclen)
+			ItemPointer tid, uint32 tf, uint32 doclen,
+			const uint32 *pos, int npos)
 {
 	TermKey		key;
 	TermHashEntry *entry;
@@ -225,6 +263,18 @@ add_posting(BM25BuildState *bs, const char *term, int len,
 		bt->tids = (ItemPointerData *) palloc(bt->maxposts * sizeof(ItemPointerData));
 		bt->tfs = (uint32 *) palloc(bt->maxposts * sizeof(uint32));
 		bt->doclens = (uint32 *) palloc(bt->maxposts * sizeof(uint32));
+		bt->positions = NULL;
+		bt->posoff = NULL;
+		bt->poscnt = NULL;
+		bt->npos = 0;
+		bt->maxpos = 0;
+		if (bs->want_positions)
+		{
+			bt->posoff = (uint32 *) palloc(bt->maxposts * sizeof(uint32));
+			bt->poscnt = (uint32 *) palloc(bt->maxposts * sizeof(uint32));
+			bt->maxpos = 8;
+			bt->positions = (uint32 *) palloc(bt->maxpos * sizeof(uint32));
+		}
 		/* push onto the head of this key's chain (-1 = end of chain) */
 		bt->next = found ? entry->termidx : -1;
 		entry->termidx = bs->nterms;
@@ -238,10 +288,47 @@ add_posting(BM25BuildState *bs, const char *term, int len,
 												bt->maxposts * sizeof(ItemPointerData));
 		bt->tfs = (uint32 *) repalloc(bt->tfs, bt->maxposts * sizeof(uint32));
 		bt->doclens = (uint32 *) repalloc(bt->doclens, bt->maxposts * sizeof(uint32));
+		if (bt->posoff != NULL)
+		{
+			bt->posoff = (uint32 *) repalloc(bt->posoff, bt->maxposts * sizeof(uint32));
+			bt->poscnt = (uint32 *) repalloc(bt->poscnt, bt->maxposts * sizeof(uint32));
+		}
 	}
 	bt->tids[bt->nposts] = *tid;
 	bt->tfs[bt->nposts] = tf;
 	bt->doclens[bt->nposts] = doclen;
+	/*
+	 * Carry positions when the index wants them and the caller supplied a full
+	 * set (npos == tf).  A per-(term,doc) position count is bounded by the
+	 * analyzer's MAXENTRYPOS cap, so appending tf values here cannot blow up a
+	 * single posting; the segment total is bounded by the build memory budget
+	 * (checked between tuples in bm25_build_callback), which flushes before the
+	 * arena grows unbounded -- so this never materializes the whole corpus'
+	 * positions in one array.
+	 */
+	if (bs->want_positions && pos != NULL && npos == (int) tf && tf > 0)
+	{
+		if (bt->npos + (int) tf > bt->maxpos)
+		{
+			while (bt->npos + (int) tf > bt->maxpos)
+				bt->maxpos *= 2;
+			bt->positions = (uint32 *) repalloc(bt->positions,
+												bt->maxpos * sizeof(uint32));
+		}
+		bt->posoff[bt->nposts] = (uint32) bt->npos;
+		bt->poscnt[bt->nposts] = tf;
+		memcpy(bt->positions + bt->npos, pos, tf * sizeof(uint32));
+		bt->npos += (int) tf;
+	}
+	else if (bt->posoff != NULL)
+	{
+		/* want positions but this posting has none (tf==0, or a source block
+		 * dropped them on a prior write): record an empty run + zero count so
+		 * posoff stays aligned with the posting index and the writer knows this
+		 * posting stores no positions (it will drop the block's positions). */
+		bt->posoff[bt->nposts] = (uint32) bt->npos;
+		bt->poscnt[bt->nposts] = 0;
+	}
 	bt->nposts++;
 }
 
@@ -341,8 +428,18 @@ bm25_build_callback(Relation index, ItemPointer tid, Datum *values,
 	entries = FTS_DOC_ENTRIES(doc);
 
 	for (i = 0; i < doc->nterms; i++)
+	{
+		const uint32 *pos = NULL;
+		int			npos = 0;
+
+		if (bs->want_positions && FTS_DOC_HAS_POS(doc))
+		{
+			pos = FTS_DOC_TERMPOS(doc, &entries[i]);
+			npos = (int) entries[i].tf;
+		}
 		add_posting(bs, FTS_DOC_TERMTEXT(doc, &entries[i]), entries[i].len,
-					tid, entries[i].tf, doc->doclen);
+					tid, entries[i].tf, doc->doclen, pos, npos);
+	}
 
 	bs->ndocs += 1.0;
 	bs->sumdoclen += doc->doclen;
@@ -390,13 +487,26 @@ bm25_docid_to_tid(uint64 docid, ItemPointer tid)
  * written contiguously, so its run is delimited purely by df.  Returns the
  * count (== df on a consistent index); *out (and *blockmax if non-NULL) are
  * palloc'd.  `off` on pages after the first is the contents start.
+ *
+ * When want_positions is true and a block carries a positions column
+ * (posbytelen>0), each posting's `pos` is set to point into a single palloc'd
+ * positions arena (*posarena, returned so the caller can free it); the pointer
+ * is valid until that arena is freed.  When want_positions is false the
+ * positions column is SKIPPED with a pointer add (posbytelen) and never
+ * decoded -- so plain BM25/AND/count queries pay ~zero for positions existing,
+ * mirroring the tf/doclen bytelen-skip.
  */
 static int
 bm25_decode_term(Relation index, BlockNumber firstblk, uint32 firstoff,
-				 uint32 df, BM25Posting **out, uint32 **blockmax)
+				 uint32 df, BM25Posting **out, uint32 **blockmax,
+				 bool want_positions, uint32 **posarena)
 {
 	BM25Posting *posts;
 	uint32	   *bmax = NULL;
+	uint32	   *parena = NULL;
+	int		   *pos_start = NULL;	/* per-posting arena offset (fixed to ptr below) */
+	int			parena_n = 0;
+	int			parena_cap = 0;
 	int			n = 0;
 	BlockNumber blk = firstblk;
 	uint32		off = firstoff;
@@ -404,6 +514,8 @@ bm25_decode_term(Relation index, BlockNumber firstblk, uint32 firstoff,
 	posts = (BM25Posting *) palloc(Max(df, 1u) * sizeof(BM25Posting));
 	if (blockmax)
 		bmax = (uint32 *) palloc(Max(df, 1u) * sizeof(uint32));
+	if (want_positions)
+		pos_start = (int *) palloc(Max(df, 1u) * sizeof(int));
 
 	while (blk != InvalidBlockNumber && n < (int) df)
 	{
@@ -435,26 +547,101 @@ bm25_decode_term(Relation index, BlockNumber firstblk, uint32 firstoff,
 			pos += bm25_for_unpack(stream + pos, cnt, gaps);
 			pos += bm25_for_unpack(stream + pos, cnt, tfs);
 			pos += bm25_for_unpack(stream + pos, cnt, dls);
+
+			if (want_positions && bh->posbytelen > 0)
+			{
+				/* the positions column packs Sum(tf) delta values over the whole
+				 * block; decode them once, then un-delta per posting below.  n0
+				 * is the first posting index of this block. */
+				const unsigned char *pstream = stream + bh->bytelen;
+				uint64		deltas[BM25_BLOCK_SIZE * 4];
+				uint64	   *dbuf = deltas;
+				int			sumtf = 0;
+				int			n0 = n;
+				int			j;
+
+				for (i = 0; i < cnt; i++)
+					sumtf += (int) tfs[i];
+				if (sumtf > (int) (sizeof(deltas) / sizeof(deltas[0])))
+					dbuf = (uint64 *) palloc((Size) sumtf * sizeof(uint64));
+				(void) bm25_for_unpack(pstream, sumtf, dbuf);
+
+				/* grow the arena to hold this block's positions */
+				if (parena_n + sumtf > parena_cap)
+				{
+					parena_cap = Max(parena_cap * 2, parena_n + sumtf);
+					parena = parena == NULL
+						? (uint32 *) palloc((Size) parena_cap * sizeof(uint32))
+						: (uint32 *) repalloc(parena, (Size) parena_cap * sizeof(uint32));
+				}
+
+				/* un-delta each posting's run (delta reset at posting boundaries) */
+				j = 0;
+				for (i = 0; i < cnt; i++)
+				{
+					int			tf = (int) tfs[i];
+					uint32		run = 0;
+					int			t;
+
+					if (n0 + i < (int) df)
+						pos_start[n0 + i] = parena_n;
+					for (t = 0; t < tf; t++)
+					{
+						run += (uint32) dbuf[j++];
+						parena[parena_n++] = run;
+					}
+				}
+				if (dbuf != deltas)
+					pfree(dbuf);
+			}
+			else if (want_positions)
+			{
+				/* positions absent for this block (posbytelen==0: a page-overflow
+				 * block dropped them).  Mark each posting -1 so the pointer
+				 * conversion yields NULL -- NOT a valid arena offset, which would
+				 * alias another block's positions and misread adjacency. */
+				for (i = 0; i < cnt && n + i < (int) df; i++)
+					pos_start[n + i] = -1;
+			}
+
 			for (i = 0; i < cnt && n < (int) df; i++)
 			{
 				docid += gaps[i];
 				bm25_docid_to_tid(docid, &posts[n].tid);
 				posts[n].tf = (uint32) tfs[i];
 				posts[n].doclen = (uint32) dls[i];
+				posts[n].pos = NULL;
 				if (bmax)
 					bmax[n] = bh->max_tf;
 				n++;
 			}
-			p = (char *) (bh + 1) + bh->bytelen;
+			/* skip past the three columns AND the positions column (posbytelen)
+			 * -- a non-positions reader never touches the blob, only adds it */
+			p = (char *) (bh + 1) + bh->bytelen + bh->posbytelen;
 			p = (char *) MAXALIGN(p);
 		}
 		UnlockReleaseBuffer(buf);
 		blk = next;
 		off = MAXALIGN(SizeOfPageHeaderData);	/* later pages: contents start */
 	}
+	/* convert per-posting arena offsets to stable pointers now the arena is final */
+	if (want_positions)
+	{
+		int			k;
+
+		for (k = 0; k < n; k++)
+			posts[k].pos = (parena != NULL && posts[k].tf > 0 && pos_start[k] >= 0)
+				? parena + pos_start[k] : NULL;
+		if (pos_start)
+			pfree(pos_start);
+	}
 	*out = posts;
 	if (blockmax)
 		*blockmax = bmax;
+	if (posarena)
+		*posarena = parena;
+	else if (parena)
+		pfree(parena);
 	return n;
 }
 
@@ -658,6 +845,8 @@ typedef struct BM25PostingSort
 	uint64		docid;
 	uint32		tf;
 	uint32		doclen;
+	uint32		posoff;			/* start index into bt->positions (valid iff bt->positions) */
+	uint32		poscnt;			/* stored position count (<= tf; 0 if dropped) */
 	ItemPointerData tid;
 }			BM25PostingSort;
 
@@ -732,6 +921,8 @@ bm25_write_postings(BM25PostWriter *pw, BuildTerm *bt,
 		sorted[i].docid = bm25_tid_to_docid(&bt->tids[i]);
 		sorted[i].tf = bt->tfs[i];
 		sorted[i].doclen = bt->doclens[i];
+		sorted[i].posoff = bt->positions ? bt->posoff[i] : 0;
+		sorted[i].poscnt = bt->positions ? bt->poscnt[i] : 0;
 		sorted[i].tid = bt->tids[i];
 	}
 	if (bt->nposts > 1)
@@ -750,8 +941,13 @@ bm25_write_postings(BM25PostWriter *pw, BuildTerm *bt,
 		uint64		blk_first_docid = sorted[i].docid;
 		uint64		prev_docid = sorted[i].docid;
 		int			bcount = 0;
+		int			blk_first = i;
+		int			poslen = 0;
+		uint64	   *posdeltas = NULL;
+		unsigned char *posbuf = NULL;
 		char	   *pageend;
 		Size		need;
+		Size		usable;
 		char	   *dst;
 		BM25BlockHdr *bh;
 
@@ -774,7 +970,74 @@ bm25_write_postings(BM25PostWriter *pw, BuildTerm *bt,
 		sclen += bm25_for_pack(tfs, bcount, scratch + sclen);
 		sclen += bm25_for_pack(dls, bcount, scratch + sclen);
 
-		need = MAXALIGN(sizeof(BM25BlockHdr) + sclen);
+		/*
+		 * Build the positions blob for this block (WITH positions=on).  It packs
+		 * Sum(tf) delta values -- each posting's positions delta-coded from 0 and
+		 * reset at the posting boundary.  Sum(tf) per block is unbounded in
+		 * principle (P1's build-alloc trap), so size the scratch from the ACTUAL
+		 * Sum(tf) with a huge-safe alloc, never a fixed stack array.  If the
+		 * resulting block would not fit even an empty page, write the block WITH
+		 * NO positions (posbytelen=0) -- decode then yields NULL positions for
+		 * these postings and phrase eval correctly falls back to recheck for
+		 * those docids (bounded, and only for pathological Sum(tf)).
+		 */
+		usable = BLCKSZ - MAXALIGN(SizeOfPageHeaderData) - MAXALIGN(sizeof(BM25PageOpaqueData));
+		if (bt->positions)
+		{
+			int64		sumtf = 0;
+			int			k;
+			int			j = 0;
+			bool		all_pos = true;
+
+			/* only build the positions blob if EVERY posting in this block has a
+			 * complete position set (poscnt == tf).  A posting whose positions
+			 * were dropped on a prior write (poscnt < tf) cannot contribute tf
+			 * deltas, so drop the whole block's positions (posbytelen=0) and let
+			 * phrase fall back to recheck for these docids. */
+			for (k = 0; k < bcount; k++)
+			{
+				sumtf += (int64) tfs[k];
+				if (sorted[blk_first + k].poscnt != (uint32) tfs[k])
+					all_pos = false;
+			}
+			if (sumtf > 0 && all_pos)
+			{
+				Size		dlbytes = (Size) sumtf * sizeof(uint64);
+				Size		pbbytes = 1 + ((Size) sumtf * 32 + 7) / 8;	/* FOR worst case */
+
+				posdeltas = (uint64 *) (dlbytes > MaxAllocSize
+										? MemoryContextAllocHuge(CurrentMemoryContext, dlbytes)
+										: palloc(dlbytes));
+				posbuf = (unsigned char *) (pbbytes > MaxAllocSize
+											? MemoryContextAllocHuge(CurrentMemoryContext, pbbytes)
+											: palloc(pbbytes));
+				for (k = 0; k < bcount; k++)
+				{
+					const uint32 *pp = bt->positions + sorted[blk_first + k].posoff;
+					uint32		tf = (uint32) tfs[k];
+					uint32		prev = 0;
+					uint32		t;
+
+					for (t = 0; t < tf; t++)
+					{
+						/* positions are ascending within a posting; delta-code,
+						 * reset prev to 0 at each posting boundary */
+						posdeltas[j++] = (uint64) (pp[t] - prev);
+						prev = pp[t];
+					}
+				}
+				poslen = bm25_for_pack(posdeltas, (int) sumtf, posbuf);
+			}
+		}
+
+		need = MAXALIGN(sizeof(BM25BlockHdr) + sclen + poslen);
+		if (poslen > 0 && need > usable)
+		{
+			/* positions push the block past a whole page: drop them for this
+			 * block (recheck fallback keeps phrase correct for these docids) */
+			poslen = 0;
+			need = MAXALIGN(sizeof(BM25BlockHdr) + sclen);
+		}
 
 		/* need a page with room for this block? */
 		if (pw->buffer != InvalidBuffer)
@@ -818,8 +1081,15 @@ bm25_write_postings(BM25PostWriter *pw, BuildTerm *bt,
 		bh->first_docid_hi = (uint32) (blk_first_docid >> 32);
 		bh->first_docid_lo = (uint32) (blk_first_docid & 0xFFFFFFFF);
 		bh->bytelen = (uint32) sclen;
+		bh->posbytelen = (uint32) poslen;
 		memcpy((char *) (bh + 1), scratch, sclen);
+		if (poslen > 0)
+			memcpy((char *) (bh + 1) + sclen, posbuf, poslen);
 		((PageHeader) pw->page)->pd_lower += need;
+		if (posdeltas)
+			pfree(posdeltas);
+		if (posbuf)
+			pfree(posbuf);
 	}
 
 	pfree(sorted);
@@ -1093,11 +1363,15 @@ bm25_read_segment_into(Relation index, const BM25SegMeta *seg, BM25BuildState *b
 			BM25DictEntry *de = (BM25DictEntry *) ptr;
 			Size		esize = MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
 			BM25Posting *post;
+			uint32	   *posarena = NULL;
 			int			np,
 						k;
 
+			/* carry positions through the merge/vacuum rewrite iff this index
+			 * keeps them (WITH positions=on); otherwise decode is skipped */
 			np = bm25_decode_term(index, de->firstposting, de->firstoffset,
-								  de->df, &post, NULL);
+								  de->df, &post, NULL,
+								  bs->want_positions, &posarena);
 			for (k = 0; k < np; k++)
 			{
 				if (hastomb)
@@ -1110,9 +1384,12 @@ bm25_read_segment_into(Relation index, const BM25SegMeta *seg, BM25BuildState *b
 						continue;	/* tombstoned: drop from the merged segment */
 				}
 				add_posting(bs, de->term, de->termlen,
-							&post[k].tid, post[k].tf, post[k].doclen);
+							&post[k].tid, post[k].tf, post[k].doclen,
+							post[k].pos, post[k].pos ? (int) post[k].tf : 0);
 			}
 			pfree(post);
+			if (posarena)
+				pfree(posarena);
 			ptr += esize;
 		}
 		UnlockReleaseBuffer(buffer);
@@ -1271,6 +1548,7 @@ bm25_merge_group_to_seg(Relation index, const BM25SegMeta *group, uint32 ngroup,
 
 	bs.ctx = AllocSetContextCreate(CurrentMemoryContext, "bm25 merge group",
 								   ALLOCSET_DEFAULT_SIZES);
+	bs.want_positions = bm25_index_wants_positions(index);
 	bs.terms = NULL;
 	bs.nterms = 0;
 	bs.maxterms = 0;
@@ -1319,6 +1597,7 @@ bm25_merge_selected(Relation index, const uint32 *sel, uint32 nsel)
 
 	bs.ctx = AllocSetContextCreate(CurrentMemoryContext, "bm25 merge segs",
 								   ALLOCSET_DEFAULT_SIZES);
+	bs.want_positions = bm25_index_wants_positions(index);
 	bs.terms = NULL;
 	bs.nterms = 0;
 	bs.maxterms = 0;
@@ -1988,6 +2267,7 @@ bm25_parallel_build_main(dsm_segment *seg, shm_toc *toc)
 
 	bs.ctx = AllocSetContextCreate(CurrentMemoryContext, "bm25 parallel worker",
 								   ALLOCSET_DEFAULT_SIZES);
+	bs.want_positions = bm25_index_wants_positions(index);
 	bs.terms = NULL;
 	bs.nterms = 0;
 	bs.maxterms = 0;
@@ -2177,6 +2457,7 @@ bm25_build(Relation heap, Relation index, IndexInfo *indexInfo)
 
 	bs.ctx = AllocSetContextCreate(CurrentMemoryContext, "bm25 build",
 								   ALLOCSET_DEFAULT_SIZES);
+	bs.want_positions = bm25_index_wants_positions(index);
 	bs.terms = NULL;
 	bs.nterms = 0;
 	bs.maxterms = 0;
@@ -2260,6 +2541,7 @@ bm25_insert_oversized_as_segment(Relation index, FtsDoc doc, ItemPointer tid)
 
 	bs.ctx = AllocSetContextCreate(CurrentMemoryContext, "bm25 oversized",
 								   ALLOCSET_DEFAULT_SIZES);
+	bs.want_positions = bm25_index_wants_positions(index);
 	bs.terms = NULL;
 	bs.nterms = 0;
 	bs.maxterms = 0;
@@ -2271,8 +2553,14 @@ bm25_insert_oversized_as_segment(Relation index, FtsDoc doc, ItemPointer tid)
 		MemoryContext old = MemoryContextSwitchTo(bs.ctx);
 
 		for (j = 0; j < doc->nterms; j++)
+		{
+			const uint32 *pos = (bs.want_positions && FTS_DOC_HAS_POS(doc))
+				? FTS_DOC_TERMPOS(doc, &entries[j]) : NULL;
+
 			add_posting(&bs, FTS_DOC_TERMTEXT(doc, &entries[j]), entries[j].len,
-						tid, entries[j].tf, doc->doclen);
+						tid, entries[j].tf, doc->doclen,
+						pos, pos ? (int) entries[j].tf : 0);
+		}
 		bs.ndocs = 1.0;
 		bs.sumdoclen = doc->doclen;
 		MemoryContextSwitchTo(old);
@@ -2480,6 +2768,7 @@ bm25_flush_pending(Relation index)
 
 	bs.ctx = AllocSetContextCreate(CurrentMemoryContext, "bm25 flush",
 								   ALLOCSET_DEFAULT_SIZES);
+	bs.want_positions = bm25_index_wants_positions(index);
 	bs.terms = NULL;
 	bs.nterms = 0;
 	bs.maxterms = 0;
@@ -2519,9 +2808,14 @@ bm25_flush_pending(Relation index)
 			uint32		j;
 
 			for (j = 0; j < pdoc->nterms; j++)
+			{
+				const uint32 *pos = (bs.want_positions && FTS_DOC_HAS_POS(pdoc))
+					? FTS_DOC_TERMPOS(pdoc, &entries[j]) : NULL;
+
 				add_posting(&bs, FTS_DOC_TERMTEXT(pdoc, &entries[j]),
 							entries[j].len, &pi->tid, entries[j].tf,
-							pdoc->doclen);
+							pdoc->doclen, pos, pos ? (int) entries[j].tf : 0);
+			}
 			bs.ndocs += 1.0;
 			bs.sumdoclen += pdoc->doclen;
 			ptr += MAXALIGN(sizeof(BM25PendingItem) + pi->doclen);
@@ -2621,7 +2915,7 @@ bm25_segment_docids(Relation index, const BM25SegMeta *seg)
 						k;
 
 			np = bm25_decode_term(index, de->firstposting, de->firstoffset,
-								  de->df, &post, NULL);
+								  de->df, &post, NULL, false, NULL);
 			for (k = 0; k < np; k++)
 				sm_add_grow(&seen, bm25_tid_to_docid(&post[k].tid));
 			pfree(post);
@@ -2945,7 +3239,30 @@ bm25_costestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 static bytea *
 bm25_options(Datum reloptions, bool validate)
 {
-	return NULL;
+	static const relopt_parse_elt tab[] = {
+		{"positions", RELOPT_TYPE_BOOL, offsetof(BM25Options, positions)},
+	};
+
+	return (bytea *) build_reloptions(reloptions, validate,
+									  bm25_relopt_kind,
+									  sizeof(BM25Options),
+									  tab, lengthof(tab));
+}
+
+/*
+ * Does this index carry token positions in its postings?  Reads the
+ * `positions` reloption (default OFF -- positions ~double the posting bytes,
+ * so the size-sensitive majority who never phrase-search pay nothing; phrase
+ * users opt in with WITH (positions=on)).  Phrase/NEAR is CORRECT either way:
+ * positions=on evaluates it from the postings with no recheck; positions=off
+ * falls back to the (correct, slower) heap recheck.
+ */
+static bool
+bm25_index_wants_positions(Relation index)
+{
+	BM25Options *opts = (BM25Options *) index->rd_options;
+
+	return opts ? opts->positions : false;
 }
 
 static bool

@@ -16,7 +16,8 @@ citations are to the tree this document was generated against. All
 | BM25 (Okapi) scoring, index-maintained corpus stats (N, avgdl, df) | Yes | `fts_bm25` `pg_fts--1.1--1.2.sql` (stage 1.2); `fts_index_stats`/`fts_index_df` `pg_fts--1.6--1.7.sql:7,15`; metapage `meta->ndocs/sumdoclen` `pg_fts_am.c:1571-1583` |
 | BM25 variants (lucene, robertson, atire, bm25+) | Yes | `fts_bm25_opts` (stage 1.4), README lines 24 |
 | BM25F multi-field weighting | Yes | `fts_bm25f(ftsdoc[], ftsquery, weights, ...)` `pg_fts--1.11--1.12.sql:9` |
-| Phrase queries (`"a b c"`) via per-term positions | Yes | ftsdoc format v2 (stage 1.9), README line 28; `sql/pg_fts.sql:206-215` |
+| Phrase queries (`"a b c"`) / NEAR via per-term positions | Yes | evaluated from stored positions; adjacency enforced exactly on all paths (`@@@`, bitmap, ranked, `fts_count`) |
+| Index-native phrase/NEAR (no heap recheck) with `WITH (positions=on)` | Yes | token positions stored in the postings (BM25 format v3, 4th lazily-decoded FOR column); phrase count/match answered from postings, no per-candidate heap fetch. Default `positions=off` keeps the smaller index + correct-but-slower heap recheck. Non-phrase queries never decode positions (`bm25_decode_term` skip); size cost ~1.03x (prose) to ~2.8x (high term-repetition) |
 | Prefix (`term*`), fuzzy (`term~k`), regex (`/re/`) | Yes | README lines 31-34; sequential + index paths, `sql/pg_fts.sql:147-271`; trigram pre-filter `pg_fts_trgm_index.c` |
 | Ranked (`<=>`) over fuzzy/prefix/regex returns a correct **subset** | Partial | the ranked WAND path builds cursors from the literal term, so docs matching only via an expansion aren't ranked; results are always correct (never a non-match) but may be incomplete. Use `@@@` for exhaustive fuzzy/prefix/regex retrieval. PHRASE/NEAR/boolean ranking is exact (`bm25_recheck_exact`, `pg_fts_am_scan.c`) |
 | Highlight / snippet | Yes | `fts_highlight`, `fts_snippet` `pg_fts--1.4--1.5.sql:6,13` |

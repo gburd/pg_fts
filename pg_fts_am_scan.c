@@ -46,6 +46,14 @@ static uint8 *bm25_read_blob(Relation index, BlockNumber blk, Size len);
  */
 #define BM25_MAX_ORDERK 4096
 
+/* Max terms in a phrase chain we evaluate positionally, and the per-docid
+ * position scratch bound.  A phrase with more terms, or a per-(term,doc) tf
+ * beyond BM25_PHRASE_POSBUF, falls back to the (correct) recheck path.  16383
+ * matches the analyzer's MAXENTRYPOS cap, so a well-formed posting never
+ * exceeds it. */
+#define FTS_QUERY_MAX_PHRASE_TERMS 32
+#define BM25_PHRASE_POSBUF 16384
+
 /* A scored heap tuple (score, or distance in an ordering scan). */
 typedef struct ScoredTid
 {
@@ -357,7 +365,7 @@ bm25_lookup_term(Relation index, const BM25SegMeta *seg,
 			/* read exactly this term's df postings from the shared chain */
 			BM25Posting *post;
 			int			np = bm25_decode_term(index, firstposting, firstoffset,
-										  df, &post, NULL);
+										  df, &post, NULL, false, NULL);
 			ItemPointerData *tids = palloc(Max(np, 1) * sizeof(ItemPointerData));
 			int			n = 0;
 			int			i;
@@ -591,7 +599,7 @@ bm25_lookup_prefix(Relation index, const BM25SegMeta *seg,
 				BM25Posting *post;
 				int			np = bm25_decode_term(index, de->firstposting,
 												  de->firstoffset, de->df,
-												  &post, NULL);
+												  &post, NULL, false, NULL);
 				int			k;
 
 				for (k = 0; k < np; k++)
@@ -818,7 +826,7 @@ bm25_fuzzy_terms(Relation index, const BM25SegMeta *seg,
 				BM25Posting *post;
 				int			np = bm25_decode_term(index, de->firstposting,
 												  de->firstoffset, de->df,
-												  &post, NULL);
+												  &post, NULL, false, NULL);
 
 				/* keep this term's docid-sorted TIDs as a run for k-way merge */
 				if (np > 0)
@@ -1036,7 +1044,7 @@ bm25_universe(Relation index, BlockNumber dictstart)
 			BM25Posting *post;
 			int			np = bm25_decode_term(index, de->firstposting,
 											  de->firstoffset, de->df,
-											  &post, NULL);
+											  &post, NULL, false, NULL);
 			int			k;
 
 			for (k = 0; k < np; k++)
@@ -1309,6 +1317,348 @@ bm25_gettuple(IndexScanDesc scan, ScanDirection dir)
 }
 
 /*
+ * ------------------- positional phrase evaluation (from postings) -------------
+ *
+ * When the index is built WITH (positions=on), a phrase/NEAR query can be
+ * answered DIRECTLY from the posting lists -- no heap access, no recheck.  We
+ * intersect the phrase's terms on docid (cheap and selective), then verify
+ * adjacency per surviving docid using the stored token positions via the shared
+ * fts_phrase_step_pos() -- the exact adjacency logic the heap recheck uses, so
+ * the result is identical.  need_recheck is then false and the recheck cliff is
+ * gone.
+ *
+ * This fast path handles a PURE PHRASE CHAIN: an RPN of plain (non prefix/
+ * fuzzy/regex) term operands combined only by FTS_OP_PHRASE -- i.e. the shape
+ * to_ftsquery produces for "a b c" and NEAR(a b c, k).  Anything mixing phrase
+ * with boolean AND/OR/NOT, or a phrase term that is a prefix/fuzzy/regex, is
+ * left to the existing AND + recheck path (still correct, just slower).
+ */
+
+/* one term's postings decoded with positions, docid-sorted */
+typedef struct PosPosting
+{
+	uint64		docid;
+	uint32	   *pos;			/* tf ascending positions (into an arena) */
+	int			npos;
+}			PosPosting;
+
+typedef struct PosTermList
+{
+	PosPosting *posts;
+	int			nposts;
+	BM25Posting *raw;			/* decoder output (owns tids/pos slots) */
+	uint32	   *arena;			/* positions arena to free */
+}			PosTermList;
+
+/*
+ * Is the query a pure phrase chain we can evaluate positionally?  Returns the
+ * ordered list of term-operand indices (into query->items) via *termidx and
+ * their count via *nterms, plus the max phrase distance (all PHRASE ops share
+ * the chain).  Requires: items are VAL/PHRASE only, every VAL is a plain term
+ * (no PREFIX/FUZZY/REGEX), and the RPN is the canonical left-deep phrase chain
+ * (v1 v2 PHRASE v3 PHRASE ...).  For NEAR the per-op distance may differ per
+ * step; we carry each step's distance in *dist[].
+ */
+static bool
+bm25_phrase_chain(FtsQuery q, int *termidx, uint32 *stepdist, int *nterms)
+{
+	int			nt = 0;
+	uint32		i;
+	int			stack = 0;
+
+	if (q->nitems < 3)
+		return false;			/* need at least v v PHRASE */
+
+	for (i = 0; i < q->nitems; i++)
+	{
+		FtsQueryItem *it = &q->items[i];
+
+		if (it->type == FTS_QI_VAL)
+		{
+			if (it->flags & (FTS_QF_PREFIX | FTS_QF_FUZZY | FTS_QF_REGEX))
+				return false;
+			if (nt >= FTS_QUERY_MAX_PHRASE_TERMS)
+				return false;
+			/*
+			 * Only the CANONICAL LEFT-DEEP chain (v1 v2 PHRASE v3 PHRASE ...)
+			 * is safe here: it evaluates as phrase(phrase(v1,v2),v3), pairing
+			 * consecutive terms -- which is what "a b c" emits and what this
+			 * loop's left-to-right stepdist chaining computes.  NEAR(a b c,k)
+			 * instead emits all terms first then the PHRASE ops (v1 v2 v3
+			 * PHRASE PHRASE), which the recheck stack machine evaluates
+			 * RIGHT-deep as phrase(v1,phrase(v2,v3)) -- a different match set.
+			 * A VAL pushed while >=2 operands are already pending is that
+			 * non-left-deep shape: bail to the (correct) recheck path.
+			 */
+			if (stack >= 2)
+				return false;
+			termidx[nt++] = (int) i;
+			stack++;
+		}
+		else if (it->type == FTS_QI_OPR && it->op == FTS_OP_PHRASE)
+		{
+			if (stack < 2)
+				return false;
+			/* step k joins term (nt-1) to its predecessor: record its distance */
+			stepdist[nt - 2] = it->distance;
+			stack--;			/* phrase collapses two operands to one */
+		}
+		else
+			return false;		/* any boolean op / other operator: not pure */
+	}
+	*nterms = nt;
+	return (stack == 1 && nt >= 2);
+}
+
+static int
+cmp_pospost_docid(const void *a, const void *b)
+{
+	uint64		da = ((const PosPosting *) a)->docid;
+	uint64		db = ((const PosPosting *) b)->docid;
+
+	return (da < db) ? -1 : (da > db) ? 1 : 0;
+}
+
+/*
+ * Look up one term in a segment and decode its postings WITH positions,
+ * docid-sorted.  Returns:
+ *   BM25_POSLOOKUP_OK      -- found, positions present (out is populated)
+ *   BM25_POSLOOKUP_ABSENT  -- term not in this segment (clean empty phrase)
+ *   BM25_POSLOOKUP_NOPOS   -- found but a block dropped positions (Sum(tf)
+ *                             overflowed a page): caller MUST fall back to the
+ *                             recheck path for correctness.
+ */
+typedef enum
+{
+	BM25_POSLOOKUP_OK = 0,
+	BM25_POSLOOKUP_ABSENT,
+	BM25_POSLOOKUP_NOPOS
+}			BM25PosLookup;
+
+static BM25PosLookup
+bm25_lookup_term_pos(Relation index, const BM25SegMeta *seg,
+					 const char *term, int termlen, PosTermList *out)
+{
+	BlockNumber blk = bm25_dict_seek(index, seg, term, termlen);
+	bool		onlyone = (seg->dictindexstart != InvalidBlockNumber);
+
+	out->posts = NULL;
+	out->nposts = 0;
+	out->raw = NULL;
+	out->arena = NULL;
+
+	while (blk != InvalidBlockNumber)
+	{
+		Buffer		buffer = ReadBuffer(index, blk);
+		Page		page;
+		char	   *ptr,
+				   *end;
+		BlockNumber firstposting = InvalidBlockNumber;
+		uint32		firstoffset = 0;
+		uint32		df = 0;
+		bool		found = false;
+
+		LockBuffer(buffer, BUFFER_LOCK_SHARE);
+		page = BufferGetPage(buffer);
+		ptr = (char *) PageGetContents(page);
+		end = (char *) page + ((PageHeader) page)->pd_lower;
+		while (ptr < end)
+		{
+			BM25DictEntry *de = (BM25DictEntry *) ptr;
+			Size		esize = MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
+
+			if ((int) de->termlen == termlen &&
+				memcmp(de->term, term, termlen) == 0)
+			{
+				firstposting = de->firstposting;
+				firstoffset = de->firstoffset;
+				df = de->df;
+				found = true;
+				break;
+			}
+			ptr += esize;
+		}
+		blk = BM25PageGetOpaque(page)->nextblk;
+		UnlockReleaseBuffer(buffer);
+
+		if (found)
+		{
+			BM25Posting *post;
+			uint32	   *arena = NULL;
+			int			np = bm25_decode_term(index, firstposting, firstoffset,
+											  df, &post, NULL, true, &arena);
+			PosPosting *pp = (PosPosting *) palloc(Max(np, 1) * sizeof(PosPosting));
+			int			k;
+
+			for (k = 0; k < np; k++)
+			{
+				if (post[k].pos == NULL && post[k].tf > 0)
+				{
+					/* a block dropped positions: cannot verify adjacency here */
+					pfree(pp);
+					pfree(post);
+					if (arena)
+						pfree(arena);
+					return BM25_POSLOOKUP_NOPOS;
+				}
+				pp[k].docid = bm25_tid_to_docid(&post[k].tid);
+				pp[k].pos = post[k].pos;
+				pp[k].npos = (int) post[k].tf;
+			}
+			if (np > 1)
+				qsort(pp, np, sizeof(PosPosting), cmp_pospost_docid);
+			out->posts = pp;
+			out->nposts = np;
+			out->raw = post;
+			out->arena = arena;
+			return BM25_POSLOOKUP_OK;
+		}
+		if (onlyone)
+			break;
+	}
+	return BM25_POSLOOKUP_ABSENT;	/* term absent in this segment */
+}
+
+static void
+bm25_free_posterm(PosTermList *pl)
+{
+	if (pl->posts)
+		pfree(pl->posts);
+	if (pl->raw)
+		pfree(pl->raw);
+	if (pl->arena)
+		pfree(pl->arena);
+	pl->posts = NULL;
+	pl->raw = NULL;
+	pl->arena = NULL;
+	pl->nposts = 0;
+}
+
+/* find the PosPosting for docid via binary search; NULL if absent */
+static PosPosting *
+bm25_pospost_find(PosTermList *pl, uint64 docid)
+{
+	int			lo = 0,
+				hi = pl->nposts - 1;
+
+	while (lo <= hi)
+	{
+		int			mid = (lo + hi) / 2;
+
+		if (pl->posts[mid].docid < docid)
+			lo = mid + 1;
+		else if (pl->posts[mid].docid > docid)
+			hi = mid - 1;
+		else
+			return &pl->posts[mid];
+	}
+	return NULL;
+}
+
+/*
+ * Evaluate a pure phrase chain positionally over one segment, appending exact
+ * matches to *out (a growable TidSet-like buffer).  Returns true on success;
+ * false means "fall back to recheck" (a term lacked positions).  seg_tombs/s
+ * are used to drop tombstoned docids from this segment's contribution.
+ */
+static bool
+bm25_phrase_eval_seg(Relation index, const BM25SegMeta *seg, FtsQuery q,
+					 const int *termidx, const uint32 *stepdist, int nterms,
+					 ItemPointerData **tids, int *ntids, int *captids)
+{
+	PosTermList *tl = (PosTermList *) palloc0(nterms * sizeof(PosTermList));
+	int			t;
+	int			base = -1;		/* index of the smallest-df (driving) term */
+	PosPosting *driver;
+	int			di;
+	bool		ok = true;
+	uint32	   *acc = (uint32 *) palloc(BM25_PHRASE_POSBUF * sizeof(uint32));
+	uint32	   *tmp = (uint32 *) palloc(BM25_PHRASE_POSBUF * sizeof(uint32));
+
+	for (t = 0; t < nterms; t++)
+	{
+		FtsQueryItem *it = &q->items[termidx[t]];
+		BM25PosLookup rc = bm25_lookup_term_pos(index, seg,
+												FTS_QUERY_ITEMTEXT(q, it),
+												it->termlen, &tl[t]);
+
+		if (rc == BM25_POSLOOKUP_NOPOS)
+		{
+			ok = false;			/* found but positions missing: fall back to recheck */
+			goto done;
+		}
+		if (rc == BM25_POSLOOKUP_ABSENT)
+			goto done;			/* term absent: phrase cannot match this segment */
+		if (base < 0 || tl[t].nposts < tl[base].nposts)
+			base = t;
+	}
+
+	/* drive the docid intersection from the smallest posting list */
+	driver = tl[base].posts;
+	for (di = 0; di < tl[base].nposts; di++)
+	{
+		uint64		docid = driver[di].docid;
+		PosPosting *pp[FTS_QUERY_MAX_PHRASE_TERMS];
+		bool		allpresent = true;
+		int			nacc;
+		ItemPointerData tid;
+
+		for (t = 0; t < nterms; t++)
+		{
+			pp[t] = (t == base) ? &driver[di] : bm25_pospost_find(&tl[t], docid);
+			if (pp[t] == NULL)
+			{
+				allpresent = false;
+				break;
+			}
+		}
+		if (!allpresent)
+			continue;
+
+		/* chain phrase_step across the terms: acc starts as term 0's positions */
+		if (pp[0]->npos > BM25_PHRASE_POSBUF)
+		{
+			ok = false;			/* pathological tf: fall back (bounded buffer) */
+			goto done;
+		}
+		memcpy(acc, pp[0]->pos, pp[0]->npos * sizeof(uint32));
+		nacc = pp[0]->npos;
+		for (t = 1; t < nterms && nacc > 0; t++)
+		{
+			int			nout = 0;
+
+			if (pp[t]->npos > BM25_PHRASE_POSBUF)
+			{
+				ok = false;
+				goto done;
+			}
+			fts_phrase_step_pos(acc, nacc, pp[t]->pos, pp[t]->npos,
+								stepdist[t - 1], tmp, &nout);
+			memcpy(acc, tmp, nout * sizeof(uint32));
+			nacc = nout;
+		}
+		if (nacc > 0)
+		{
+			bm25_docid_to_tid(docid, &tid);
+			if (*ntids >= *captids)
+			{
+				*captids = Max(*captids * 2, 16);
+				*tids = repalloc(*tids, (Size) *captids * sizeof(ItemPointerData));
+			}
+			(*tids)[(*ntids)++] = tid;
+		}
+	}
+
+done:
+	for (t = 0; t < nterms; t++)
+		bm25_free_posterm(&tl[t]);
+	pfree(tl);
+	pfree(acc);
+	pfree(tmp);
+	return ok;
+}
+
+/*
  * bm25_collect_matches: evaluate the scan's query across all segments + the
  * pending list; return matching TIDs (sorted, unique) and a *recheck flag
  * (true iff any term used the over-generating trigram funnel / regex / NOT-
@@ -1325,6 +1675,13 @@ bm25_collect_matches(Relation index, FtsQuery query, TidSet *out, bool *recheck)
 	bool		has_not = false;
 	bool		has_phrase = false;
 	bool		need_recheck = false;
+	bool		use_pos_phrase = false;	/* positional phrase fast path applies */
+	int			pterm[FTS_QUERY_MAX_PHRASE_TERMS];
+	uint32		pstep[FTS_QUERY_MAX_PHRASE_TERMS] = {0};
+	int			npterm = 0;
+	ItemPointerData *ptids = NULL;
+	int			nptids = 0;
+	int			captids = 0;
 	uint32		i;
 	uint32		s;
 
@@ -1350,6 +1707,20 @@ bm25_collect_matches(Relation index, FtsQuery query, TidSet *out, bool *recheck)
 		if (it->type == FTS_QI_VAL && (it->flags & (FTS_QF_FUZZY | FTS_QF_REGEX)))
 			has_fuzzy_regex = true;
 	}
+
+	/*
+	 * Positional phrase fast path: if the index carries token positions
+	 * (WITH positions=on) and the query is a pure phrase chain, evaluate it
+	 * DIRECTLY from the posting lists -- intersect on docid, verify adjacency
+	 * from the stored positions -- with NO heap access and need_recheck=false.
+	 * This is the cliff fix.  When positions are off, or the phrase mixes with
+	 * boolean operators, we keep the AND + heap-recheck path below (correct,
+	 * slower).
+	 */
+	if (has_phrase && !has_fuzzy_regex && !has_not &&
+		bm25_index_wants_positions(index) &&
+		bm25_phrase_chain(query, pterm, pstep, &npterm))
+		use_pos_phrase = true;
 
 	/*
 	 * Load per-segment tombstones once.  Each segment's match contribution is
@@ -1445,6 +1816,56 @@ bm25_collect_matches(Relation index, FtsQuery query, TidSet *out, bool *recheck)
 			universe.n = 0;
 		}
 
+		if (use_pos_phrase)
+		{
+			/* evaluate the phrase from this segment's positional postings; the
+			 * matched TIDs accumulate in ptids across segments, and are folded
+			 * into acc after the loop.  A false return means a term lacked
+			 * positions (a rare page-overflow block) -- abandon the fast path
+			 * and fall back to the AND + recheck path for correctness. */
+			int			seg_start = nptids;
+
+			if (ptids == NULL)
+			{
+				captids = 64;
+				ptids = (ItemPointerData *) palloc(captids * sizeof(ItemPointerData));
+			}
+			if (!bm25_phrase_eval_seg(index, sg, query, pterm, pstep, npterm,
+									  &ptids, &nptids, &captids))
+			{
+				/* fall back: restart collection from scratch via the AND path */
+				use_pos_phrase = false;
+				if (ptids)
+				{
+					pfree(ptids);
+					ptids = NULL;
+				}
+				nptids = 0;
+				if (acc.tids)
+				{
+					pfree(acc.tids);
+					acc.tids = NULL;
+				}
+				acc.n = 0;
+				s = (uint32) -1;	/* restart the segment loop (s++ -> 0) */
+				continue;
+			}
+			/* filter ONLY this segment's new hits (ptids[seg_start..nptids])
+			 * against THIS segment's tombstones -- they are docid-ascending (the
+			 * driver posting list is docid-sorted).  Prior segments' hits were
+			 * already filtered against their own maps. */
+			if (nptids > seg_start)
+			{
+				TidSet		phr;
+
+				phr.tids = ptids + seg_start;
+				phr.n = nptids - seg_start;
+				bm25_filter_tombstoned_seg(&seg_tombs, s, &phr);
+				nptids = seg_start + phr.n;
+			}
+			continue;
+		}
+
 		{
 			TidSet		result = bm25_eval_query(index,
 												 sg, query, universe);
@@ -1454,9 +1875,9 @@ bm25_collect_matches(Relation index, FtsQuery query, TidSet *out, bool *recheck)
 				bm25_filter_tombstoned_seg(&seg_tombs, s, &result);
 				if (result.n > 0)
 				{
-					/* PHRASE/NEAR is evaluated as AND here (the index has no
-					 * positions); the heap ftsdoc carries positions, so a
-					 * bitmap-heap recheck of @@@ enforces adjacency exactly. */
+					/* PHRASE/NEAR is evaluated as AND here (positions=off or a
+					 * non-pure-phrase query); the heap ftsdoc carries positions,
+					 * so a heap recheck of @@@ enforces adjacency exactly. */
 					if (has_phrase)
 						need_recheck = true;
 					acc = tidset_or(acc, result);
@@ -1464,6 +1885,22 @@ bm25_collect_matches(Relation index, FtsQuery query, TidSet *out, bool *recheck)
 			}
 		}
 	}
+
+	/* fold in the positional-phrase matches (already tombstone-filtered per
+	 * segment); need_recheck stays false -- the positions gave the exact set.
+	 * ptids is per-segment-ascending but not globally sorted (segments overlap
+	 * in docid range), so sort+uniq before the merge. */
+	if (use_pos_phrase && nptids > 0)
+	{
+		TidSet		phr;
+
+		phr.tids = ptids;
+		phr.n = nptids;
+		tidset_sort_uniq(&phr);
+		acc = tidset_or(acc, phr);
+	}
+	if (ptids)
+		pfree(ptids);
 
 	/* pending list: verbatim docs matched by the exact per-doc matcher.
 	 * Collect these separately from the segment matches: a pending doc is a
@@ -2030,9 +2467,12 @@ wand_load_block(WandCursor *c)
 	c->blk_min_dl = bh->min_doclen;
 	c->cur = 0;
 	c->docid = c->docids[0];
-	/* advance the resume pointer to the next block (or next page) */
+	/* advance the resume pointer to the next block (or next page).  Skip past
+	 * BOTH the three FOR columns (bytelen) and the trailing positions column
+	 * (posbytelen) -- the WAND scan never decodes positions, but it must step
+	 * over them to find the next block's header. */
 	{
-		char	   *nextp = (char *) MAXALIGN((char *) (bh + 1) + bh->bytelen);
+		char	   *nextp = (char *) MAXALIGN((char *) (bh + 1) + bh->bytelen + bh->posbytelen);
 
 		if (nextp + sizeof(BM25BlockHdr) <= pend &&
 			c->nread + cnt < (int) c->df)
@@ -2197,7 +2637,7 @@ wand_skip_blocks(WandCursor *c, uint64 target)
 				stopped = true;
 				break;
 			}
-			nextp = (char *) MAXALIGN((char *) (bh + 1) + bh->bytelen);
+			nextp = (char *) MAXALIGN((char *) (bh + 1) + bh->bytelen + bh->posbytelen);
 			/* can we prove this whole block is < target? need the next block's
 			 * first_docid (on this page) to be <= target. */
 			if (nextp + sizeof(BM25BlockHdr) <= pend)
