@@ -1,4 +1,4 @@
-/* pg_fts--0.3.0.sql */
+/* pg_fts--0.3.1.sql */
 
 -- complain if script is sourced in psql, rather than via CREATE EXTENSION
 \echo Use "CREATE EXTENSION pg_fts" to load this file. \quit
@@ -271,6 +271,27 @@ CREATE FUNCTION fts_search(index regclass, query ftsquery, k int DEFAULT 10,
 RETURNS SETOF record
 AS 'MODULE_PATHNAME', 'fts_search'
 LANGUAGE C STRICT PARALLEL SAFE;
+
+--
+-- Lexical anomaly detection: the top-k most anomalous documents in the index,
+-- i.e. those containing globally RARE terms.  A document's anomaly score is the
+-- max idf over its terms (driven by its single rarest term), idf being the same
+-- rarity value BM25 uses: log(1 + (N-df+0.5)/(df+0.5)) on the GLOBAL df.  It is
+-- cheap because only the LOW-df tail of the dictionary is walked -- common terms
+-- are skipped before any posting is decoded, so this is not a full-corpus scan.
+-- `max_df` caps which terms count as rare (only df <= max_df contribute); NULL
+-- defaults to max(N/1000, 1).  Returns the heap ctid, the score, the rarest term
+-- driving the doc, and that term's global df, ordered by score DESC limit k.
+-- The ctids are index-resident heap pointers (like fts_search); join back to
+-- the table and filter for visibility if needed.  Per-segment tombstones are
+-- honored so deleted docs are not reported.
+CREATE FUNCTION fts_anomalous_docs(index regclass, k int DEFAULT 100,
+                                   max_df int DEFAULT NULL,
+                                   OUT ctid tid, OUT score float8,
+                                   OUT rarest_term text, OUT min_df int)
+RETURNS SETOF record
+AS 'MODULE_PATHNAME', 'fts_anomalous_docs'
+LANGUAGE C PARALLEL SAFE;
 
 -- MVCC-correct count of documents matching a query, computed in bulk from the
 -- bm25 index (visibility via the visibility map, heap probed only for

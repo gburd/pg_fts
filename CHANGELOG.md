@@ -2,6 +2,52 @@
 
 All notable changes to pg_fts are documented here.
 
+## 0.3.1
+
+Additive feature release. **No on-disk format change** (read-only over the
+existing index) and no **REINDEX** required. `ALTER EXTENSION pg_fts UPDATE TO
+'0.3.1'`.
+
+- **Lexical anomaly detection: `fts_anomalous_docs(index, k, max_df)`.** A
+  set-returning function that surfaces the top-`k` most lexically-anomalous
+  documents in an fts index -- those containing globally **rare** terms. A
+  document's anomaly score is the maximum idf over its terms (driven by its
+  single rarest term), using the same rarity value BM25 uses:
+  `idf = log(1 + (N - df + 0.5)/(df + 0.5))` on the **global** df (a term's df
+  is summed across all segments before scoring, so a document split across two
+  segments is not made to look artificially rare). Returns
+  `(ctid tid, score float8, rarest_term text, min_df int)` ordered by score
+  DESC, limit `k`.
+  - **Cheap because it walks only the low-df tail.** The rarest terms have the
+    shortest posting lists, so the function walks the term dictionary and
+    **skips any term whose global df exceeds `max_df` before decoding a single
+    posting** -- the common, high-df bulk of the dictionary is never decoded.
+    On a 1M-document corpus with a handful of injected unique tokens, the query
+    returns those docs in **well under a millisecond** (measured 0.6 ms), not a
+    full-corpus scan. `max_df` defaults to `max(N/1000, 1)` when NULL, keeping
+    the walk on the low-df tail.
+  - The returned ctids are index-resident heap pointers (like `fts_search`);
+    this is an analytic/heuristic result, so no per-doc heap visibility check is
+    done -- join `ctid` back to the table and filter for visibility if needed.
+    Per-segment tombstones are honored, so deleted documents are not reported as
+    anomalies.
+  - Lexical only: it catches rare/novel *wording and tokens*, not semantic
+    novelty (see `bench/NOTE_ANOMALY_DETECTION.md`). Bench harness in
+    `bench/anomaly.sql`.
+- **Fixed `ftsdoc` text I/O round-trip (Codeberg #3).** `ftsdoc_out` emitted the
+  canonical `'term':tf` form but `ftsdoc_in` re-tokenized that string as raw
+  text, so `ftsdoc_in(ftsdoc_out(x)) != x` -- text `COPY`/`pg_dump --inserts` of
+  stored `ftsdoc` columns corrupted the data. `ftsdoc_in` now parses the
+  canonical grammar `'term':tf[@p1,p2,...]` (falling back to raw-text analysis
+  for the ergonomic `'the quick brown fox'::ftsdoc` cast), and `ftsdoc_out`,
+  `ftsdoc_send`/`ftsdoc_recv` now carry per-token **positions** so both text and
+  binary I/O are faithful, position-preserving round-trips. Input is validated
+  at the trust boundary (ascending/distinct terms, `tf>=1`, ascending positions,
+  `tf` positions per term; corrupt binary bounded before palloc). The `ftsdoc`
+  binary wire version bumped 2 -> 3; `ftsdoc_recv` still **accepts v2** so a
+  `pg_dump -Fc` taken under an older pg_fts restores cleanly (v2 docs are
+  position-free). No on-disk index format change.
+
 ## 0.3.0
 
 Feature release with an **on-disk index format change (BM25 v2 -> v3)**. Existing

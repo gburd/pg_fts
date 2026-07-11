@@ -32,7 +32,7 @@
  * A varlena holding a sorted, de-duplicated array of terms.  Each term entry
  * records its term frequency (tf) and, after the entry array, the term text.
  *
- * Format version 2 optionally stores per-term token positions (needed for
+ * Format version 3 optionally stores per-term token positions (needed for
  * phrase and NEAR queries).  When the FTS_DOCF_POSITIONS flag is set, a
  * positions region of uint32 values follows the lexemes; each term entry's
  * posoff/tf delimit that term's positions (tf positions starting at posoff,
@@ -56,7 +56,7 @@ typedef struct FtsTermEntry
 typedef struct FtsDocData
 {
 	int32		vl_len_;		/* varlena header (do not touch directly!) */
-	uint16		version;		/* format version, currently 2 */
+	uint16		version;		/* format version, currently 3 */
 	uint16		flags;			/* FTS_DOCF_* */
 	uint32		nterms;			/* number of distinct terms */
 	uint32		doclen;			/* total token count (sum of tf); needed by BM25 */
@@ -66,7 +66,7 @@ typedef struct FtsDocData
 
 typedef FtsDocData *FtsDoc;
 
-#define FTS_DOC_VERSION			2
+#define FTS_DOC_VERSION			3	/* wire format; v3 carries positions */
 #define FTS_DOCF_POSITIONS		0x0001	/* positions[] region is present */
 #define FTS_DOC_HAS_POS(d)		(((d)->flags & FTS_DOCF_POSITIONS) != 0)
 #define FTS_DOC_HDRSIZE			offsetof(FtsDocData, entries)

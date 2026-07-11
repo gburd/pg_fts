@@ -2276,6 +2276,7 @@ fts_index_df(PG_FUNCTION_ARGS)
 
 #include "funcapi.h"
 #include "access/htup_details.h"
+#include "utils/builtins.h"
 
 /*
  * fts_search(index regclass, query ftsquery, k int)
@@ -3763,6 +3764,366 @@ fts_search(PG_FUNCTION_ARGS)
 		*tidcopy = results[funcctx->call_cntr].tid;
 		values[0] = PointerGetDatum(tidcopy);
 		values[1] = Float8GetDatum(results[funcctx->call_cntr].score);
+		tuple = heap_form_tuple(funcctx->tuple_desc, values, nulls);
+		SRF_RETURN_NEXT(funcctx, HeapTupleGetDatum(tuple));
+	}
+	SRF_RETURN_DONE(funcctx);
+}
+
+/* ----- lexical anomaly detection: rare-term (low-df) dictionary tail ----- */
+
+/* term-df hash key width; matches the build side's BM25_TERMKEYLEN ceiling */
+#define BM25_ANOM_TERMKEYLEN 64
+
+/*
+ * fts_anomalous_docs(index regclass, k int, max_df int)
+ *   -> setof (ctid tid, score float8, rarest_term text, min_df int)
+ *
+ * Surface the top-k most lexically-anomalous documents: those containing
+ * globally rare terms.  A document's anomaly score is the MAX idf over its
+ * terms -- i.e. it is driven by the document's single rarest term.  Because the
+ * rarest terms have the SHORTEST posting lists, this is answered by walking the
+ * LOW-df tail of the dictionary and emitting those few documents; the vast bulk
+ * of the dictionary (common, high-df terms) is skipped before any posting is
+ * decoded, so it is cheap and NOT a full-corpus scan.
+ *
+ * idf = log(1 + (N - df + 0.5)/(df + 0.5)), the same rarity value BM25 uses.
+ * `df` is the GLOBAL document frequency: a term is summed across all segments
+ * (segments share one corpus) before its idf is computed, so a doc split across
+ * two segments is not made to look artificially rare.
+ *
+ * `max_df` caps which terms count as "rare": only terms with global df <=
+ * max_df contribute.  When NULL (-1 from the strict SQL wrapper's default) it
+ * defaults to max(N/1000, 1) -- a small fraction of the corpus, keeping the
+ * walk on the low-df tail.
+ *
+ * MVCC: the returned ctids are index-resident heap pointers (like fts_search);
+ * this is an analytic/heuristic result, not a query result, so no per-doc heap
+ * visibility check is done -- the caller should join ctid back to the table and
+ * filter for visibility if needed.  Per-segment tombstones ARE honored so
+ * deleted docs are not reported as anomalies.
+ */
+
+/* term -> summed-across-segments df; key is the NUL-terminated term text.
+ * ponytail: a term longer than BM25_ANOM_TERMKEYLEN-1 is truncated for the df
+ * key (same ceiling the build side takes at 64); two such terms sharing that
+ * prefix would share a df bucket -> slightly conservative rarity.  Widen the
+ * key or chain (like add_posting) if long distinct tokens must rank exactly. */
+typedef struct AnomTermDf
+{
+	char		term[BM25_ANOM_TERMKEYLEN]; /* dynahash string key */
+	uint32		gdf;
+} AnomTermDf;
+
+/* per-document running max: its best (rarest) term's idf and that term's df */
+typedef struct AnomDoc
+{
+	uint64		docid;			/* dynahash blob key */
+	double		score;			/* best idf seen for this doc */
+	uint32		min_df;			/* the driving term's global df */
+	char	   *rarest_term;	/* palloc'd copy of the driving term */
+	int			rarest_len;
+}			AnomDoc;
+
+typedef struct AnomResult
+{
+	ItemPointerData tid;
+	double		score;
+	char	   *rarest_term;
+	int			rarest_len;
+	int32		min_df;
+}			AnomResult;
+
+static int
+cmp_anom_desc(const void *a, const void *b)
+{
+	double		sa = ((const AnomResult *) a)->score;
+	double		sb = ((const AnomResult *) b)->score;
+
+	if (sa < sb)
+		return 1;
+	if (sa > sb)
+		return -1;
+	return 0;
+}
+
+PG_FUNCTION_INFO_V1(fts_anomalous_docs);
+
+Datum
+fts_anomalous_docs(PG_FUNCTION_ARGS)
+{
+	FuncCallContext *funcctx;
+	AnomResult *results;
+
+	if (SRF_IS_FIRSTCALL())
+	{
+		Oid			indexoid;
+		int			k = PG_ARGISNULL(1) ? 100 : PG_GETARG_INT32(1);
+		/* max_df NULL -> auto (small fraction of N); the func is non-STRICT so a
+		 * NULL default reaches C rather than short-circuiting to no rows */
+		bool		max_df_null = PG_ARGISNULL(2);
+		int			max_df_arg = max_df_null ? -1 : PG_GETARG_INT32(2);
+		MemoryContext oldctx;
+		Relation	index;
+		BM25MetaPageData meta;
+		BM25Tombstones tombs;
+		TupleDesc	tupdesc;
+		HTAB	   *dfht;		/* term -> global df */
+		HTAB	   *docht;		/* docid -> AnomDoc */
+		HASHCTL		ctl;
+		double		N;
+		int			max_df;
+		uint32		s;
+		HASH_SEQ_STATUS seq;
+		AnomDoc    *dslot;
+		int			ndocs_found;
+		int			nout;
+
+		funcctx = SRF_FIRSTCALL_INIT();
+		oldctx = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
+
+		if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+			elog(ERROR, "return type must be a row type");
+		funcctx->tuple_desc = BlessTupleDesc(tupdesc);
+
+		if (PG_ARGISNULL(0))
+			ereport(ERROR,
+					(errcode(ERRCODE_NULL_VALUE_NOT_ALLOWED),
+					 errmsg("index argument must not be null")));
+		indexoid = PG_GETARG_OID(0);
+
+		if (k <= 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("k must be positive")));
+
+		index = index_open(indexoid, AccessShareLock);
+		if (index->rd_rel->relam != get_index_am_oid("fts", true))
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					 errmsg("\"%s\" is not an fts index",
+							RelationGetRelationName(index))));
+		bm25_read_meta(index, &meta);
+		N = meta.ndocs;
+
+		/* effective max_df: arg, else a small fraction of N (floor 1) */
+		if (!max_df_null && max_df_arg >= 0)
+			max_df = max_df_arg;
+		else
+			max_df = Max((int) (N / 1000.0), 1);
+
+		/* empty index (or nothing to rank): return no rows */
+		if (N <= 0 || meta.nsegments == 0)
+		{
+			index_close(index, AccessShareLock);
+			funcctx->max_calls = 0;
+			MemoryContextSwitchTo(oldctx);
+			funcctx = SRF_PERCALL_SETUP();
+			SRF_RETURN_DONE(funcctx);
+		}
+
+		bm25_tombstones_load(index, &meta, &tombs);
+
+		/*
+		 * Pass 1 -- walk every segment's DICTIONARY (no postings decoded) and
+		 * sum df per distinct term text into dfht.  This is cheap: dict pages
+		 * only, one entry per distinct term.  It gives the true global df so a
+		 * term appearing in several segments is not mistaken for rarer than it
+		 * is.
+		 */
+		MemSet(&ctl, 0, sizeof(ctl));
+		ctl.keysize = BM25_ANOM_TERMKEYLEN;
+		ctl.entrysize = sizeof(AnomTermDf);
+		ctl.hcxt = CurrentMemoryContext;
+		dfht = hash_create("fts anomaly term df", 4096, &ctl,
+						   HASH_ELEM | HASH_STRINGS | HASH_CONTEXT);
+
+		for (s = 0; s < meta.nsegments; s++)
+		{
+			BlockNumber blk = meta.segs[s].dictstart;
+
+			while (blk != InvalidBlockNumber)
+			{
+				Buffer		buffer = ReadBuffer(index, blk);
+				Page		page;
+				char	   *ptr,
+						   *end;
+				BlockNumber next;
+
+				LockBuffer(buffer, BUFFER_LOCK_SHARE);
+				page = BufferGetPage(buffer);
+				ptr = (char *) PageGetContents(page);
+				end = (char *) page + ((PageHeader) page)->pd_lower;
+				next = BM25PageGetOpaque(page)->nextblk;
+
+				while (ptr < end)
+				{
+					BM25DictEntry *de = (BM25DictEntry *) ptr;
+					Size		esize = MAXALIGN(offsetof(BM25DictEntry, term) +
+												 de->termlen);
+					char		key[BM25_ANOM_TERMKEYLEN];
+					int			klen = Min((int) de->termlen,
+										   BM25_ANOM_TERMKEYLEN - 1);
+					AnomTermDf *te;
+					bool		found;
+
+					memcpy(key, de->term, klen);
+					key[klen] = '\0';
+					te = (AnomTermDf *) hash_search(dfht, key, HASH_ENTER,
+													&found);
+					if (!found)
+						te->gdf = 0;
+					te->gdf += de->df;
+					ptr += esize;
+				}
+				UnlockReleaseBuffer(buffer);
+				blk = next;
+			}
+		}
+
+		/*
+		 * Pass 2 -- walk the dicts again; for terms whose GLOBAL df <= max_df
+		 * (the rare tail only), decode their (few) postings and keep, per
+		 * document, the maximum idf seen (the doc's rarest term).  Common terms
+		 * are skipped BEFORE any posting decode -- this is the cheap-tail
+		 * filter that keeps the whole thing off a full-corpus scan.
+		 */
+		MemSet(&ctl, 0, sizeof(ctl));
+		ctl.keysize = sizeof(uint64);
+		ctl.entrysize = sizeof(AnomDoc);
+		ctl.hcxt = CurrentMemoryContext;
+		docht = hash_create("fts anomaly docs", 4096, &ctl,
+							HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+
+		for (s = 0; s < meta.nsegments; s++)
+		{
+			BlockNumber blk = meta.segs[s].dictstart;
+
+			while (blk != InvalidBlockNumber)
+			{
+				Buffer		buffer = ReadBuffer(index, blk);
+				Page		page;
+				char	   *ptr,
+						   *end;
+				BlockNumber next;
+
+				LockBuffer(buffer, BUFFER_LOCK_SHARE);
+				page = BufferGetPage(buffer);
+				ptr = (char *) PageGetContents(page);
+				end = (char *) page + ((PageHeader) page)->pd_lower;
+				next = BM25PageGetOpaque(page)->nextblk;
+
+				while (ptr < end)
+				{
+					BM25DictEntry *de = (BM25DictEntry *) ptr;
+					Size		esize = MAXALIGN(offsetof(BM25DictEntry, term) +
+												 de->termlen);
+					char		key[BM25_ANOM_TERMKEYLEN];
+					int			klen = Min((int) de->termlen,
+										   BM25_ANOM_TERMKEYLEN - 1);
+					AnomTermDf *te;
+					uint32		gdf;
+					double		idf;
+					BM25Posting *post;
+					int			np,
+								j;
+
+					memcpy(key, de->term, klen);
+					key[klen] = '\0';
+					te = (AnomTermDf *) hash_search(dfht, key, HASH_FIND, NULL);
+					gdf = te ? te->gdf : de->df;
+
+					/* THE cheap-tail filter: skip common terms before decode */
+					if (gdf == 0 || (int) gdf > max_df)
+					{
+						ptr += esize;
+						continue;
+					}
+
+					idf = log(1.0 + (N - (double) gdf + 0.5) /
+							  ((double) gdf + 0.5));
+
+					np = bm25_decode_term(index, de->firstposting,
+										  de->firstoffset, de->df,
+										  &post, NULL, false, NULL);
+					for (j = 0; j < np; j++)
+					{
+						uint64		docid = bm25_tid_to_docid(&post[j].tid);
+						AnomDoc    *doc;
+						bool		found;
+
+						/* skip docs tombstoned in THIS segment */
+						if (tombs.hasany && tombs.present[s] &&
+							sm_contains(&tombs.maps[s], docid, NULL))
+							continue;
+
+						doc = (AnomDoc *) hash_search(docht, &docid, HASH_ENTER,
+													  &found);
+						if (!found || idf > doc->score)
+						{
+							if (!found)
+								doc->docid = docid;
+							doc->score = idf;
+							doc->min_df = gdf;
+							doc->rarest_term = (char *) palloc(de->termlen + 1);
+							memcpy(doc->rarest_term, de->term, de->termlen);
+							doc->rarest_term[de->termlen] = '\0';
+							doc->rarest_len = de->termlen;
+						}
+					}
+					pfree(post);
+					ptr += esize;
+				}
+				UnlockReleaseBuffer(buffer);
+				blk = next;
+			}
+		}
+
+		bm25_tombstones_free(&tombs);
+		index_close(index, AccessShareLock);
+
+		/* collect the rare-tail doc set and take the top-k by score */
+		ndocs_found = (int) hash_get_num_entries(docht);
+		results = (AnomResult *) palloc(Max(ndocs_found, 1) *
+										sizeof(AnomResult));
+		nout = 0;
+		hash_seq_init(&seq, docht);
+		while ((dslot = (AnomDoc *) hash_seq_search(&seq)) != NULL)
+		{
+			bm25_docid_to_tid(dslot->docid, &results[nout].tid);
+			results[nout].score = dslot->score;
+			results[nout].min_df = (int32) dslot->min_df;
+			results[nout].rarest_term = dslot->rarest_term;
+			results[nout].rarest_len = dslot->rarest_len;
+			nout++;
+		}
+
+		qsort(results, nout, sizeof(AnomResult), cmp_anom_desc);
+		if (nout > k)
+			nout = k;
+
+		funcctx->max_calls = nout;
+		funcctx->user_fctx = results;
+		MemoryContextSwitchTo(oldctx);
+	}
+
+	funcctx = SRF_PERCALL_SETUP();
+	results = (AnomResult *) funcctx->user_fctx;
+
+	if (funcctx->call_cntr < funcctx->max_calls)
+	{
+		AnomResult *r = &results[funcctx->call_cntr];
+		Datum		values[4];
+		bool		nulls[4] = {false, false, false, false};
+		HeapTuple	tuple;
+		ItemPointer tidcopy = palloc(sizeof(ItemPointerData));
+
+		*tidcopy = r->tid;
+		values[0] = PointerGetDatum(tidcopy);
+		values[1] = Float8GetDatum(r->score);
+		values[2] = PointerGetDatum(cstring_to_text_with_len(r->rarest_term,
+															 r->rarest_len));
+		values[3] = Int32GetDatum(r->min_df);
 		tuple = heap_form_tuple(funcctx->tuple_desc, values, nulls);
 		SRF_RETURN_NEXT(funcctx, HeapTupleGetDatum(tuple));
 	}

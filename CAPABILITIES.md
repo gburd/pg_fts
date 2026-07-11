@@ -22,6 +22,7 @@ citations are to the tree this document was generated against. All
 | Ranked (`<=>`) over fuzzy/prefix/regex returns a correct **subset** | Partial | the ranked WAND path builds cursors from the literal term, so docs matching only via an expansion aren't ranked; results are always correct (never a non-match) but may be incomplete. Use `@@@` for exhaustive fuzzy/prefix/regex retrieval. PHRASE/NEAR/boolean ranking is exact (`bm25_recheck_exact`, `pg_fts_am_scan.c`) |
 | Highlight / snippet | Yes | `fts_highlight`, `fts_snippet` `pg_fts--1.4--1.5.sql:6,13` |
 | Fast bulk count (`fts_count(regclass, ftsquery)`) | Yes | `pg_fts--1.18--1.19.sql:9`; visibility-map-aware, heap probed only for not-all-visible pages |
+| Lexical anomaly detection (`fts_anomalous_docs(index, k, max_df)`) | Yes | top-k docs containing globally rare terms, scored by max idf on global df; walks only the low-df dictionary tail (skips high-df terms before decode -> sub-ms, not a full scan) `pg_fts_am_scan.c`; `pg_fts--0.3.0--0.3.1.sql`; tombstones honored |
 | MVCC-correct deletes (tombstones) | Yes | `bm25_bulkdelete` per-segment livedocs tombstone bitmap `pg_fts_am.c:1843-1853`; scans/counts subtract, merge drops |
 | Oversized-document handling | Yes | `bm25_insert_oversized_as_segment` one-doc segment (no per-doc size cap) `pg_fts_am.c:1521,1552-1560` |
 | WAL-logged / crash-safe / physical-replication safe | Yes | every page write via GenericXLog (14 `GenericXLogStart` cycles: 12 in `pg_fts_am.c`, 2 in `pg_fts_trgm_index.c`); no raw `XLogInsert`/`log_newpage`/`MarkBufferDirty`/`PageSetLSN`/`smgrwrite` anywhere (grep: 0 matches); header `pg_fts_am.c:26-28` |
@@ -38,7 +39,9 @@ citations are to the tree this document was generated against. All
 | Faceting / aggregation Custom Scan pushdown | No | none in tree; only `fts_count` count-pushdown exists |
 | Impact-ordered postings | No | postings are docid-ordered (block-max WAND); listed as future work, README lines 62-64 |
 | Storage AIO / read_stream prefetch | No (build heap scan gets core AIO free) | 0 `read_stream`/`StartReadBuffers` sites; `nextblk` pointer-chains defeat prefetch; see Q6 |
-| pg_repack of the table | N/A (table-level tool) | see Q3 — pg_fts offers VACUUM+`fts_merge()` and REINDEX for in-place compaction |
+| `REPACK <table>` command (PG19) — plain + `(CONCURRENTLY)` | Yes | REPACK (renamed CLUSTER + new concurrent mode) rewrites the *heap* and rebuilds the bm25 index via the standard REINDEX path (`repack.c:515`); pg_fts's `ambuild`/`aminsert` handle it like `VACUUM FULL`/CIC. CONCURRENTLY replays concurrent writes via logical decoding + core WAL (pg_fts is fully GenericXLog-logged). see Q3 |
+| `REPACK <table> USING INDEX <bm25>` (PG19) | No (correctly rejected) | orders the heap *by* an index; `check_index_is_clusterable` (`repack.c:800`) errors on `amclusterable=false`. BM25 order is query-dependent, so this is semantically inapplicable — clean error, not a gap. |
+| pg_repack **extension** of the table | N/A (table-level tool) | see Q3 — pg_fts offers VACUUM+`fts_merge()` and REINDEX for in-place compaction |
 
 ---
 
@@ -85,8 +88,17 @@ MVCC-correct bulk-count primitive. Callers wanting a fast count must call
 
 ### 3. REPACK / pg_repack / in-place compaction
 
-**pg_repack does not apply to an index AM** — it rewrites the *table*, which is
-orthogonal to `fts`. What pg_fts offers for compaction:
+**Two different things share the name.** (a) The PG19 in-core **`REPACK` command**
+(renamed `CLUSTER` + a new `CONCURRENTLY` mode) rewrites the *table* and then
+rebuilds every index via the standard REINDEX path (`repack.c:515`) — pg_fts is
+rebuilt correctly by it, exactly as by `VACUUM FULL` (plain and CONCURRENT both
+work; the `USING INDEX <bm25>` form is rejected because `amclusterable=false`,
+which is correct — BM25 order is query-dependent). Note: `REPACK ... CONCURRENTLY`'s
+logical-decoding replay is a newer path than CIC and is not yet empirically
+exercised in the isolation suite (PG19 isn't in the local test matrix) — the
+code properties are all satisfied, but an isolation test is a good future add.
+(b) The **`pg_repack` extension** rewrites the *table* too and is orthogonal to
+`fts`. Either way, for compacting the *index itself* pg_fts offers:
 
 - **VACUUM + `fts_merge()`** — the size-tiered segment merge. VACUUM's
   `amvacuumcleanup` folds pending docs into a segment and merges;

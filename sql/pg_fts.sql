@@ -1,4 +1,4 @@
-CREATE EXTENSION pg_fts VERSION '0.3.0';
+CREATE EXTENSION pg_fts VERSION '0.3.1';
 
 -- ftsdoc: analysis, output shows terms with term frequencies
 SELECT to_ftsdoc('The quick brown fox, the QUICK fox!');
@@ -469,6 +469,55 @@ FROM fts_search('lazy_bm25', 'term'::ftsquery, 1) r JOIN lazy l ON l.ctid = r.ct
 SELECT count(*) AS matched
 FROM fts_search('lazy_bm25', 'term'::ftsquery, 5000) r JOIN lazy l ON l.ctid = r.ctid;
 DROP TABLE lazy;
+
+-- Lexical anomaly detection (fts_anomalous_docs): the rare-token (low-df) tail.
+-- Corpus of 500 common-word docs, plus 3 docs each carrying a unique 'zqxjkN'
+-- token.  The 3 injected docs are the only lexically-anomalous ones.
+CREATE TABLE anom (id serial, d ftsdoc);
+INSERT INTO anom (d) SELECT to_ftsdoc('the common ordinary boilerplate text')
+FROM generate_series(1, 500);
+INSERT INTO anom (d) VALUES
+  (to_ftsdoc('the common text zqxjk1')),
+  (to_ftsdoc('ordinary boilerplate zqxjk2')),
+  (to_ftsdoc('common text zqxjk3'));
+CREATE INDEX anom_bm25 ON anom USING fts (d);
+-- top-3 anomalies are exactly the 3 injected docs, and rarest_term is the token
+SELECT a.id, a.d::text AS doc, r.rarest_term, r.min_df
+FROM fts_anomalous_docs('anom_bm25', 3) r
+JOIN anom a ON a.ctid = r.ctid
+ORDER BY r.score DESC, a.id;
+-- their scores are the highest in the corpus (a common-only doc scores lower):
+-- the min anomaly score of the 3 injected docs exceeds any other doc's score
+SELECT bool_and(inj.score > others.maxscore) AS injected_lead
+FROM (SELECT min(r.score) AS score
+      FROM fts_anomalous_docs('anom_bm25', 3) r) inj,
+     (SELECT coalesce(max(r.score), 0) AS maxscore
+      FROM fts_anomalous_docs('anom_bm25', 1000) r
+      WHERE r.rarest_term NOT LIKE 'zqxjk%') others;
+-- every zqxjk token has df=1 (unique), so min_df is 1 for the injected docs
+SELECT count(*) AS df1_hits
+FROM fts_anomalous_docs('anom_bm25', 3) r
+WHERE r.rarest_term LIKE 'zqxjk%' AND r.min_df = 1;
+-- k limits the result set
+SELECT count(*) AS topk_count
+FROM fts_anomalous_docs('anom_bm25', 2) r;
+-- max_df filter: with max_df=0 no term qualifies as rare -> no rows
+SELECT count(*) AS none_when_maxdf_0
+FROM fts_anomalous_docs('anom_bm25', 100, 0) r;
+-- max_df=1 admits only the unique tokens -> exactly the 3 injected docs
+SELECT count(*) AS three_when_maxdf_1
+FROM fts_anomalous_docs('anom_bm25', 100, 1) r;
+-- a common-only doc is never flagged (all its terms are high-df)
+SELECT count(*) AS common_flagged
+FROM fts_anomalous_docs('anom_bm25', 100, 1) r
+JOIN anom a ON a.ctid = r.ctid
+WHERE a.d::text = 'the common ordinary boilerplate text';
+DROP TABLE anom;
+-- empty index returns no rows
+CREATE TABLE anom_empty (id serial, d ftsdoc);
+CREATE INDEX anom_empty_bm25 ON anom_empty USING fts (d);
+SELECT count(*) AS empty_rows FROM fts_anomalous_docs('anom_empty_bm25', 10);
+DROP TABLE anom_empty;
 
 -- NEAR(a b, k): proximity within k tokens.
 -- 'quick ... fox' are 3 tokens apart in 'the quick brown red fox'
@@ -1140,3 +1189,52 @@ WHERE NOT (x.d @@@ 'alpha & !beta'::ftsquery);         -- 0
 RESET enable_seqscan; RESET enable_bitmapscan;
 DROP FUNCTION _rank_miss(text,int);
 DROP TABLE rankparity;
+
+-- ============================================================
+-- ftsdoc I/O faithful round-trip (Codeberg #3).
+--
+--   ftsdoc_in(ftsdoc_out(x))    = x   (text)
+--   ftsdoc_recv(ftsdoc_send(x)) = x   (binary, via COPY ... WITH (FORMAT binary))
+--
+-- ftsdoc has no '=' operator, so equality is byte-identity of the binary form:
+-- ftsdoc_send now encodes version+nterms+doclen+has_pos+terms+tf+positions, so
+-- equal send() output <=> semantically equal document (terms, tf AND positions).
+-- Each property yields a single boolean sentinel; both must be t.
+-- ============================================================
+CREATE TEMP TABLE rt (id int, d ftsdoc);
+INSERT INTO rt VALUES
+  (1, to_ftsdoc('The quick brown fox, the QUICK fox!')),  -- positions, tf>1, multi-pos
+  (2, to_ftsdoc('')),                                      -- empty (nterms=0)
+  (3, to_ftsdoc('single')),                                -- one term
+  (4, to_ftsdoc('a a a b')),                               -- repeats -> tf 3 with 3 positions
+  (5, $$'br\'o\\wn':1@3 'f:o@x':2@4,7$$::ftsdoc),          -- escaped ' and \, literal : @ in lexeme
+  (6, $$'caf\u00e9':1@1$$::ftsdoc),                        -- unicode-ish lexeme (bytes preserved)
+  (7, $$'x':2@1,4 'y':1@9$$::ftsdoc);                      -- distinct terms, gaps in positions
+
+-- text round-trip: parse of the canonical rendering equals the original.
+SELECT bool_and(ftsdoc_send(ftsdoc_out(d)::text::ftsdoc) = ftsdoc_send(d)) AS text_roundtrip_ok
+FROM rt;
+
+-- binary round-trip: send then recv (COPY binary) equals the original.
+COPY rt TO '/tmp/pg_fts_rt.bin' WITH (FORMAT binary);
+CREATE TEMP TABLE rt2 (id int, d ftsdoc);
+COPY rt2 FROM '/tmp/pg_fts_rt.bin' WITH (FORMAT binary);
+SELECT bool_and(ftsdoc_send(a.d) = ftsdoc_send(b.d)) AS binary_roundtrip_ok
+FROM rt a JOIN rt2 b USING (id);
+
+-- the bare-string cast must still tokenize (not be parsed as canonical).
+SELECT ftsdoc_out('the quick brown fox'::ftsdoc) AS bare_cast_still_analyzes;
+
+-- malformed canonical input is rejected cleanly (no crash).  Detection rule:
+-- input is canonical once a first complete 'term':tf token parses; a later
+-- malformation is then a hard error (trust boundary).  Input that never
+-- completes one token is treated as raw text instead (the bare-string cast),
+-- so each case below carries a valid leading token to force the error path.
+SELECT $$'ok':1 'unterminated:1$$::ftsdoc;             -- ERROR: unterminated quoted term
+SELECT $$'ok':1 'a':0$$::ftsdoc;                       -- ERROR: tf must be >= 1
+SELECT $$'b':1@2 'a':1@1$$::ftsdoc;                    -- ERROR: terms not sorted
+SELECT $$'a':2@5,5$$::ftsdoc;                          -- ERROR: positions not ascending
+SELECT $$'a':2@1$$::ftsdoc;                            -- ERROR: fewer positions than tf
+
+DROP TABLE rt2;
+DROP TABLE rt;
