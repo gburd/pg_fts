@@ -155,6 +155,7 @@ typedef FtsQueryData *FtsQuery;
 
 /* pg_fts_analyze.c -- the built-in stage-1 tokenizer */
 extern FtsDoc fts_analyze_text(const char *str, int len);
+extern char *fold_token(const char *src, int len, int *outlen);
 
 /* pg_fts_tsanalyze.c -- analyzer reusing an installed TS configuration */
 extern FtsDoc fts_analyze_with_config(Oid cfgId, const char *str, int len);

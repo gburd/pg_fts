@@ -24,6 +24,8 @@
 #include "postgres.h"
 
 #include "pg_fts.h"
+#include "common/unicode_case.h"
+#include "mb/pg_wchar.h"
 #include "utils/builtins.h"
 
 PG_MODULE_MAGIC;
@@ -37,9 +39,8 @@ typedef struct RawTerm
 } RawTerm;
 
 /*
- * Case-fold a single ASCII byte.  Non-ASCII bytes are passed through
- * unchanged, so UTF-8 multibyte sequences survive intact (proper Unicode
- * case-folding arrives with the tsearch-backed analyzer stage).
+ * Case-fold a single ASCII byte.  This is the fast path used by fold_token()
+ * for ASCII-only tokens; non-ASCII tokens go through Unicode lowercasing.
  */
 static inline char
 fold_ascii(unsigned char c)
@@ -59,6 +60,78 @@ is_token_byte(unsigned char c)
 	return (c >= 'a' && c <= 'z') ||
 		(c >= 'A' && c <= 'Z') ||
 		(c >= '0' && c <= '9');
+}
+
+/*
+ * An ASCII-only token takes the length-preserving byte fast path.  In a UTF-8
+ * database, a token containing any byte >= 0x80 is lowercased per Unicode code
+ * point via unicode_lowercase_simple(), so 'E'+U+0301 style caseful pairs like
+ * 'É'/'é' fold together and a query for one matches the other.
+ *
+ * *outlen - receives the folded byte length.
+ */
+char *
+fold_token(const char *src, int len, int *outlen)
+{
+	char	   *dst = (char *) palloc(Max(len, 1));
+	char	   *out;
+	const unsigned char *srcp;
+	const unsigned char *srcend;
+	int			i = 0;
+
+	/*
+	 * Fast path: fold ASCII bytes in a single pass, stopping at the first
+	 * non-ASCII byte.  ASCII case-folding equals Unicode lowercasing for those
+	 * bytes, so a prefix folded here stays correct even if we fall through to
+	 * the Unicode path.
+	 */
+	while (i < len && (unsigned char) src[i] < 0x80)
+	{
+		dst[i] = fold_ascii((unsigned char) src[i]);
+		i++;
+	}
+	if (i == len)
+	{
+		*outlen = len;			/* pure ASCII: one pass, exact-sized buffer */
+		return dst;
+	}
+
+	if (GetDatabaseEncoding() != PG_UTF8)
+	{
+		/*
+		 * Non-UTF-8: a byte >= 0x80 is not a UTF-8 code point, so keep the
+		 * ASCII-only behavior (such bytes pass through unchanged).  Folding is
+		 * length-preserving, so the len-sized buffer still suffices.
+		 */
+		for (; i < len; i++)
+			dst[i] = fold_ascii((unsigned char) src[i]);
+		*outlen = len;
+		return dst;
+	}
+
+	/*
+	 * UTF-8: lowercase the remaining code points.  The folded length can now
+	 * differ from len, so grow the buffer to the worst case (each code point's
+	 * simple lowercase is a single code point, at most 4 UTF-8 bytes); the
+	 * already-folded ASCII prefix is preserved by repalloc.
+	 */
+	dst = (char *) repalloc(dst, (Size) len * 4 + 1);
+	out = dst + i;
+	srcp = (const unsigned char *) src + i;
+	srcend = (const unsigned char *) src + len;
+	while (srcp < srcend)
+	{
+		int			clen = pg_utf_mblen(srcp);
+		pg_wchar	lc = unicode_lowercase_simple(utf8_to_unicode(srcp));
+
+		/* unicode_to_utf8() returns the START pointer, so advance out by the
+		 * code point's UTF-8 length ourselves. */
+		unicode_to_utf8(lc, (unsigned char *) out);
+		out += unicode_utf8len(lc);
+		srcp += clen;
+	}
+	*outlen = (int) (out - dst);
+	return dst;
 }
 
 static int
@@ -95,23 +168,11 @@ fts_analyze_text(const char *str, int len)
 	int			maxraw;
 	int			i;
 	uint32		doclen = 0;
-	char	   *foldbuf;
 
 	/* Upper bound on tokens: every other byte could start a token. */
 	maxraw = (len / 2) + 1;
 	raw = (RawTerm *) palloc(maxraw * sizeof(RawTerm));
 
-	/*
-	 * Fold the whole input once up front.  ASCII case-folding preserves byte
-	 * length, so each token's text is simply a slice of foldbuf; this avoids a
-	 * per-token palloc.  Token boundaries are unaffected by folding (A-Z and
-	 * a-z are both token bytes), so they are detected on the raw input.
-	 */
-	foldbuf = (char *) palloc(len);
-	for (i = 0; i < len; i++)
-		foldbuf[i] = fold_ascii((unsigned char) str[i]);
-
-	/* First pass: carve out folded tokens. */
 	i = 0;
 	while (i < len)
 	{
@@ -128,8 +189,7 @@ fts_analyze_text(const char *str, int len)
 			i++;
 
 		Assert(nraw < maxraw);
-		raw[nraw].term = foldbuf + start;
-		raw[nraw].len = i - start;
+		raw[nraw].term = fold_token(str + start, i - start, &raw[nraw].len);
 		raw[nraw].pos = doclen + 1;	/* 1-based token position */
 		nraw++;
 		doclen++;

@@ -96,14 +96,6 @@ is_token_byte(unsigned char c)
 		(c >= '0' && c <= '9');
 }
 
-static inline char
-fold_ascii(unsigned char c)
-{
-	if (c >= 'A' && c <= 'Z')
-		return (char) (c - 'A' + 'a');
-	return (char) c;
-}
-
 static void
 emit(ParseState *st, uint8 type, uint8 op, char *term, int termlen,
 	 uint16 flags)
@@ -148,7 +140,6 @@ lex_raw(ParseState *st)
 	Token		tok = {TOK_EOF, NULL, 0, false, 0, false};
 	int			start;
 	int			flen;
-	int			i;
 	char	   *folded;
 
 	/* skip whitespace */
@@ -230,9 +221,9 @@ lex_raw(ParseState *st)
 		st->pos++;
 	flen = st->pos - start;
 
-	folded = (char *) palloc(flen);
-	for (i = 0; i < flen; i++)
-		folded[i] = fold_ascii((unsigned char) st->buf[start + i]);
+	/* fold identically to the document analyzer; folded length may differ from
+	 * the raw run under Unicode lowercasing, so keyword checks use flen after. */
+	folded = fold_token(st->buf + start, flen, &flen);
 
 	/* keyword recognition (ASCII, case already folded) */
 	if (flen == 3 && memcmp(folded, "and", 3) == 0)
