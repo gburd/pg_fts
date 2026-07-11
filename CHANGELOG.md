@@ -2,6 +2,25 @@
 
 All notable changes to pg_fts are documented here.
 
+## 0.2.3
+
+Performance release. The change is in the shared library; no SQL objects change,
+results are unchanged, and no REINDEX is required.
+`ALTER EXTENSION pg_fts UPDATE TO '0.2.3'` after installing the new library.
+
+- **Ranked `ORDER BY d <=> q LIMIT k` over a boolean AND/NOT query is much
+  faster.** The 0.2.1 boolean-structure correctness fix pre-collected the entire
+  exact `@@@` match set before the ranked scan filtered against it, which was
+  slow on common terms (e.g. `year & hungary` top-10 took ~37 ms at 2M docs
+  because the whole `year` posting list was materialized). The ranked scan now
+  evaluates the query's boolean structure **lazily** during the WAND traversal
+  (from which terms are present at each candidate), with no collect pass:
+  `year & hungary` top-10 drops to ~1 ms at 2M (measured), and a near-universe
+  NOT like `year & !hungary` from ~415 ms to ~42 ms. Results are byte-identical
+  (the ground-truth ranked-parity test passes unchanged). Pure-OR / single-term
+  queries were already on the fast path and are unchanged; phrase/NEAR/fuzzy/
+  regex keep the exact-recheck path.
+
 ## 0.2.2
 
 Bug-fix release. The fix is in the shared library; no SQL objects change.
