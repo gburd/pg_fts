@@ -12,6 +12,70 @@ that gap requires a posting-codec rewrite, not incremental tuning.
 
 ---
 
+## SESSION LOG — state as of 2026-07-12 (read this first)
+
+**Current public release: v0.3.2** (tag `v0.3.2`, HEAD `6262505`). Shipped, on
+PGXN + GitHub Release, CI green. Semver tags `vX.Y.Z` match the extension version
+(the "1.0/1.20" numbering elsewhere in this doc is the *old internal* feature
+series, pre-public-release — ignore it for versioning; the public line is 0.1.0 →
+0.3.2). On-disk `BM25_VERSION = 3` (positions); `ftsdoc` binary wire version 3.
+
+**Release history (public):**
+- 0.2.x: AM renamed `bm25`→`fts`; ranked `<=>` respects boolean/AND/NOT; phrase/
+  NEAR fixed (positions stored, recheck); lazy boolean eval for AND/NOT latency.
+- **0.3.0** — token positions in the postings via `WITH (positions=on)`; phrase/
+  NEAR answered from the index with no heap recheck (format v2→v3, REINDEX).
+- **0.3.1** — `fts_anomalous_docs()` lexical anomaly SRF (walks the low-df
+  dictionary tail); faithful `ftsdoc` text+binary I/O round-trip (fixes #3).
+- **0.3.2** — Unicode-lowercasing in the built-in analyzer (PR #4); index-scan
+  accounting in `pg_stat_user_indexes` (PR #5).
+
+**Flagship result (measured, EC2, `bench/RESULTS_20M.md`):** the phrase-count
+cliff at 20M — `count(*)` of a common two-word phrase (1.1M matches) dropped from
+**963,572 ms (16 min)** with `positions=off` to **~1,190 ms** with `positions=on`,
+~800× and byte-identical. Positions cost ~1.5× index size on that diverse corpus.
+
+**Contributor:** dinesh-salve has landed several clean, well-tested PRs (analyzer
+fold-once, Unicode-lowercasing, index-scan stats) and filed a good bug (#3). PRs
+arrive on **Codeberg** (`gregburd/pg_fts`); GitHub (`gburd/pg_fts`) is a mirror.
+Use `tea` (configured for codeberg.org/gregburd) to comment/close; fetch a PR with
+`git fetch origin refs/pull/N/head:prN`. Review contract for traversal-core/parser
+changes: independent reviewer subagent + full flake gate (PG17 **and** PG18) before
+merge. There is a `pre-commit` git hook (`core.hooksPath`) that can `git reset`
+and interfere with concurrent-agent working trees — disable it when probing.
+
+**Open threads / next steps (nothing is blocking a release; v0.3.2 is stable):**
+1. **Build time is pg_fts's weak axis on high-cardinality JSON-log corpora** (new
+   2026-07-12 finding, `bench/RESULTS_BENCH_20M_100M.md`): a `positions=off`
+   build at diverse-20M ran >80 min (vs ~21 min all-wiki 20M) because ultra-
+   high-df tokens (httplog `clientip` df≈8M) make the **single-threaded merge
+   tail** dominate. Highest-value build-side improvement = parallelize/speed that
+   merge tail. Query latency is unaffected.
+2. **Trigram sparsemap build is superlinear** at large diverse vocab (open; only
+   affects fuzzy/regex, not ranked/count/phrase). See `bench/RESULTS_20M.md`.
+3. **Unfinished benchmark:** the full 20M+100M 3-way (pg_fts off/on vs
+   VectorChord-bm25 vs pg_textsearch) + NDCG@10 quality was **cancelled before
+   any measurements**. The reproducible provenance + matched-analyzer contract +
+   corpus-load gotchas (strip C0 control bytes incl. 0x01 CSV sentinel) are in
+   `bench/RESULTS_BENCH_20M_100M.md` — re-dispatch from that spec. Prior 2.19M
+   3-way numbers stand (§3.1): pg_fts ~2–5× slower ranked, larger on disk.
+4. **PG19 `REPACK` CONCURRENTLY** logical-decoding replay isn't yet exercised in
+   the isolation suite (PG19 not in local test matrix); code properties hold. An
+   isolation test is a good add when PG19 is testable. See `CAPABILITIES.md`.
+
+**EC2 discipline (hard-won):** profile `numa` (acct REDACTED, us-east-2).
+The account has **NO default VPC** in us-east-2 — a launch must create VPC +
+subnet + IGW + route table, and **all of those must be torn down too** (missed
+once this session, caught via the completion notification). SG **must** be /32,
+never 0.0.0.0/0 (account-termination risk). Tag `owner=gburd-agent` + unique
+timestamped Name/keypair/SG. **Benchmark subagents have twice completed WITHOUT
+terminating their instance** — always verify termination + resource cleanup
+yourself from the parent, don't trust the agent's self-report. Never touch the
+`libxtc-*` instances (not ours). At 2026-07-12 session end: zero pg_fts EC2
+resources remain (verified).
+
+---
+
 ## 0. TL;DR for the new owner
 
 - **What pg_fts is best at:** query-language breadth (boolean, phrase, NEAR,
