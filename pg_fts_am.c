@@ -62,6 +62,7 @@
 #include "nodes/tidbitmap.h"
 #include "optimizer/cost.h"
 #include "optimizer/optimizer.h"
+#include "pgstat.h"
 #include "storage/bufmgr.h"
 #include "catalog/storage.h"
 #include "storage/condition_variable.h"
