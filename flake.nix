@@ -139,6 +139,20 @@
           ''}";
         };
 
+        # Render doc/pg_fts.sgml (a DocBook <sect1> fragment) to standalone HTML
+        # under doc/html/ via doc/build-html.sh (wraps the fragment in a minimal
+        # <article> shell and runs the docbook-xsl-ns HTML stylesheet).
+        # `nix run .#docs-html` -> doc/html/pg_fts.html + index.html.
+        apps.docs-html = {
+          type = "app";
+          program = "${pkgs.writeShellScript "pg_fts-docs-html" ''
+            set -e
+            export XSLTPROC=${pkgs.libxslt}/bin/xsltproc
+            export DOCBOOK_XSL=${pkgs.docbook-xsl-ns}/xml/xsl/docbook/html/docbook.xsl
+            exec ${pkgs.bash}/bin/bash doc/build-html.sh
+          ''}";
+        };
+
         formatter = pkgs.nixpkgs-fmt;
       });
 }

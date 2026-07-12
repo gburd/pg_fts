@@ -35,3 +35,8 @@ AGENTS.md
 
 # make dist source-distribution artifact
 pg_fts-*.zip
+
+# rendered docs (built by `make html` / `nix run .#docs-html`; published to
+# GitHub/Codeberg Pages by CI, never committed to main)
+/doc/html/
+/build/

@@ -1,0 +1,63 @@
+name: Docs
+
+# Codeberg (Forgejo Actions): build the HTML reference from doc/pg_fts.sgml and
+# publish it to Codeberg Pages by pushing to the `pages` branch of this repo.
+# Codeberg serves the `pages` branch at the repo's Pages URL:
+#   https://gregburd.codeberg.page/pg_fts/
+#
+# TODO (maintainer): Codeberg Pages is enabled automatically once a `pages`
+# branch exists; confirm the Pages URL after the first successful run. The push
+# uses the RELEASE_TOKEN secret (repo write scope), the same token release.yml
+# uses.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'doc/**'
+      - '.forgejo/workflows/docs.yml'
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: docker
+    container:
+      image: debian:stable-slim
+    steps:
+      - name: Install toolchain
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            xsltproc docbook-xsl-ns git ca-certificates
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need history to push the pages branch
+
+      - name: Render doc/pg_fts.sgml -> doc/html/
+        run: |
+          export DOCBOOK_XSL=/usr/share/xml/docbook/stylesheet/docbook-xsl-ns/html/docbook.xsl
+          doc/build-html.sh
+
+      - name: Publish to the pages branch
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          if [ -z "$RELEASE_TOKEN" ]; then
+            echo "::warning::RELEASE_TOKEN not set; skipping Codeberg Pages publish."
+            exit 0
+          fi
+          # Assemble the site content in a clean worktree and force the `pages`
+          # branch to it. Codeberg Pages serves whatever is on `pages`.
+          site=$(mktemp -d)
+          cp -r doc/html/. "$site/"
+          touch "$site/.nojekyll"
+          cd "$site"
+          git init -q
+          git config user.name  "pg_fts docs bot"
+          git config user.email "docs-bot@codeberg.local"
+          git add -A
+          git commit -q -m "docs: publish rendered pg_fts.html ($GITHUB_SHA)"
+          git branch -M pages
+          git push -f \
+            "https://x-access-token:${RELEASE_TOKEN}@codeberg.org/gregburd/pg_fts.git" \
+            pages:pages

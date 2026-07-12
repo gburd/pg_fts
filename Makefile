@@ -54,3 +54,11 @@ dist:
 	@test -n "$(DISTVERSION)" || { echo "could not read version from META.json" >&2; exit 1; }
 	git archive --format=zip --prefix=$(DISTNAME)/ -o $(DISTNAME).zip HEAD
 	@echo "created $(DISTNAME).zip"
+
+# --- Rendered HTML docs -----------------------------------------------------
+# Render the DocBook fragment doc/pg_fts.sgml to standalone HTML in doc/html/.
+# Needs xsltproc + a docbook-xsl-ns stylesheet (auto-detected; override with
+# DOCBOOK_XSL=/path/to/html/docbook.xsl). Under Nix use `nix run .#docs-html`.
+.PHONY: html
+html:
+	doc/build-html.sh
