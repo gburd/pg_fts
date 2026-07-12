@@ -1218,6 +1218,7 @@ bm25_gettuple(IndexScanDesc scan, ScanDirection dir)
 		{
 			TidSet		m;
 
+			pgstat_count_index_scan(scan->indexRelation);
 			bm25_collect_matches(scan->indexRelation, so->query, &m, &so->plainRecheck);
 			so->plainTids = m.tids;
 			so->nplain = m.n;
@@ -1246,6 +1247,7 @@ bm25_gettuple(IndexScanDesc scan, ScanDirection dir)
 		double		N;
 		BM25MetaPageData m0;
 
+		pgstat_count_index_scan(scan->indexRelation);
 		bm25_read_meta(scan->indexRelation, &m0);
 		N = m0.ndocs < 1.0 ? 1.0 : m0.ndocs;
 		so->maxhits = bm25_query_maxhits(scan->indexRelation, so->query, N);
@@ -1973,6 +1975,9 @@ bm25_getbitmap(IndexScanDesc scan, TIDBitmap *tbm)
 
 	if (!so->queryValid || so->query == NULL)
 		return 0;
+	/* Count the index scan for pg_stat_user_indexes.idx_scan; idx_tup_read is
+	 * added by index_getbitmap() from our return value. */
+	pgstat_count_index_scan(scan->indexRelation);
 	bm25_collect_matches(scan->indexRelation, so->query, &matches, &recheck);
 	if (matches.n > 0)
 		tbm_add_tuples(tbm, matches.tids, matches.n, recheck);
@@ -3630,6 +3635,13 @@ bm25_count_visible(Relation index, FtsQuery q)
 	int64		count = 0;
 	int			i;
 
+	/*
+	 * The count pushdown (CustomScan), fts_count() and bm25_count_visible_oid()
+	 * all funnel through here and bypass the executor's index-scan machinery, so
+	 * account for the scan explicitly: one index scan, and idx_tup_read = the
+	 * matching index entries (like a bitmap index scan reports its bitmap size).
+	 */
+	pgstat_count_index_scan(index);
 	bm25_collect_matches(index, q, &matches, &recheck);
 	/*
 	 * Shrink over-generated sets (fuzzy/regex/PHRASE/NEAR) to the exact @@@
@@ -3637,6 +3649,7 @@ bm25_count_visible(Relation index, FtsQuery q)
 	 */
 	if (recheck)
 		bm25_recheck_exact(index, q, &matches);
+	pgstat_count_index_tuples(index, matches.n);
 	if (matches.n == 0)
 		return 0;
 
@@ -3743,7 +3756,11 @@ fts_search(PG_FUNCTION_ARGS)
 		funcctx->tuple_desc = BlessTupleDesc(tupdesc);
 
 		index = index_open(indexoid, AccessShareLock);
+		/* This native top-k bypasses the executor's index-scan machinery; count
+		 * the scan and the returned index entries ourselves. */
+		pgstat_count_index_scan(index);
 		nvis = bm25_topk_visible(index, q, k, false, &results);
+		pgstat_count_index_tuples(index, nvis);
 		index_close(index, AccessShareLock);
 
 		funcctx->max_calls = nvis;
