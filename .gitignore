@@ -28,6 +28,7 @@ regression.out
 .claude/
 .mcp.json
 AGENTS.md
+.agent/
 .kiro/
 .pi/
 

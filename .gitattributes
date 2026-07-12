@@ -10,4 +10,4 @@
 bench            export-ignore
 test             export-ignore
 ci               export-ignore
-HANDOFF.md       export-ignore
+.agent           export-ignore

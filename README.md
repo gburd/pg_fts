@@ -162,8 +162,8 @@ Performance
 -----------
 
 bench/ contains reproducible benchmarks on EC2 (build time, index size, and
-per-query-type latency at 2M+ docs).  See bench/RESULTS_*.md, and HANDOFF.md for
-the full analysis.  The honest summary:
+per-query-type latency at 2M+ docs).  See bench/RESULTS_*.md for the full
+analysis.  The honest summary:
 
   * vs the built-in tsvector/GIN + ts_rank stack, pg_fts is far faster on ranked
     retrieval (up to ~40x on common-term top-k, because ts_rank must fetch and
