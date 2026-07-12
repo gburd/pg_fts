@@ -1,0 +1,86 @@
+name: CI
+
+# Codeberg (Forgejo Actions) push + PR CI. Mirrors .github/workflows/ci.yml:
+# build + REGRESS + ISOLATION against PostgreSQL 17 and 18 (PG 19 non-fatal).
+#
+# Codeberg's runners use `runs-on: docker` with a `container:` image (the same
+# pattern as .forgejo/workflows/release.yml), NOT GitHub's `ubuntu-latest`.
+# Each matrix leg runs inside the official postgres:<major> image, so the
+# server + client are already present; we install the server headers + a C
+# toolchain, build with PGXS, and run installcheck against a locally-started
+# cluster as the `postgres` OS user.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: docker
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: [17, 18]
+    container:
+      image: postgres:${{ matrix.pg }}
+    steps:
+      - name: Install build deps
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            postgresql-server-dev-${{ matrix.pg }} gcc make git libipc-run-perl ca-certificates
+
+      - uses: actions/checkout@v4
+
+      - name: Build + install
+        run: |
+          make PG_CONFIG=/usr/bin/pg_config
+          make install PG_CONFIG=/usr/bin/pg_config
+
+      - name: Regression + isolation tests
+        run: |
+          # Start an ephemeral cluster owned by the postgres user (the postgres
+          # image runs as root during CI; initdb refuses to run as root, so the
+          # cluster + installcheck run via `su postgres`). REGRESS + ISOLATION
+          # are the correctness gate; PGXS checks TAP_TESTS with ifdef, so point
+          # PROVE_TESTS at ci/noop.pl to make the TAP stage a no-op here (the
+          # crash-recovery/replication TAP harness needs its own cluster setup).
+          chown -R postgres:postgres .
+          su postgres -c '
+            /usr/lib/postgresql/${{ matrix.pg }}/bin/initdb -D /tmp/pgdata --no-locale --encoding=UTF8 &&
+            /usr/lib/postgresql/${{ matrix.pg }}/bin/pg_ctl -D /tmp/pgdata -o "-k /tmp -c listen_addresses=localhost" -w start &&
+            make installcheck PROVE_TESTS=ci/noop.pl PG_CONFIG=/usr/bin/pg_config PGHOST=/tmp PGUSER=postgres
+          '
+
+      - name: Show diffs on failure
+        if: failure()
+        run: |
+          for f in regression.diffs output_iso/regression.diffs; do
+            [ -f "$f" ] && { echo "=== $f ==="; cat "$f"; }
+          done
+
+  # PG 19/devel: not packaged in the postgres:19 image on all registries yet,
+  # so this leg is best-effort and never fails the CI run.
+  test-pg19:
+    runs-on: docker
+    container:
+      image: postgres:19
+    continue-on-error: true
+    steps:
+      - name: Install build deps
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            postgresql-server-dev-19 gcc make git libipc-run-perl ca-certificates || exit 0
+      - uses: actions/checkout@v4
+      - name: Build + install + test (non-fatal)
+        run: |
+          make PG_CONFIG=/usr/bin/pg_config
+          make install PG_CONFIG=/usr/bin/pg_config
+          chown -R postgres:postgres .
+          su postgres -c '
+            /usr/lib/postgresql/19/bin/initdb -D /tmp/pgdata --no-locale --encoding=UTF8 &&
+            /usr/lib/postgresql/19/bin/pg_ctl -D /tmp/pgdata -o "-k /tmp -c listen_addresses=localhost" -w start &&
+            make installcheck PROVE_TESTS=ci/noop.pl PG_CONFIG=/usr/bin/pg_config PGHOST=/tmp PGUSER=postgres
+          '

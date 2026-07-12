@@ -1,0 +1,24 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "labels": [
+    "ci",
+    "dependencies"
+  ],
+  "commitMessagePrefix": "ci:",
+  "prConcurrentLimit": 3,
+  "schedule": [
+    "before 6am on monday"
+  ],
+  "packageRules": [
+    {
+      "description": "Group the CI action pins so both forges' workflows update together.",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "groupName": "ci action pins"
+    }
+  ]
+}

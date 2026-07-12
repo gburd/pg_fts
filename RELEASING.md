@@ -40,6 +40,16 @@ out of the zip.
 | `PGXN_USER` / `PGXN_PASSWORD` | GitHub repo secrets | PGXN Manager upload (skipped if unset) |
 | `RELEASE_TOKEN` | Codeberg repo secrets | create the Forgejo release (repo `write` scope) |
 
+## Dependency-update automation
+
+- **GitHub:** Dependabot (`.github/dependabot.yml`) opens weekly PRs bumping the
+  GitHub Actions pins.
+- **Codeberg:** `renovate.json` configures the Codeberg-hosted Renovate bot to
+  do the equivalent for the `.forgejo/` (and `.github/`) workflow action pins.
+  **TODO (maintainer):** Renovate must be enabled for the repo on Codeberg — add
+  the Renovate app/bot under the repo (or org) settings so it reads
+  `renovate.json`. Until then the config is inert but harmless.
+
 ## Manual PGXN upload (fallback)
 
 If CI can't publish, upload by hand at <https://manager.pgxn.org/upload> (log
