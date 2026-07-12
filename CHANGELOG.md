@@ -2,7 +2,12 @@
 
 All notable changes to pg_fts are documented here.
 
-## Unreleased
+## 0.3.2
+
+Additive release. **No on-disk format change**; no **REINDEX** required for the
+extension upgrade (`ALTER EXTENSION pg_fts UPDATE TO '0.3.2'`). Indexes over
+non-ASCII text should be `REINDEX`ed to pick up the new Unicode lowercasing;
+ASCII-only indexes are unaffected.
 
 - **`pg_stat_user_indexes` now reflects bm25 index usage** (PR #5, dinesh-salve).
   Every query path that reads the index registers an index scan
