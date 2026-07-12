@@ -175,6 +175,11 @@ extern void fts_phrase_step_pos(const uint32 *left, int nleft,
 /* shared: binary-search a term in a doc; returns entry or NULL */
 extern FtsTermEntry *fts_doc_lookup(FtsDoc doc, const char *term, int termlen);
 
+/* shared: structural self-consistency check for an FtsDoc read from an
+ * untrusted source (pending page, detoasted column) before its offsets are
+ * trusted; sz is the bytes available at doc.  See pg_fts_doc.c. */
+extern bool fts_doc_is_valid(const FtsDocData *doc, Size sz);
+
 /* shared: does any term in the doc start with the given prefix? */
 extern bool fts_doc_has_prefix(FtsDoc doc, const char *prefix, int prefixlen);
 

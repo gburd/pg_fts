@@ -2,6 +2,29 @@
 
 All notable changes to pg_fts are documented here.
 
+## 0.3.3
+
+Crash-safety bug-fix release. **No on-disk format change**; no **REINDEX**
+required (`ALTER EXTENSION pg_fts UPDATE TO '0.3.3'`).
+
+- **Fixed two backend crashes on the pending-list path** (reported on 0.3.2 /
+  PostgreSQL 18 under heavy concurrent write load): a `_FORTIFY_SOURCE` buffer
+  overflow (SIGABRT) in `add_posting` during the autovacuum pending-list flush,
+  and a SIGSEGV in `fts_doc_matches` while scanning pending documents. Both
+  stemmed from the pending-list readers casting raw index-page bytes to an
+  `ftsdoc` and trusting its term metadata (`nterms`, per-term `len`/`tf`/
+  `posoff`) without validation, so a malformed or torn page turned a bad length
+  into a wild `memcpy` or a bad offset into an out-of-bounds read. The flush
+  (`bm25_vacuumcleanup` -> `bm25_flush_pending`) and scan
+  (`bm25_gettuple` -> `bm25_collect_matches`) paths now validate each pending
+  document's structure against its own byte length (`fts_doc_is_valid`) before
+  trusting any offset, and skip a malformed document with a `WARNING` (hinting
+  `REINDEX`) instead of crashing the backend. `add_posting`'s fixed-size term
+  key also clamps its length defensively as a last line of defense. Valid
+  documents are unaffected. A crash-regression test covers the long-token
+  pending -> scan -> flush cycle.
+
+
 ## 0.3.2
 
 Additive release. **No on-disk format change**; no **REINDEX** required for the
