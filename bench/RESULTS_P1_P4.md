@@ -32,7 +32,7 @@ and one ranked-correctness divergence.**
 
 ## Environment
 - EC2 **r7i.4xlarge** (16 vCPU Sapphire Rapids, 123 GB), Fedora 44.
-- Instance `i-REDACTED`, us-east-2, tagged `owner=gburd-agent` +
+- Instance `(terminated)`, us-east-2, tagged `owner=gburd-agent` +
   `Name=pgfts-bench-p1p4-20260708-185251`. **TERMINATED** (confirmed;
   per-session key + SG deleted).
 - PostgreSQL **17.10** from source (`--without-icu`, -O2).

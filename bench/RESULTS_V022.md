@@ -256,4 +256,4 @@ VectorChord:   top10 rare=3.83 mid=4.18 common=4.39   top100 common=23.68  AND r
 *Measured: EC2 r7i.4xlarge, PostgreSQL 17.10, 2,188,038 Wikipedia articles,
 median-of-9 warm, one engine at a time.  pg_fts v0.2.2 (`5041c11`) / v0.2.0 /
 VectorChord-bm25 HEAD / Timescale pg_textsearch 1.4.0-dev.  Instance
-i-REDACTED, terminated at end of run.*
+(terminated), terminated at end of run.*

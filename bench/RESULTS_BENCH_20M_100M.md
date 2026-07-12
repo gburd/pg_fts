@@ -40,7 +40,7 @@ text, and 0x01 is the CSV QUOTE/ESCAPE sentinel). Loaded
 |------|-------|
 | date | 2026-07-12 (us-east-2) |
 | instance | **r7i.24xlarge** (96 vCPU Intel Xeon Platinum 8488C / Sapphire Rapids, 743 GB RAM) |
-| instance id | i-REDACTED |
+| instance id | (terminated) |
 | storage | 2 TB gp3 (16000 IOPS, 1000 MB/s) mounted at `/data`; PGDATA + corpus on `/data` |
 | OS | Fedora Cloud 43 (kernel 7.1.3-100.fc43) |
 | PostgreSQL | 17.10, built from source: `./configure --prefix=/data/pg --without-icu CFLAGS=-O2` |

@@ -12,7 +12,7 @@ during the run.
   `max_parallel_workers_per_gather=0`), EXPLAIN-confirmed `Index Scan ... Order By`.
 - Loaded binary confirmed = HEAD (the `year & !hungary` NOT query ran in 42 ms;
   v0.2.2's collect pass would be ~415 ms).
-- Instance i-REDACTED — TERMINATED.
+- Instance (terminated) — TERMINATED.
 
 ## PASS — the AND/NOT optimization recovers the regression (and then some)
 
