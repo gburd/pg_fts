@@ -4,6 +4,14 @@ All notable changes to pg_fts are documented here.
 
 ## Unreleased
 
+- **`pg_stat_user_indexes` now reflects bm25 index usage** (PR #5, dinesh-salve).
+  Every query path that reads the index registers an index scan
+  (`pgstat_count_index_scan`), so `idx_scan`/`last_idx_scan` are no longer stuck
+  at 0: the bitmap scan, the plain + ranked (`ORDER BY <=>`) index scans, the
+  `count(*)` pushdown / `fts_count()`, and native `fts_search()` top-k.
+  `idx_tup_read` is reported on the bypass paths too (the AM scan paths already
+  get it from the generic index layer). A bare `ORDER BY <=>` with no `@@@`
+  filter is a seq-scan+sort and correctly stays at 0.
 - **Unicode lowercasing in the built-in analyzer** (PR #4, dinesh-salve). The
   built-in `to_ftsdoc(text)`/`to_ftsquery(text)` analyzer folded only ASCII
   `A-Z`, so accented text never matched case-insensitively (`'CAFÉ'` missed
