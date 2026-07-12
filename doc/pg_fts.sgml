@@ -415,7 +415,7 @@ CREATE INDEX docs_bm25 ON docs USING fts (to_ftsdoc('english', body))
   <title>Authors</title>
 
   <para>
-   Greg Burd.
+   Gregory Burd.
   </para>
  </sect2>
 

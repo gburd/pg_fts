@@ -1,5 +1,9 @@
 # pg_fts — BM25 full-text search for PostgreSQL
 
+[![Codeberg CI](https://codeberg.org/gregburd/pg_fts/actions/workflows/ci.yml/badge.svg)](https://codeberg.org/gregburd/pg_fts/actions)
+[![PGXN version](https://badge.fury.io/pg/pg_fts.svg)](https://pgxn.org/dist/pg_fts/)
+[![License: PostgreSQL](https://img.shields.io/badge/license-PostgreSQL-blue)](LICENSE)
+
 A PostgreSQL extension for full-text search with true **BM25/BM25F** relevance
 ranking, a dedicated `fts` inverted-index access method, and a rich query
 language (boolean, phrase, NEAR, prefix, fuzzy, regex).  Unlike the
@@ -83,8 +87,10 @@ SELECT fts_merge('docs_bm25');    -- compact segments now
 SELECT fts_vacuum('docs_bm25');   -- reclaim disk space (compact + truncate)
 ```
 
-See `doc/pg_fts.sgml` for the full reference, `CAPABILITIES.md` for the feature
-matrix, `ROADMAP.md` for the roadmap, and
+See `doc/pg_fts.sgml` for the full reference (rendered to HTML and published to
+[GitHub Pages](https://gburd.github.io/pg_fts/) and
+[Codeberg Pages](https://gregburd.codeberg.page/pg_fts/)), `CAPABILITIES.md`
+for the feature matrix, `ROADMAP.md` for the roadmap, and
 `doc/MIGRATING_FROM_PG_TEXTSEARCH.md` if you are moving from Timescale
 pg_textsearch.
 
