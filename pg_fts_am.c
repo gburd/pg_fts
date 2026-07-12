@@ -219,12 +219,21 @@ bm25_build_ht_init(BM25BuildState *bs)
 static void
 make_termkey(TermKey *k, const char *term, int len)
 {
+	int			n = len;
+
+	/* defensive: `len` ultimately derives from an on-disk/pending entries[].len
+	 * (a uint32 read into an int).  A corrupt value could be negative or absurd;
+	 * clamp to [0, BM25_TERMKEYLEN] so this fixed-size key copy can never turn
+	 * into a wild memcpy (a _FORTIFY_SOURCE abort).  Callers validate the doc
+	 * first (fts_doc_is_valid); this is the last line of defense. */
+	if (n < 0)
+		n = 0;
 	memset(k, 0, sizeof(TermKey));
-	memcpy(k->key, term, Min(len, BM25_TERMKEYLEN));
+	memcpy(k->key, term, Min(n, BM25_TERMKEYLEN));
 	/* fold length into the tail so different-length terms sharing a prefix do
 	 * not collide on the key */
-	if (len < BM25_TERMKEYLEN)
-		k->key[len] = '\1';
+	if (n < BM25_TERMKEYLEN)
+		k->key[n] = '\1';
 }
 
 static void
@@ -2834,8 +2843,24 @@ bm25_flush_pending(Relation index)
 		{
 			BM25PendingItem *pi = (BM25PendingItem *) ptr;
 			FtsDoc		pdoc = (FtsDoc) ((char *) pi + sizeof(BM25PendingItem));
-			FtsTermEntry *entries = FTS_DOC_ENTRIES(pdoc);
+			FtsTermEntry *entries;
 			uint32		j;
+
+			/* Never trust raw pending-page bytes: a torn page or any producing
+			 * bug could give a bad nterms/len/posoff that turns into a wild
+			 * write in add_posting.  Validate against the item's own doclen and
+			 * skip (not crash) a corrupt doc so autovacuum can make progress. */
+			if (!fts_doc_is_valid(pdoc, pi->doclen))
+			{
+				ereport(WARNING,
+						(errcode(ERRCODE_DATA_CORRUPTED),
+						 errmsg("pg_fts: skipping malformed pending document in index \"%s\" during flush",
+								RelationGetRelationName(index)),
+						 errhint("REINDEX the index to rebuild it from the heap.")));
+				ptr += MAXALIGN(sizeof(BM25PendingItem) + pi->doclen);
+				continue;
+			}
+			entries = FTS_DOC_ENTRIES(pdoc);
 
 			for (j = 0; j < pdoc->nterms; j++)
 			{

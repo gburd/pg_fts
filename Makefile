@@ -24,7 +24,7 @@ OBJS = \
 	pg_fts_match.o
 
 EXTENSION = pg_fts
-DATA = pg_fts--0.3.2.sql pg_fts--0.2.0--0.2.1.sql pg_fts--0.2.1--0.2.2.sql pg_fts--0.2.2--0.2.3.sql pg_fts--0.2.3--0.2.4.sql pg_fts--0.2.4--0.3.0.sql pg_fts--0.3.0--0.3.1.sql pg_fts--0.3.1--0.3.2.sql
+DATA = pg_fts--0.3.3.sql pg_fts--0.2.0--0.2.1.sql pg_fts--0.2.1--0.2.2.sql pg_fts--0.2.2--0.2.3.sql pg_fts--0.2.3--0.2.4.sql pg_fts--0.2.4--0.3.0.sql pg_fts--0.3.0--0.3.1.sql pg_fts--0.3.1--0.3.2.sql pg_fts--0.3.2--0.3.3.sql
 PGFILEDESC = "pg_fts - full-text search with BM25 ranking"
 
 REGRESS = pg_fts unicode_fold idx_scan_stats

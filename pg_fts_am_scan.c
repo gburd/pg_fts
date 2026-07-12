@@ -1934,7 +1934,16 @@ bm25_collect_matches(Relation index, FtsQuery query, TidSet *out, bool *recheck)
 				BM25PendingItem *pi = (BM25PendingItem *) ptr;
 				FtsDoc		pdoc = (FtsDoc) ((char *) pi + sizeof(BM25PendingItem));
 
-				if (fts_doc_matches(pdoc, query))
+				/* A pending doc is raw page bytes; validate before the matcher
+				 * walks its offsets, so a torn/corrupt page cannot segfault a
+				 * SELECT.  A malformed doc is simply not matched (and flagged). */
+				if (!fts_doc_is_valid(pdoc, pi->doclen))
+					ereport(WARNING,
+							(errcode(ERRCODE_DATA_CORRUPTED),
+							 errmsg("pg_fts: skipping malformed pending document in index \"%s\" during scan",
+									RelationGetRelationName(index)),
+							 errhint("REINDEX the index to rebuild it from the heap.")));
+				else if (fts_doc_matches(pdoc, query))
 				{
 					TidSet		one;
 

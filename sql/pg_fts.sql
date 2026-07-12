@@ -1,4 +1,4 @@
-CREATE EXTENSION pg_fts VERSION '0.3.2';
+CREATE EXTENSION pg_fts VERSION '0.3.3';
 
 -- ftsdoc: analysis, output shows terms with term frequencies
 SELECT to_ftsdoc('The quick brown fox, the QUICK fox!');
@@ -1238,3 +1238,44 @@ SELECT $$'a':2@1$$::ftsdoc;                            -- ERROR: fewer positions
 
 DROP TABLE rt2;
 DROP TABLE rt;
+
+-- ============================================================================
+-- Crash regression (issue: SIGABRT in add_posting / SIGSEGV in fts_doc_matches
+-- on the pending-list + flush path with long punctuation-dense tokens).  The
+-- readers now validate each pending document (fts_doc_is_valid) before trusting
+-- its term offsets, so a malformed page is skipped with a WARNING instead of
+-- crashing.  This exercises the valid long-token path end to end (build empty
+-- -> pending insert -> @@@/count/phrase scan over pending -> VACUUM flush ->
+-- scan again); it must complete and return stable counts, never crash.
+-- ============================================================================
+CREATE TABLE crashreg (id bigint, subject text, from_addr text, mid text);
+CREATE INDEX crashreg_fts ON crashreg
+  USING fts (to_ftsdoc('english'::regconfig,
+    COALESCE(subject,'') || ' ' || COALESCE(from_addr,'') || ' ' || COALESCE(mid,'')))
+  WITH (positions = on);
+-- inserts go to the pending list (index already exists); long base64/msgid-like
+-- single tokens (>64 bytes -> the hash-key chaining path) + a high-tf term.
+INSERT INTO crashreg
+SELECT g, 'Re: meeting notes ' || g,
+       'user' || g || '@example.com',
+       'rIdUrvZaMegl2LcXsPOkRgaQKN5dyOoMF4hWSNJ5h-H4fN-LT5ODLPwFRG7sutCKpAcAWzTs' || g || '=@pm.me'
+FROM generate_series(1, 400) g;
+SET enable_seqscan = off;
+-- crash-2 path: count(*) pushdown + phrase over pending docs
+SELECT count(*) AS pending_word_hits FROM crashreg
+  WHERE to_ftsdoc('english', COALESCE(subject,'')||' '||COALESCE(from_addr,'')||' '||COALESCE(mid,''))
+        @@@ to_ftsquery('english','notes');
+SELECT count(*) AS pending_phrase_hits FROM crashreg
+  WHERE to_ftsdoc('english', COALESCE(subject,'')||' '||COALESCE(from_addr,'')||' '||COALESCE(mid,''))
+        @@@ to_ftsquery('english','"meeting notes"');
+-- crash-1 path: flush the pending list into a segment
+VACUUM crashreg;
+-- same queries after the flush must return the same counts
+SELECT count(*) AS flushed_word_hits FROM crashreg
+  WHERE to_ftsdoc('english', COALESCE(subject,'')||' '||COALESCE(from_addr,'')||' '||COALESCE(mid,''))
+        @@@ to_ftsquery('english','notes');
+SELECT count(*) AS flushed_phrase_hits FROM crashreg
+  WHERE to_ftsdoc('english', COALESCE(subject,'')||' '||COALESCE(from_addr,'')||' '||COALESCE(mid,''))
+        @@@ to_ftsquery('english','"meeting notes"');
+RESET enable_seqscan;
+DROP TABLE crashreg;

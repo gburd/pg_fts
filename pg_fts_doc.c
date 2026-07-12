@@ -55,6 +55,80 @@ PG_FUNCTION_INFO_V1(ftsdoc_send);
 PG_FUNCTION_INFO_V1(ftsdoc_length);
 
 /*
+ * fts_doc_is_valid -- structural self-consistency check for an FtsDoc whose
+ * bytes came from an untrusted-at-read-time source (a pending index page, a
+ * detoasted stored column).  The readers (pending-list flush and scan) cast
+ * raw page bytes to FtsDoc and then walk entries[].len / .off / .tf / .posoff;
+ * a torn page, a stale-format image, or any producing bug would otherwise turn
+ * a bad length into a wild memcpy in add_posting (a _FORTIFY_SOURCE abort) or a
+ * bad offset into an out-of-bounds positions/lexeme read in fts_doc_matches.
+ * This confirms every derived offset stays within the varlena's own VARSIZE
+ * before any of them is trusted.  `sz` is the total byte length available at
+ * `doc` (VARSIZE for a detoasted datum, or the pending item's doclen).
+ *
+ * Returns true iff the header, the entries[] array, every term's lexeme slice,
+ * and (when positions are present) the whole positions[] region and every
+ * term's tf/posoff run fit inside `sz`, and the per-term tf counts sum to the
+ * number of positions the layout has room for.  Cheap: one pass over entries.
+ */
+bool
+fts_doc_is_valid(const FtsDocData *doc, Size sz)
+{
+	const FtsTermEntry *entries;
+	Size		need;
+	uint64		sumtf = 0;
+	uint32		i;
+
+	/* header must fit, and the declared VARSIZE must match the buffer we have */
+	if (doc == NULL || sz < FTS_DOC_HDRSIZE)
+		return false;
+	if ((Size) VARSIZE(doc) > sz)
+		return false;
+	sz = VARSIZE(doc);			/* trust the smaller of the two from here */
+
+	if (doc->version != FTS_DOC_VERSION)
+		return false;
+
+	/* header + entries[nterms] + lexbytes must fit */
+	need = FTS_DOC_HDRSIZE + (Size) doc->nterms * sizeof(FtsTermEntry);
+	if (need < FTS_DOC_HDRSIZE || need > sz)		/* overflow or overrun */
+		return false;
+	if (need + (Size) doc->lexbytes < need || need + (Size) doc->lexbytes > sz)
+		return false;
+
+	entries = FTS_DOC_ENTRIES(doc);
+	for (i = 0; i < doc->nterms; i++)
+	{
+		/* each term's lexeme slice must lie within lexbytes */
+		if ((Size) entries[i].off + entries[i].len < (Size) entries[i].off ||
+			(Size) entries[i].off + entries[i].len > doc->lexbytes)
+			return false;
+		sumtf += entries[i].tf;
+	}
+
+	if (FTS_DOC_HAS_POS(doc))
+	{
+		/* the positions[] region (sumtf uint32s) must fit after the MAXALIGN'd
+		 * header+entries+lexemes, and each term's [posoff, posoff+tf) run must
+		 * lie within it. */
+		Size		posbase = MAXALIGN(FTS_DOC_HDRSIZE +
+								   (Size) doc->nterms * sizeof(FtsTermEntry) +
+								   doc->lexbytes);
+
+		if (posbase > sz)
+			return false;
+		if (sumtf > (uint64) ((sz - posbase) / sizeof(uint32)))
+			return false;
+		for (i = 0; i < doc->nterms; i++)
+			if ((uint64) entries[i].posoff + entries[i].tf > sumtf)
+				return false;
+	}
+
+	return true;
+}
+
+
+/*
  * fts_doc_build -- assemble an FtsDoc from parallel term arrays.
  *
  * terms[i]/lens[i] are the (already case-folded) term texts; tfs[i] the term
