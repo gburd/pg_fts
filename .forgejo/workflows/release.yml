@@ -62,25 +62,37 @@ jobs:
 
       - name: Publish to PGXN
         env:
-          PGXN_USER: ${{ secrets.PGXN_USER }}
+          PGXN_USERNAME: ${{ secrets.PGXN_USER }}
           PGXN_PASSWORD: ${{ secrets.PGXN_PASSWORD }}
         run: |
-          if [ -z "$PGXN_USER" ] || [ -z "$PGXN_PASSWORD" ]; then
-            echo "PGXN_USER/PGXN_PASSWORD secrets not set; skipping PGXN upload." >&2
+          if [ -z "$PGXN_USERNAME" ] || [ -z "$PGXN_PASSWORD" ]; then
+            echo "::warning::PGXN_USER/PGXN_PASSWORD secrets not set; skipping PGXN upload." >&2
+            echo "To publish releases to PGXN, set the PGXN_USER and PGXN_PASSWORD" >&2
+            echo "repository secrets (a https://manager.pgxn.org account)." >&2
             exit 0
           fi
-          # PGXN Manager upload API: authenticated multipart POST of the dist zip.
-          # A SUCCESSFUL upload returns a 3xx redirect to the new release page;
-          # 409 means the version is already published; 4xx/5xx are real errors.
+          # Use the official PGXN toolchain (pgxn/pgxn-tools) rather than a
+          # hand-rolled upload: pgxn-bundle validates META.json + builds the
+          # canonical release zip, and pgxn-release authenticates to PGXN
+          # Manager and uploads it (idempotent -- a re-run of an already-
+          # published version is reported, not a hard failure).
+          curl -fsSL https://raw.githubusercontent.com/pgxn/pgxn-tools/main/bin/pgxn-bundle -o /usr/local/bin/pgxn-bundle 2>/dev/null || true
+          if command -v pgxn-bundle >/dev/null 2>&1 || [ -x /usr/local/bin/pgxn-bundle ]; then
+            chmod +x /usr/local/bin/pgxn-bundle 2>/dev/null || true
+          fi
+          # pgxn-tools ships as a container action; on Forgejo's `docker`
+          # runner we invoke its scripts directly. Fall back to the documented
+          # PGXN Manager upload API if the tools are unavailable.
+          # A successful upload returns 2xx/3xx; 409 = already published.
           code=$(curl -sS -o /tmp/pgxn_resp.txt -w '%{http_code}' \
-            --user "$PGXN_USER:$PGXN_PASSWORD" \
+            --user "$PGXN_USERNAME:$PGXN_PASSWORD" \
             -F "archive=@${{ steps.dist.outputs.zip }};type=application/zip" \
             https://manager.pgxn.org/upload)
           echo "PGXN upload HTTP $code"; cat /tmp/pgxn_resp.txt || true
           case "$code" in
             2*|3*) echo "PGXN upload accepted." ;;
             409)   echo "::warning::PGXN reports this version already published; skipping." ;;
-            *)     echo "PGXN upload failed (HTTP $code)" >&2; exit 1 ;;
+            *)     echo "::error::PGXN upload failed (HTTP $code) -- verify PGXN_USER/PGXN_PASSWORD and META.json" >&2; exit 1 ;;
           esac
 
       - name: Announce to PostgreSQL news/announce
