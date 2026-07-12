@@ -245,11 +245,11 @@ Included in 0.1.0:
 - Parallel index build/merge; standalone PGXS build plus Nix flake and a
   Windows/MSVC meson recipe; supported on PostgreSQL 17, 18, and 19/devel.
 
-Known performance position (see `bench/RESULTS_VS_VCHORD_PGTEXTSEARCH.md` and
-`HANDOFF.md`): pg_fts is far faster than the built-in tsvector/GIN + `ts_rank`
+Known performance position (see `bench/RESULTS_VS_VCHORD_PGTEXTSEARCH.md`):
+pg_fts is far faster than the built-in tsvector/GIN + `ts_rank`
 stack on ranked retrieval (up to ~40×), but trails the specialist BM25
 extensions (VectorChord-bm25, Timescale pg_textsearch) on raw ranked latency and
-index size, because it stores positional postings for phrase/NEAR.  Closing that
+index size.  Closing that
 gap is a posting-codec rewrite tracked in `ROADMAP.md`; 0.1.0 ships on its
 distinguishing strengths — query-language breadth, index-native COUNT, and
 MVCC/crash correctness — and will iterate on ranked performance.

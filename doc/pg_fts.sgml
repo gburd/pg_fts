@@ -202,6 +202,27 @@ SELECT id FROM docs
    </varlistentry>
 
    <varlistentry>
+    <term><function>fts_anomalous_docs(<replaceable>index</replaceable> regclass, <replaceable>k</replaceable> int DEFAULT 100, <replaceable>max_df</replaceable> int DEFAULT NULL)</function> &rarr; setof record</term>
+    <listitem>
+     <para>
+      Return the top <replaceable>k</replaceable> most lexically anomalous
+      documents in the index &mdash; those containing globally rare terms &mdash;
+      as (<literal>ctid</literal>, <literal>score</literal>,
+      <literal>rarest_term</literal>, <literal>min_df</literal>) rows.  A
+      document's score is the maximum IDF over its terms (driven by its single
+      rarest term).  The scan walks only the low-document-frequency tail of the
+      dictionary, skipping any term whose global document frequency exceeds
+      <replaceable>max_df</replaceable> before decoding a posting;
+      <replaceable>max_df</replaceable> defaults to a small fraction of the
+      corpus (<literal>max(N/1000, 1)</literal>) when omitted.  This is a lexical
+      (not semantic) heuristic; the returned <literal>ctid</literal>s are
+      index-resident heap pointers (join back and filter for visibility if
+      needed), and per-segment tombstones are honored.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><function>fts_merge(<replaceable>index</replaceable> regclass)</function> &rarr; <type>boolean</type></term>
     <listitem>
      <para>

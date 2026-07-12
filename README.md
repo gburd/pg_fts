@@ -103,8 +103,9 @@ ranking needs no heap recheck.
 
 The extension is developed as a qualified feature series (each stage builds
 clean under --enable-cassert and passes its regression test).  The internal
-series reached 1.20 before being squashed to a single 0.1.0 install script for
-the first public release.
+series was squashed to a single install script for the first public release
+(0.1.0); the public line has since iterated through 0.2.x to 0.3.2, with
+in-place `ALTER EXTENSION pg_fts UPDATE` upgrade scripts between releases.
 
 Features
 --------
@@ -170,17 +171,21 @@ analysis.  The honest summary:
     sort every match) — see bench/RESULTS_WIKIPEDIA_2M.md.
   * vs the specialist BM25 extensions (VectorChord-bm25, Timescale
     pg_textsearch), pg_fts currently *trails* on raw ranked latency and index
-    size — see bench/RESULTS_VS_VCHORD_PGTEXTSEARCH.md.  pg_fts stores positional
-    postings (for phrase/NEAR) and per-document length, so its index is larger
-    and its docid-ordered block-max WAND decodes more per candidate.  Closing
-    that gap is a posting-codec change tracked in ROADMAP.md.
+    size — see bench/RESULTS_VS_VCHORD_PGTEXTSEARCH.md.  The verified root cause
+    is the posting codec, not positions: the bm25 index stores per-document
+    length once per posting (per doc×term pair), which is a large fraction of
+    the index and makes its docid-ordered block-max WAND decode more per
+    candidate.  (Token positions live in the heap `ftsdoc`, not the index;
+    `WITH (positions = on)` adds a lazily-decoded positions column only when
+    requested.)  Closing the gap is a posting-codec change (a per-segment doclen
+    sidecar, then impact-quantized postings) tracked in ROADMAP.md.
   * pg_fts's distinguishing strengths are its query-language breadth
     (phrase/NEAR/prefix/fuzzy/regex over one operator), an index-native
     count(*) that the specialist engines do not expose, and MVCC/crash/
     replication correctness.
 
 fts_bm25_opts variants reproduce Lucene/bm25s scores for conformance.
-This is an early (0.1.0) release; ranked performance will iterate.
+Ranked-retrieval performance continues to iterate (see ROADMAP.md).
 
 Known limitations / future work
 --------------------------------
