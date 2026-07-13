@@ -592,8 +592,12 @@ bm25_decode_term(Relation index, BlockNumber firstblk, uint32 firstoff,
 			 * not fit within the page -- returning the postings decoded so far
 			 * rather than reading off the end.  A corrupt block is thus a
 			 * bounded, non-crashing miss; REINDEX rebuilds it from the heap.
+			 *
+			 * bh->count is uint32: test the unsigned value (a >2^31 count would
+			 * cast to a negative int and slip past a `cnt > BM25_BLOCK_SIZE`
+			 * check).  Anything not in [1, BM25_BLOCK_SIZE] is a corrupt block.
 			 */
-			if (cnt > BM25_BLOCK_SIZE)
+			if (bh->count == 0 || bh->count > (uint32) BM25_BLOCK_SIZE)
 				cnt = BM25_BLOCK_SIZE;
 			if (stream + (Size) bh->bytelen + (Size) bh->posbytelen > (const unsigned char *) pend)
 			{
@@ -606,6 +610,32 @@ bm25_decode_term(Relation index, BlockNumber firstblk, uint32 firstoff,
 				goto done;
 			}
 
+			/*
+			 * The three FOR columns must fit within the block's own declared
+			 * bytelen (which the guard above proved fits within the page).
+			 * bm25_for_unpack consumes a byte count driven by the on-disk width
+			 * byte; a corrupt width could otherwise read past the page even with
+			 * a small bytelen.  Sum the three columns' declared consumption and
+			 * reject the block if it overruns bytelen, before decoding any of it.
+			 */
+			{
+				int			gl = bm25_for_bytelen(stream, cnt);
+				int			tl = (gl <= (int) bh->bytelen)
+					? bm25_for_bytelen(stream + gl, cnt) : 0;
+				int			dl = (gl + tl <= (int) bh->bytelen)
+					? bm25_for_bytelen(stream + gl + tl, cnt) : 0;
+
+				if ((Size) gl + tl + dl > (Size) bh->bytelen)
+				{
+					ereport(WARNING,
+							(errcode(ERRCODE_DATA_CORRUPTED),
+							 errmsg("pg_fts: corrupt posting block (columns overrun bytelen) in index \"%s\"; stopping term decode",
+									RelationGetRelationName(index)),
+							 errhint("REINDEX the index to rebuild it from the heap.")));
+					UnlockReleaseBuffer(buf);
+					goto done;
+				}
+			}
 			pos += bm25_for_unpack(stream + pos, cnt, gaps);
 			pos += bm25_for_unpack(stream + pos, cnt, tfs);
 			pos += bm25_for_unpack(stream + pos, cnt, dls);

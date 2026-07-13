@@ -2457,8 +2457,8 @@ wand_load_block(WandCursor *c)
 	bh = (BM25BlockHdr *) p;
 	stream = (const unsigned char *) (bh + 1);
 	cnt = (int) bh->count;
-	if (cnt > BM25_BLOCK_SIZE)
-		cnt = BM25_BLOCK_SIZE;	/* defensive */
+	if (bh->count == 0 || bh->count > (uint32) BM25_BLOCK_SIZE)
+		cnt = BM25_BLOCK_SIZE;	/* defensive: uint32 count, guard both ends */
 
 	/* copy the block's FOR payload so tf/dl bytes stay valid after we unlock */
 	c->blkbuf = (unsigned char *) palloc(bh->bytelen);

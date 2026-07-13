@@ -150,7 +150,18 @@ bm25_for_unpack(const unsigned char *buf, int n, uint64 *out)
 			for (k = 0; k < 8; k++)
 				lo |= (uint64) bits[byte + k] << (k * 8);
 			hi = bits[byte + 8];
-			v = ((lo >> shift) | (hi << (64 - shift))) & mask;
+			/*
+			 * shift is in [0,7]; (64 - shift) == 64 only when shift == 0, which
+			 * reaches this wide branch solely for a corrupt width > 64 (a valid
+			 * width <= 64 gives shift >= 1 here).  A 64-bit shift is undefined in
+			 * C, so when shift == 0 the high word contributes nothing -- take lo
+			 * directly.  Keeps every valid-width result identical while making a
+			 * corrupt on-disk width byte safe rather than UB.
+			 */
+			if (shift == 0)
+				v = lo & mask;
+			else
+				v = ((lo >> shift) | (hi << (64 - shift))) & mask;
 		}
 		out[i] = v;
 		bitpos += width;

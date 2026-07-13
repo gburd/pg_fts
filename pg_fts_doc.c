@@ -41,6 +41,7 @@
 #include "postgres.h"
 
 #include "pg_fts.h"
+#include "pg_fts_docvalid.h"
 #include "catalog/pg_collation.h"
 #include "lib/stringinfo.h"
 #include "libpq/pqformat.h"
@@ -74,57 +75,31 @@ PG_FUNCTION_INFO_V1(ftsdoc_length);
 bool
 fts_doc_is_valid(const FtsDocData *doc, Size sz)
 {
-	const FtsTermEntry *entries;
-	Size		need;
-	uint64		sumtf = 0;
-	uint32		i;
-
-	/* header must fit, and the declared VARSIZE must match the buffer we have */
+	/*
+	 * The validator body lives in pg_fts_docvalid.h as pure standalone C so the
+	 * fuzz/corruption harness (test/fuzz/) exercises this exact logic -- single
+	 * source of truth.  Reading VARSIZE stays here, in its proper backend
+	 * context; fts_doc_check() takes the declared size as a parameter.  A NULL
+	 * doc has no readable VARSIZE, so short-circuit it (fts_doc_check also
+	 * rejects NULL, but must not dereference it for VARSIZE first).
+	 */
 	if (doc == NULL || sz < FTS_DOC_HDRSIZE)
 		return false;
-	if ((Size) VARSIZE(doc) > sz)
-		return false;
-	sz = VARSIZE(doc);			/* trust the smaller of the two from here */
 
-	if (doc->version != FTS_DOC_VERSION)
-		return false;
+	/* These asserts guard the FtsDvDocData/FtsDvTermEntry mirror in
+	 * pg_fts_docvalid.h against drifting from the real pg_fts.h structs. */
+	StaticAssertStmt(sizeof(FtsDvDocData) == FTS_DOC_HDRSIZE,
+					 "FtsDvDocData layout drifted from FtsDocData header");
+	StaticAssertStmt(sizeof(FtsDvTermEntry) == sizeof(FtsTermEntry),
+					 "FtsDvTermEntry layout drifted from FtsTermEntry");
+	StaticAssertStmt(FTS_DV_HDRSIZE == FTS_DOC_HDRSIZE,
+					 "FTS_DV_HDRSIZE drifted from FTS_DOC_HDRSIZE");
+	StaticAssertStmt(FTS_DV_VERSION == FTS_DOC_VERSION,
+					 "FTS_DV_VERSION drifted from FTS_DOC_VERSION");
+	StaticAssertStmt(FTS_DV_FLAG_POSITIONS == FTS_DOCF_POSITIONS,
+					 "FTS_DV_FLAG_POSITIONS drifted from FTS_DOCF_POSITIONS");
 
-	/* header + entries[nterms] + lexbytes must fit */
-	need = FTS_DOC_HDRSIZE + (Size) doc->nterms * sizeof(FtsTermEntry);
-	if (need < FTS_DOC_HDRSIZE || need > sz)		/* overflow or overrun */
-		return false;
-	if (need + (Size) doc->lexbytes < need || need + (Size) doc->lexbytes > sz)
-		return false;
-
-	entries = FTS_DOC_ENTRIES(doc);
-	for (i = 0; i < doc->nterms; i++)
-	{
-		/* each term's lexeme slice must lie within lexbytes */
-		if ((Size) entries[i].off + entries[i].len < (Size) entries[i].off ||
-			(Size) entries[i].off + entries[i].len > doc->lexbytes)
-			return false;
-		sumtf += entries[i].tf;
-	}
-
-	if (FTS_DOC_HAS_POS(doc))
-	{
-		/* the positions[] region (sumtf uint32s) must fit after the MAXALIGN'd
-		 * header+entries+lexemes, and each term's [posoff, posoff+tf) run must
-		 * lie within it. */
-		Size		posbase = MAXALIGN(FTS_DOC_HDRSIZE +
-								   (Size) doc->nterms * sizeof(FtsTermEntry) +
-								   doc->lexbytes);
-
-		if (posbase > sz)
-			return false;
-		if (sumtf > (uint64) ((sz - posbase) / sizeof(uint32)))
-			return false;
-		for (i = 0; i < doc->nterms; i++)
-			if ((uint64) entries[i].posoff + entries[i].tf > sumtf)
-				return false;
-	}
-
-	return true;
+	return fts_doc_check(doc, sz, (uint32) VARSIZE(doc)) != 0;
 }
 
 
