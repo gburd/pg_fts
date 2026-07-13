@@ -1504,3 +1504,34 @@ RESET enable_seqscan;
 RESET enable_bitmapscan;
 RESET max_parallel_workers_per_gather;
 DROP TABLE wandbig;
+
+-- ============================================================================
+-- Coverage: adaptive-k ranked recompute (LIMIT beyond the first over-fetch
+-- pass), boolean NOT/negated-set combinations on the index scan, and regex
+-- operators +/{n} in trigram extraction -- specific uncovered branches.
+-- ============================================================================
+CREATE TABLE cvx (id int, d ftsdoc);
+INSERT INTO cvx SELECT g,
+  to_ftsdoc('common alpha ' || CASE WHEN g%2=0 THEN 'even' ELSE 'odd' END ||
+            CASE WHEN g%7=0 THEN ' seven' ELSE '' END)
+  FROM generate_series(1, 3000) g;
+CREATE INDEX cvx_idx ON cvx USING fts (d);
+ANALYZE cvx;
+SET enable_seqscan = off; SET enable_bitmapscan = off;
+SET max_parallel_workers_per_gather = 0;
+-- large LIMIT forces the adaptive-k over-fetch to grow + recompute.
+SELECT count(*) AS bigk FROM (
+  SELECT id FROM cvx WHERE d @@@ 'common'::ftsquery
+  ORDER BY d <=> 'common'::ftsquery LIMIT 2000) t;
+-- boolean NOT / negated combinations on the index (tidset_andnot / negated OR/AND).
+SELECT count(*) AS and_not  FROM cvx WHERE d @@@ 'common & !even'::ftsquery;   -- odds
+SELECT count(*) AS not_or   FROM cvx WHERE d @@@ '!even | seven'::ftsquery;
+SELECT count(*) AS not_and  FROM cvx WHERE d @@@ '!even & !seven'::ftsquery;
+SELECT count(*) AS dbl_not  FROM cvx WHERE d @@@ 'common & !odd & !even'::ftsquery; -- 0
+RESET enable_seqscan; RESET enable_bitmapscan; RESET max_parallel_workers_per_gather;
+DROP TABLE cvx;
+
+-- regex operators + and {n} (fts_regex_trigrams FLUSH_RUN branches).
+SELECT to_ftsdoc('aaa bbb') @@@ '/a+/'::ftsquery AS rx_plus;
+SELECT to_ftsdoc('abcabc') @@@ '/(abc){2}/'::ftsquery AS rx_brace;
+SELECT to_ftsdoc('xyz') @@@ '/a+b*c?/'::ftsquery AS rx_mixed_quant;
