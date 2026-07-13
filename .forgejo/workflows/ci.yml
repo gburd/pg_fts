@@ -84,3 +84,91 @@ jobs:
             /usr/lib/postgresql/19/bin/pg_ctl -D /tmp/pgdata -o "-k /tmp -c listen_addresses=localhost" -w start &&
             make installcheck PROVE_TESTS=ci/noop.pl PG_CONFIG=/usr/bin/pg_config PGHOST=/tmp PGUSER=postgres
           '
+
+  # --- AddressSanitizer + UBSan gate ------------------------------------------
+  sanitizers:
+    runs-on: docker
+    container:
+      image: postgres:17
+    steps:
+      - name: Install build deps
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            postgresql-server-dev-17 gcc make git libipc-run-perl ca-certificates
+      - uses: actions/checkout@v4
+      - name: Build + install with ASan+UBSan
+        run: |
+          make PG_CONFIG=/usr/bin/pg_config with_llvm=no \
+            COPT="-fsanitize=address,undefined -fno-omit-frame-pointer -g -O1 -DUSE_ASSERT_CHECKING" \
+            SHLIB_LINK="-fsanitize=address,undefined"
+          make install PG_CONFIG=/usr/bin/pg_config
+      - name: Regression + isolation under sanitizers
+        run: |
+          # Instrumented .so loaded into a stock postgres -> preload gcc's libasan
+          # (matches the gcc-built server) into the backend.  Backend leaks are
+          # noisy and off-scope here -> detect_leaks=0.
+          chown -R postgres:postgres .
+          ASAN_LIB=$(gcc -print-file-name=libasan.so)
+          su postgres -c "
+            /usr/lib/postgresql/17/bin/initdb -D /tmp/pgdata --no-locale --encoding=UTF8 &&
+            LD_PRELOAD='$ASAN_LIB' ASAN_OPTIONS='detect_leaks=0:abort_on_error=1:print_stacktrace=1:verify_asan_link_order=0' UBSAN_OPTIONS='print_stacktrace=1:halt_on_error=1' /usr/lib/postgresql/17/bin/pg_ctl -D /tmp/pgdata -o '-k /tmp -c listen_addresses=localhost' -w start &&
+            LD_PRELOAD='$ASAN_LIB' ASAN_OPTIONS='detect_leaks=0:abort_on_error=1:print_stacktrace=1:verify_asan_link_order=0' UBSAN_OPTIONS='print_stacktrace=1:halt_on_error=1' make installcheck PROVE_TESTS=ci/noop.pl PG_CONFIG=/usr/bin/pg_config PGHOST=/tmp PGUSER=postgres
+          "
+      - name: Show diffs on failure
+        if: failure()
+        run: |
+          for f in regression.diffs output_iso/regression.diffs; do
+            [ -f "$f" ] && { echo "=== $f ==="; cat "$f"; }
+          done
+
+  # --- Fuzz / corruption harness (ASan+UBSan) ---------------------------------
+  fuzz:
+    runs-on: docker
+    container:
+      image: debian:stable-slim
+    steps:
+      - name: Install clang
+        run: apt-get update && apt-get install -y --no-install-recommends clang git ca-certificates bash
+      - uses: actions/checkout@v4
+      - name: Run fuzz harness
+        run: bash test/fuzz/run.sh
+
+  # --- Property-based tests (hegel-c) -----------------------------------------
+  hegel:
+    runs-on: docker
+    container:
+      image: debian:stable-slim
+    steps:
+      - name: Install deps
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            cmake clang libcmocka-dev libcbor-dev zlib1g-dev git ca-certificates
+      - uses: actions/checkout@v4
+      - name: Build + run hegel property tests
+        run: |
+          cmake -S test/hegel -B test/hegel/build \
+            -DCMAKE_C_FLAGS="-fsanitize=address -fno-omit-frame-pointer -g" >/dev/null
+          cmake --build test/hegel/build -j"$(nproc)"
+          ctest --test-dir test/hegel/build --output-on-failure
+
+  # --- Coverage gate (>= 90% of pg_fts-own sources) ---------------------------
+  coverage:
+    runs-on: docker
+    container:
+      image: postgres:17
+    steps:
+      - name: Install deps
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            postgresql-server-dev-17 gcc make git libipc-run-perl lcov ca-certificates
+      - uses: actions/checkout@v4
+      - name: Measure coverage (gate >= 90% of pg_fts-own sources)
+        run: |
+          chown -R postgres:postgres .
+          su postgres -c '
+            COV_MIN=90 PG_CONFIG=/usr/bin/pg_config \
+              PGBIN=/usr/lib/postgresql/17/bin bash ci/coverage.sh
+          '
