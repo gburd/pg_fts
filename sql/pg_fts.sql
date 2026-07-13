@@ -1469,3 +1469,38 @@ SELECT round(fts_bm25f(
          ARRAY[2.0, 1.0],          -- field weights (title x2, body x1)
          1000.0,
          ARRAY[3.0, 10.0])::numeric, 4) AS bm25f_score;
+
+-- ============================================================================
+-- Coverage: WAND/MaxScore block skipping in the ranked <=> scan (wand_seek /
+-- wand_skip_blocks / wand_block_max_contrib).  These only fire when a term's
+-- posting list spans many 128-doc blocks and a small-LIMIT top-k lets the
+-- traversal skip whole blocks that cannot beat the running threshold.  Build a
+-- large index where 'common' has a huge posting list and 'rare' a tiny one,
+-- then run selective ranked top-k queries.
+-- ============================================================================
+CREATE TABLE wandbig (id int, d ftsdoc);
+INSERT INTO wandbig
+  SELECT g, to_ftsdoc('common filler alpha beta ' ||
+                      CASE WHEN g % 5000 = 0 THEN 'rareterm' ELSE 'ordinary' END)
+  FROM generate_series(1, 40000) g;      -- 'common' df=40000 (~312 blocks); 'rareterm' df=8
+CREATE INDEX wandbig_idx ON wandbig USING fts (d);
+ANALYZE wandbig;
+SET enable_seqscan = off;
+SET enable_bitmapscan = off;
+SET max_parallel_workers_per_gather = 0;
+-- small-LIMIT top-k over a huge posting list: WAND must skip blocks.
+SELECT count(*) AS top10 FROM (
+  SELECT id FROM wandbig WHERE d @@@ 'common'::ftsquery
+  ORDER BY d <=> 'common'::ftsquery LIMIT 10) t;
+-- multi-term (common + rare): MaxScore/block-max pruning + block skip.
+SELECT count(*) AS top5_mt FROM (
+  SELECT id FROM wandbig WHERE d @@@ 'common & rareterm'::ftsquery
+  ORDER BY d <=> 'common & rareterm'::ftsquery LIMIT 5) t;
+-- OR query over mixed frequencies (block-max contribution across cursors).
+SELECT count(*) AS top10_or FROM (
+  SELECT id FROM wandbig WHERE d @@@ 'rareterm | ordinary'::ftsquery
+  ORDER BY d <=> 'rareterm | ordinary'::ftsquery LIMIT 10) t;
+RESET enable_seqscan;
+RESET enable_bitmapscan;
+RESET max_parallel_workers_per_gather;
+DROP TABLE wandbig;
