@@ -42,29 +42,48 @@ rm -f ./*.gcno ./*.gcda vendor/*.gcno vendor/*.gcda
 make PG_CONFIG="$PG_CONFIG" with_llvm=no \
   COPT="--coverage -O0 -g -fno-lto -DUSE_ASSERT_CHECKING" \
   SHLIB_LINK="--coverage" >/dev/null
-make install PG_CONFIG="$PG_CONFIG" >/dev/null
 test -f pg_fts.so
+
+# Install the instrumented .so + control into the PG prefix so CREATE EXTENSION
+# (and the isolation/regress harness) resolve it.  The prefix usually needs
+# root; use sudo when available and not already root.
+if [ "$(id -u)" -eq 0 ]; then INSTALL="make install"
+elif command -v sudo >/dev/null 2>&1; then INSTALL="sudo make install"
+else INSTALL="make install"; fi
+$INSTALL PG_CONFIG="$PG_CONFIG" >/dev/null
+
+# The regression run (initdb/backend + .gcda writes) must not run as root, and
+# must own the build tree so gcov can write .gcda.  If we're root (e.g. the
+# postgres:NN CI container), run the cluster + tests as the `postgres` user and
+# hand it the tree; otherwise run as ourselves.
+if [ "$(id -u)" -eq 0 ]; then
+  RUNAS=postgres
+  chown -R postgres "$root" "$work"
+else
+  RUNAS=""
+fi
+run_as() { if [ -n "$RUNAS" ]; then su "$RUNAS" -c "$1"; else bash -c "$1"; fi; }
 
 # --- throwaway cluster --------------------------------------------------------
 export PGDATA="$work/pgdata" PGHOST="$work" PGPORT=54329 PGUSER=postgres
-"$PGBIN/initdb" -U postgres --no-locale --encoding=UTF8 >/dev/null 2>&1
+run_as "'$PGBIN/initdb' -D '$PGDATA' -U postgres --no-locale --encoding=UTF8 >/dev/null 2>&1"
 {
   echo "listen_addresses=''"
   echo "unix_socket_directories='$work'"
   echo "fsync=off"
 } >> "$PGDATA/postgresql.conf"
-"$PGBIN/pg_ctl" -D "$PGDATA" -l "$work/pg.log" -w start >/dev/null
+run_as "'$PGBIN/pg_ctl' -D '$PGDATA' -l '$work/pg.log' -w start >/dev/null"
 
 echo "== running REGRESS + ISOLATION under the instrumented .so =="
-# The instrumented .so was `make install`ed into the PG prefix, so CREATE
-# EXTENSION resolves it normally.  PROVE_TESTS=ci/noop.pl no-ops the TAP stage.
-make installcheck PG_CONFIG="$PG_CONFIG" PROVE_TESTS=ci/noop.pl \
-  PGHOST="$work" PGUSER=postgres PGPORT=54329 || {
+# The instrumented .so is installed in the PG prefix, so CREATE EXTENSION
+# resolves it.  PROVE_TESTS=ci/noop.pl no-ops the TAP stage (TAP has its own
+# clusters and is exercised by the `test` job).
+run_as "cd '$root' && make installcheck PG_CONFIG='$PG_CONFIG' PROVE_TESTS=ci/noop.pl PGHOST='$work' PGUSER=postgres PGPORT=54329" || {
     echo "--- regression.diffs ---";     head -60 regression.diffs 2>/dev/null || true
     echo "--- iso regression.diffs ---"; head -40 output_iso/regression.diffs 2>/dev/null || true
     exit 1
   }
-"$PGBIN/pg_ctl" -D "$PGDATA" -w stop >/dev/null 2>&1 || true
+run_as "'$PGBIN/pg_ctl' -D '$PGDATA' -w stop >/dev/null 2>&1" || true
 
 echo "== capturing coverage =="
 lcov --capture --directory . --output-file "$work/all.info" \

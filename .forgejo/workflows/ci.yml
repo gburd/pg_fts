@@ -181,8 +181,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Measure coverage (gate >= 90% of pg_fts-own sources)
         run: |
-          chown -R postgres:postgres .
-          su postgres -c '
-            COV_MIN=90 PG_CONFIG=/usr/bin/pg_config \
-              PGBIN=/usr/lib/postgresql/17/bin bash ci/coverage.sh
-          '
+          # Run as root: ci/coverage.sh installs the instrumented .so (needs the
+          # prefix) then drops to the postgres user for initdb + the test run +
+          # .gcda writes (it chowns the tree first).
+          COV_MIN=90 PG_CONFIG=/usr/bin/pg_config \
+            PGBIN=/usr/lib/postgresql/17/bin bash ci/coverage.sh
