@@ -43,7 +43,7 @@ jobs:
           export DOCBOOK_XSL=/usr/share/xml/docbook/stylesheet/docbook-xsl-ns/html/docbook.xsl
           doc/build-html.sh
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: doc/html
 
