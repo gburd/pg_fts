@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# ci/coverage.sh -- build pg_fts with gcov instrumentation, run the full test
-# set (SQL regression + isolation, then merge the standalone fuzz + hegel
-# coverage if present), and report line coverage of the EXTENSION sources.
+# ci/coverage.sh -- build pg_fts with gcov instrumentation, run the SQL
+# regression + isolation suite against a throwaway cluster, and report line
+# coverage of the EXTENSION sources.
 #
 # Gate: line coverage of the pg_fts-OWN sources (pg_fts_*.c / *.h) must be
 # >= COV_MIN (default 90).  The vendored sparsemap (vendor/sm.c, ~4k lines,
@@ -12,13 +12,14 @@
 #
 # Environment:
 #   PG_CONFIG   pg_config to build against (default: pg_config on PATH)
-#   COV_MIN     minimum pg_fts-own line coverage %% to pass (default 90)
 #   PGBIN       directory with initdb/pg_ctl/psql (default: $(pg_config --bindir))
+#   COV_MIN     minimum pg_fts-own line coverage %% to pass (default 90)
 #   COV_HTML    if set, write an lcov HTML report to $COV_HTML
-#   GCOV_TOOL   gcov binary (default: gcov; a wrapper for llvm-cov gcov works too)
+#   GCOV_TOOL   gcov binary (default: gcov)
 #
-# This mirrors how the sanitizer/fuzz jobs are wired: a single self-contained
-# script both CIs invoke, so .github and .forgejo stay in lockstep.
+# Assumes a WRITABLE PostgreSQL install (as on CI: pgdg / the postgres image),
+# so `make install` puts the instrumented .so + control where a fresh cluster
+# finds it.  This is the same install path the `sanitizers` job uses.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -29,12 +30,11 @@ PG_CONFIG="${PG_CONFIG:-pg_config}"
 PGBIN="${PGBIN:-$("$PG_CONFIG" --bindir)}"
 COV_MIN="${COV_MIN:-90}"
 GCOV_TOOL="${GCOV_TOOL:-gcov}"
-PGMAJOR="$("$PG_CONFIG" --version | sed -E 's/[^0-9]*([0-9]+).*/\1/')"
 
 work="$(mktemp -d)"
-trap 'pg_ctl -D "$work/pgdata" -w stop >/dev/null 2>&1 || true; rm -rf "$work"' EXIT
+trap '"$PGBIN/pg_ctl" -D "$work/pgdata" -w stop >/dev/null 2>&1 || true; rm -rf "$work"' EXIT
 
-echo "== coverage build (gcov, PG $PGMAJOR, PG_CONFIG=$PG_CONFIG) =="
+echo "== coverage build (gcov, PG_CONFIG=$PG_CONFIG) =="
 make clean PG_CONFIG="$PG_CONFIG" >/dev/null 2>&1 || true
 rm -f ./*.gcno ./*.gcda vendor/*.gcno vendor/*.gcda
 # with_llvm=no: skip PGXS's LLVM-bitcode emission (JIT), which conflicts with
@@ -42,62 +42,26 @@ rm -f ./*.gcno ./*.gcda vendor/*.gcno vendor/*.gcda
 make PG_CONFIG="$PG_CONFIG" with_llvm=no \
   COPT="--coverage -O0 -g -fno-lto -DUSE_ASSERT_CHECKING" \
   SHLIB_LINK="--coverage" >/dev/null
+make install PG_CONFIG="$PG_CONFIG" >/dev/null
 test -f pg_fts.so
 
-# --- install into a writable extension dir + start a throwaway cluster --------
-extdir="$work/ext"; libdir="$work/lib"
-mkdir -p "$extdir/extension" "$libdir"
-cp pg_fts.so "$libdir/"
-cp pg_fts.control pg_fts--*.sql "$extdir/extension/"
-sed -i "s|\$libdir/pg_fts|$libdir/pg_fts|" "$extdir/extension/pg_fts.control"
-
+# --- throwaway cluster --------------------------------------------------------
 export PGDATA="$work/pgdata" PGHOST="$work" PGPORT=54329 PGUSER=postgres
 "$PGBIN/initdb" -U postgres --no-locale --encoding=UTF8 >/dev/null 2>&1
-
-# PG 18+ has extension_control_path; PG 17 does not.  On PG 17, symlink the
-# system sharedir's extension dir alongside ours so contrib (fuzzystrmatch) is
-# still resolvable, and put our control there via a writable copy of sharedir.
-if [ "$PGMAJOR" -ge 18 ]; then
-  {
-    echo "listen_addresses=''"
-    echo "unix_socket_directories='$work'"
-    echo "extension_control_path='\$system:$extdir'"
-    echo "dynamic_library_path='\$libdir:$libdir'"
-    echo "fsync=off"
-  } >> "$PGDATA/postgresql.conf"
-else
-  # PG 17: no control-path GUC.  Make a writable clone of the sharedir's
-  # extension directory (symlinks to the read-only originals) + our files, and
-  # point PGXS installcheck's control search at it via a wrapped sharedir.
-  sysshare="$("$PG_CONFIG" --sharedir)"
-  mkdir -p "$work/share/extension"
-  # symlink every system extension control/sql so contrib stays available
-  if [ -d "$sysshare/extension" ]; then
-    ln -s "$sysshare/extension/"* "$work/share/extension/" 2>/dev/null || true
-  fi
-  # our (coverage) control + sql win over any symlinked copy
-  cp -f pg_fts.control pg_fts--*.sql "$work/share/extension/"
-  sed -i "s|\$libdir/pg_fts|$libdir/pg_fts|" "$work/share/extension/pg_fts.control"
-  {
-    echo "listen_addresses=''"
-    echo "unix_socket_directories='$work'"
-    echo "dynamic_library_path='\$libdir:$libdir'"
-    echo "fsync=off"
-  } >> "$PGDATA/postgresql.conf"
-fi
-
+{
+  echo "listen_addresses=''"
+  echo "unix_socket_directories='$work'"
+  echo "fsync=off"
+} >> "$PGDATA/postgresql.conf"
 "$PGBIN/pg_ctl" -D "$PGDATA" -l "$work/pg.log" -w start >/dev/null
 
 echo "== running REGRESS + ISOLATION under the instrumented .so =="
-# PG 17: point PGXS at the wrapped sharedir so CREATE EXTENSION finds our copy.
-extra=()
-[ "$PGMAJOR" -lt 18 ] && extra=(EXTRA_REGRESS_OPTS="--extra-install=" )
+# The instrumented .so was `make install`ed into the PG prefix, so CREATE
+# EXTENSION resolves it normally.  PROVE_TESTS=ci/noop.pl no-ops the TAP stage.
 make installcheck PG_CONFIG="$PG_CONFIG" PROVE_TESTS=ci/noop.pl \
-  PGHOST="$work" PGUSER=postgres PGPORT=54329 \
-  ${PGMAJOR:+} 2>&1 | tail -12 || {
+  PGHOST="$work" PGUSER=postgres PGPORT=54329 || {
     echo "--- regression.diffs ---";     head -60 regression.diffs 2>/dev/null || true
     echo "--- iso regression.diffs ---"; head -40 output_iso/regression.diffs 2>/dev/null || true
-    "$PGBIN/pg_ctl" -D "$PGDATA" -w stop >/dev/null 2>&1 || true
     exit 1
   }
 "$PGBIN/pg_ctl" -D "$PGDATA" -w stop >/dev/null 2>&1 || true
@@ -118,12 +82,10 @@ lcov --extract "$work/all.info" "*/vendor/sm.c" \
   --ignore-errors unused,format,inconsistent >/dev/null 2>&1 || true
 
 if [ "${COV_INCLUDE_VENDOR:-0}" = "1" ]; then
-  cp "$work/all.info" "$work/gate.info"
-  lcov --extract "$work/gate.info" \
+  lcov --extract "$work/all.info" \
     "*/pg_fts_*.c" "*/pg_fts_*.h" "*/pg_fts.h" "*/vendor/sm.c" \
-    --output-file "$work/gate.info.2" \
+    --output-file "$work/gate.info" \
     --ignore-errors unused,format,inconsistent >/dev/null 2>&1 || true
-  mv "$work/gate.info.2" "$work/gate.info"
 else
   cp "$work/own.info" "$work/gate.info"
 fi
@@ -140,17 +102,16 @@ if [ -n "${COV_HTML:-}" ]; then
   echo "== HTML report written to $COV_HTML =="
 fi
 
-# --- extract the gated % and enforce the threshold ---------------------------
+# --- gate ---------------------------------------------------------------------
 pct="$(lcov --summary "$work/gate.info" --ignore-errors format,inconsistent 2>/dev/null \
   | sed -nE 's/.*lines\.+: ([0-9.]+)%.*/\1/p' | head -1)"
-: "${pct:=0}"
-echo ""
-echo "=================================================================="
-printf '  pg_fts extension line coverage (gate): %s%%  (min %s%%)\n' "$pct" "$COV_MIN"
-echo "=================================================================="
-
-awk -v p="$pct" -v m="$COV_MIN" 'BEGIN{ exit !(p+0 >= m+0) }' || {
-  echo "FAIL: line coverage $pct% < required $COV_MIN%"
+echo "== pg_fts-own line coverage: ${pct:-unknown}% (gate: >= ${COV_MIN}%) =="
+if [ -z "$pct" ]; then
+  echo "ERROR: could not determine coverage percentage" >&2
+  exit 1
+fi
+awk -v p="$pct" -v m="$COV_MIN" 'BEGIN { exit !(p+0 >= m+0) }' || {
+  echo "FAIL: coverage ${pct}% is below the ${COV_MIN}% gate" >&2
   exit 1
 }
-echo "PASS: line coverage $pct% >= $COV_MIN%"
+echo "PASS: coverage ${pct}% >= ${COV_MIN}%"
