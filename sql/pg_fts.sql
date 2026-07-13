@@ -1306,3 +1306,86 @@ SELECT count(*) AS phrase_hits FROM decreg
   WHERE to_ftsdoc('simple', body) @@@ to_ftsquery('simple','"alpha beta"');
 RESET enable_seqscan;
 DROP TABLE decreg;
+
+-- ============================================================================
+-- Coverage: exercise paths the main suite misses (ftsquery binary recv, the
+-- <=> commutator, a parallel-built index + parallel merge, and an empty-index
+-- build).  These are all reachable via SQL and were previously untested.
+-- ============================================================================
+-- ftsquery binary send/recv round-trip (ftsquery_recv): COPY BINARY out+back.
+CREATE TEMP TABLE qrt (id int, q ftsquery);
+INSERT INTO qrt VALUES
+  (1, 'alpha & beta'::ftsquery),
+  (2, 'alpha | (beta & !gamma)'::ftsquery),
+  (3, '"quick brown fox"'::ftsquery),
+  (4, 'NEAR(alpha beta, 3)'::ftsquery),
+  (5, 'quick* & alpha'::ftsquery);
+COPY qrt TO '/tmp/pg_fts_qrt.bin' WITH (FORMAT binary);
+CREATE TEMP TABLE qrt2 (id int, q ftsquery);
+COPY qrt2 FROM '/tmp/pg_fts_qrt.bin' WITH (FORMAT binary);
+SELECT bool_and(ftsquery_send(a.q) = ftsquery_send(b.q)) AS ftsquery_binary_roundtrip_ok
+FROM qrt a JOIN qrt2 b USING (id);
+
+-- the <=> distance commutator: query <=> doc must equal doc <=> query.
+SELECT (to_ftsquery('quick') <=> to_ftsdoc('the quick brown fox'))
+     = (to_ftsdoc('the quick brown fox') <=> to_ftsquery('quick')) AS commutator_ok;
+
+-- parallel index build + parallel merge over a table big enough to split.
+SET max_parallel_maintenance_workers = 2;
+SET min_parallel_table_scan_size = 0;
+CREATE TABLE parbuild (id int, body text);
+INSERT INTO parbuild SELECT g, 'term'||(g%500)||' common alpha beta' FROM generate_series(1, 20000) g;
+CREATE INDEX parbuild_idx ON parbuild USING fts (to_ftsdoc('simple', body));
+SELECT fts_merge('parbuild_idx'::regclass) IS NOT NULL AS merged;
+SET enable_seqscan = off;
+SELECT count(*) AS par_hits FROM parbuild
+  WHERE to_ftsdoc('simple', body) @@@ to_ftsquery('simple','common');
+RESET enable_seqscan;
+RESET max_parallel_maintenance_workers;
+RESET min_parallel_table_scan_size;
+DROP TABLE parbuild;
+
+-- empty-table index build (bm25_buildempty / a build with zero rows).
+CREATE TABLE emptydoc (id int, body text);
+CREATE INDEX emptydoc_idx ON emptydoc USING fts (to_ftsdoc('simple', body));
+SELECT count(*) AS empty_hits FROM emptydoc
+  WHERE to_ftsdoc('simple', body) @@@ to_ftsquery('simple','anything');
+DROP TABLE emptydoc;
+
+-- ============================================================================
+-- Coverage: highlight/snippet, canonical ftsdoc parsing (positions + escapes +
+-- error paths), ftsdoc binary recv WITH positions, and regex-query trigram
+-- extraction -- functions the main suite exercises only lightly.
+-- ============================================================================
+-- fts_highlight / fts_snippet with default and custom markers + boolean/phrase.
+SELECT fts_highlight('the quick brown fox jumps', 'quick & fox'::ftsquery) AS hl_default;
+SELECT fts_highlight('the quick brown fox', 'quick'::ftsquery, '[', ']') AS hl_custom;
+SELECT fts_highlight('nothing matches here', 'zzz'::ftsquery) AS hl_nomatch;
+SELECT fts_snippet(repeat('alpha beta gamma delta ', 20) || 'needle tail',
+                   'needle'::ftsquery) AS snip_default;
+SELECT fts_snippet('short doc with needle', 'needle'::ftsquery,
+                   '<<', '>>', ' ... ', 5) AS snip_custom;
+SELECT fts_snippet('the quick brown fox', '"quick brown"'::ftsquery) AS snip_phrase;
+
+-- canonical ftsdoc parsing: positions, repeated tf, escaped quote/backslash.
+SELECT ($$'brown':1@3 'fox':2@2,5 'quick':1@1$$::ftsdoc)::text AS canon_positions;
+SELECT ($$'a''b':1@1 'c\\d':1@2$$::ftsdoc)::text AS canon_escapes;
+-- malformed canonical input -> clean errors (parser error branches).
+SELECT $$'ok':1 'bad$$::ftsdoc;             -- unterminated quoted term
+SELECT $$'ok':1 'x':abc$$::ftsdoc;          -- non-numeric tf
+SELECT $$'z':1@ $$::ftsdoc;                 -- '@' with no positions
+
+-- ftsdoc binary recv carrying positions (COPY BINARY of a positional doc).
+CREATE TEMP TABLE drt (id int, d ftsdoc);
+INSERT INTO drt VALUES (1, to_ftsdoc('alpha beta alpha gamma alpha')); -- alpha tf=3, positions
+COPY drt TO '/tmp/pg_fts_drt.bin' WITH (FORMAT binary);
+CREATE TEMP TABLE drt2 (id int, d ftsdoc);
+COPY drt2 FROM '/tmp/pg_fts_drt.bin' WITH (FORMAT binary);
+SELECT bool_and(ftsdoc_send(a.d) = ftsdoc_send(b.d)) AS doc_pos_binary_roundtrip_ok
+FROM drt a JOIN drt2 b USING (id);
+
+-- regex-query trigram extraction (fts_regex_trigrams) over varied patterns.
+SELECT to_ftsdoc('the quicksand shifts') @@@ '/quick.*/'::ftsquery AS rx_star;
+SELECT to_ftsdoc('color colour') @@@ '/colou?r/'::ftsquery AS rx_opt;
+SELECT to_ftsdoc('cat bat hat') @@@ '/[cbh]at/'::ftsquery AS rx_class;
+SELECT to_ftsdoc('foobar') @@@ '/foo|xyz/'::ftsquery AS rx_alt;
