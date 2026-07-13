@@ -74,3 +74,110 @@ jobs:
           for f in regression.diffs output_iso/regression.diffs; do
             [ -f "$f" ] && { echo "=== $f ==="; cat "$f"; }
           done
+
+  # --- AddressSanitizer + UBSan gate ------------------------------------------
+  # Builds pg_fts instrumented and runs REGRESS + ISOLATION against a real PG
+  # with the ASan runtime preloaded into the backend.  This is the job that
+  # catches the memory-safety bugs (buffer overflow, use-after-free) that the
+  # plain regression suite runs right past -- e.g. the pending-list and
+  # segment-decode overflows fixed in 0.3.3/0.3.4.
+  sanitizers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL 17 + headers
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft*.list /etc/apt/sources.list.d/microsoft*.sources || true
+          sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            postgresql-17 postgresql-server-dev-17 gcc make libipc-run-perl
+      - name: Build + install with ASan+UBSan
+        run: |
+          PGBIN=/usr/lib/postgresql/17/bin
+          # gcc-built pgdg PG -> gcc ASan matches. -O1 keeps frames; assertions on.
+          make PG_CONFIG=$PGBIN/pg_config with_llvm=no \
+            COPT="-fsanitize=address,undefined -fno-omit-frame-pointer -g -O1 -DUSE_ASSERT_CHECKING" \
+            SHLIB_LINK="-fsanitize=address,undefined"
+          sudo make install PG_CONFIG=$PGBIN/pg_config
+      - name: Regression + isolation under sanitizers
+        run: |
+          PGBIN=/usr/lib/postgresql/17/bin
+          # The instrumented .so is loaded into a stock (non-ASan) postgres, so
+          # the ASan runtime must be preloaded into the backend.  gcc's libasan
+          # matches the gcc-built server.  Leaks in the long-lived backend are
+          # noisy and not what this gate is for -> detect_leaks=0 here (the
+          # standalone fuzz/hegel jobs run with leak detection on).
+          ASAN_LIB=$(gcc -print-file-name=libasan.so)
+          pg_virtualenv -v 17 env \
+            LD_PRELOAD="$ASAN_LIB" \
+            ASAN_OPTIONS="detect_leaks=0:abort_on_error=1:print_stacktrace=1:verify_asan_link_order=0" \
+            UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1" \
+            make installcheck PROVE_TESTS=ci/noop.pl PG_CONFIG=$PGBIN/pg_config
+      - name: Show diffs on failure
+        if: failure()
+        run: |
+          for f in regression.diffs output_iso/regression.diffs; do
+            [ -f "$f" ] && { echo "=== $f ==="; cat "$f"; }
+          done
+
+  # --- Fuzz / corruption harness (ASan+UBSan) ---------------------------------
+  # Fuzzes the untrusted-on-disk parse surface (FOR codec, fts_doc validator,
+  # block-header decode) and asserts the planted-bug teeth builds abort.
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang
+      - name: Run fuzz harness
+        run: bash test/fuzz/run.sh
+
+  # --- Property-based tests (hegel-c) -----------------------------------------
+  # cmocka + hegel-c (FetchContent) property tests for the pure-C codec +
+  # validator.  Needs the hegel server + libcbor/zlib/cmocka; best-effort if
+  # the hegel server is unavailable on the runner.
+  hegel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake clang libcmocka-dev libcbor-dev zlib1g-dev git
+      - name: Build + run hegel property tests
+        run: |
+          cmake -S test/hegel -B test/hegel/build \
+            -DCMAKE_C_FLAGS="-fsanitize=address -fno-omit-frame-pointer -g" >/dev/null
+          cmake --build test/hegel/build -j"$(nproc)"
+          ctest --test-dir test/hegel/build --output-on-failure
+
+  # --- Coverage gate (>= 90% of pg_fts-own sources) ---------------------------
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL 17 + coverage tooling
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft*.list /etc/apt/sources.list.d/microsoft*.sources || true
+          sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            postgresql-17 postgresql-server-dev-17 gcc make libipc-run-perl lcov
+      - name: Measure coverage (gate >= 90% of pg_fts-own sources)
+        run: |
+          PGBIN=/usr/lib/postgresql/17/bin
+          # ci/coverage.sh builds with --coverage, runs REGRESS+ISOLATION against
+          # a throwaway cluster, and fails if pg_fts-own line coverage < COV_MIN.
+          COV_MIN=90 PG_CONFIG=$PGBIN/pg_config PGBIN=$PGBIN \
+            COV_HTML=coverage-html bash ci/coverage.sh
+      - name: Upload coverage HTML
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html
+          path: coverage-html
+          if-no-files-found: ignore
