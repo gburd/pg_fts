@@ -2,6 +2,30 @@
 
 All notable changes to pg_fts are documented here.
 
+## 0.3.5
+
+Hardening + testing release. **No on-disk format change**; no **REINDEX**
+required (`ALTER EXTENSION pg_fts UPDATE TO '0.3.5'`).
+
+- **Further hardened the segment posting-decode path** against corrupt/torn
+  pages (three issues found by the new fuzz harness, extending the 0.3.4 fix):
+  the per-block `count` clamp was one-sided (a `uint32` count >= 2^31 cast to a
+  negative `int` and slipped past `> BM25_BLOCK_SIZE`) and is now tested on the
+  unsigned value; the three FOR columns' width-driven byte consumption is now
+  bounded against the block's declared `bytelen` before decoding, so a corrupt
+  width byte cannot read past the page; and a shift-by-64 undefined behavior in
+  `bm25_for_unpack` on a corrupt width (> 64) is fixed (valid widths unaffected).
+  A corrupt block remains a bounded miss with a `WARNING`, never a crash.
+- **New testing regime** (see `doc/testing.md`), run in CI on both forges:
+  an AddressSanitizer+UBSan build of the regression + isolation suite; a gating
+  fuzz/corruption harness (`test/fuzz/`) over the FOR codec, the stored-document
+  validator, and the block decoder, with planted-bug "teeth"; property-based
+  tests (`test/hegel/`) for the codec + validator invariants; a torn-page
+  crash-safety TAP test (`t/003_corruption.pl`); and a **90% line-coverage gate**
+  on the pg_fts sources. `fts_doc_is_valid`'s logic was factored into a pure
+  header (`pg_fts_docvalid.h`) shared with the fuzzer (behavior-identical).
+
+
 ## 0.3.4
 
 Crash-safety bug-fix release. **No on-disk format change**; no **REINDEX**
