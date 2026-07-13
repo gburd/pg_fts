@@ -1389,3 +1389,51 @@ SELECT to_ftsdoc('the quicksand shifts') @@@ '/quick.*/'::ftsquery AS rx_star;
 SELECT to_ftsdoc('color colour') @@@ '/colou?r/'::ftsquery AS rx_opt;
 SELECT to_ftsdoc('cat bat hat') @@@ '/[cbh]at/'::ftsquery AS rx_class;
 SELECT to_ftsdoc('foobar') @@@ '/foo|xyz/'::ftsquery AS rx_alt;
+
+-- ============================================================================
+-- Coverage: force the size-tiered segment merge (many small segments -> group
+-- merge, bm25_merge_one_group / bm25_merge_group_to_seg) and a parallel index
+-- build over a larger table (bm25_parallel_build_main), plus a delete/vacuum
+-- compaction cycle (tombstone drop during merge).
+-- ============================================================================
+CREATE TABLE segmerge (id int, body text);
+CREATE INDEX segmerge_idx ON segmerge USING fts (to_ftsdoc('simple', body));
+-- many small INSERT batches, each flushed to its own segment via VACUUM, so a
+-- later fts_merge has similarly-sized segments to group-merge.
+DO $$
+BEGIN
+  FOR b IN 0..7 LOOP
+    INSERT INTO segmerge SELECT b*1000 + g, 'common term'||((b*1000+g)%300)||' alpha'
+      FROM generate_series(1, 1000) g;
+    PERFORM fts_vacuum('segmerge_idx'::regclass);  -- flush this batch to a segment
+  END LOOP;
+END $$;
+SELECT fts_merge('segmerge_idx'::regclass) IS NOT NULL AS grouped;   -- size-tiered group merge
+-- delete a chunk + vacuum: tombstones must be dropped by the next merge.
+DELETE FROM segmerge WHERE id % 3 = 0;
+VACUUM segmerge;
+SELECT fts_vacuum('segmerge_idx'::regclass) IS NOT NULL AS compacted;
+SET enable_seqscan = off;
+SELECT count(*) > 0 AS merge_hits FROM segmerge
+  WHERE to_ftsdoc('simple', body) @@@ to_ftsquery('simple','common');
+RESET enable_seqscan;
+DROP TABLE segmerge;
+
+-- parallel index build: a larger table + forced workers so the parallel build
+-- leader/worker paths (bm25_parallel_build_main) actually run.
+CREATE TABLE parbig (id int, body text);
+INSERT INTO parbig SELECT g, 'word'||(g%1000)||' shared alpha beta gamma delta epsilon'
+  FROM generate_series(1, 60000) g;
+SET max_parallel_maintenance_workers = 3;
+SET min_parallel_table_scan_size = 0;
+SET maintenance_work_mem = '64MB';
+ALTER TABLE parbig SET (parallel_workers = 3);
+CREATE INDEX parbig_idx ON parbig USING fts (to_ftsdoc('simple', body));
+SET enable_seqscan = off;
+SELECT count(*) > 0 AS parbig_hits FROM parbig
+  WHERE to_ftsdoc('simple', body) @@@ to_ftsquery('simple','shared');
+RESET enable_seqscan;
+RESET max_parallel_maintenance_workers;
+RESET min_parallel_table_scan_size;
+RESET maintenance_work_mem;
+DROP TABLE parbig;
