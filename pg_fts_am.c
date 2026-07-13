@@ -580,6 +580,32 @@ bm25_decode_term(Relation index, BlockNumber firstblk, uint32 firstoff,
 
 			if (cnt == 0)
 				break;
+
+			/*
+			 * Never trust the on-disk block header's own count/lengths: a torn
+			 * page, a stale-format image, or any producing bug could give a
+			 * count > BM25_BLOCK_SIZE (which would overflow the fixed gaps/tfs/
+			 * dls stack arrays via bm25_for_unpack) or a bytelen/posbytelen that
+			 * runs the FOR columns past the page (an out-of-bounds read).  Clamp
+			 * the count (as the WAND block loader already does) and stop
+			 * decoding this term at the first block whose declared payload does
+			 * not fit within the page -- returning the postings decoded so far
+			 * rather than reading off the end.  A corrupt block is thus a
+			 * bounded, non-crashing miss; REINDEX rebuilds it from the heap.
+			 */
+			if (cnt > BM25_BLOCK_SIZE)
+				cnt = BM25_BLOCK_SIZE;
+			if (stream + (Size) bh->bytelen + (Size) bh->posbytelen > (const unsigned char *) pend)
+			{
+				ereport(WARNING,
+						(errcode(ERRCODE_DATA_CORRUPTED),
+						 errmsg("pg_fts: truncated posting block in index \"%s\"; stopping term decode",
+								RelationGetRelationName(index)),
+						 errhint("REINDEX the index to rebuild it from the heap.")));
+				UnlockReleaseBuffer(buf);
+				goto done;
+			}
+
 			pos += bm25_for_unpack(stream + pos, cnt, gaps);
 			pos += bm25_for_unpack(stream + pos, cnt, tfs);
 			pos += bm25_for_unpack(stream + pos, cnt, dls);
@@ -660,6 +686,7 @@ bm25_decode_term(Relation index, BlockNumber firstblk, uint32 firstoff,
 		blk = next;
 		off = MAXALIGN(SizeOfPageHeaderData);	/* later pages: contents start */
 	}
+done:
 	/* convert per-posting arena offsets to stable pointers now the arena is final */
 	if (want_positions)
 	{

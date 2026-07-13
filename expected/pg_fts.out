@@ -1,4 +1,4 @@
-CREATE EXTENSION pg_fts VERSION '0.3.3';
+CREATE EXTENSION pg_fts VERSION '0.3.4';
 -- ftsdoc: analysis, output shows terms with term frequencies
 SELECT to_ftsdoc('The quick brown fox, the QUICK fox!');
                      to_ftsdoc                     
@@ -2474,3 +2474,44 @@ SELECT count(*) AS flushed_phrase_hits FROM crashreg
 
 RESET enable_seqscan;
 DROP TABLE crashreg;
+-- ============================================================================
+-- Crash regression (issue: SIGSEGV in fts_doc_matches <- bm25_collect_matches
+-- <- bm25_gettuple, intermittent, in the SEGMENT posting-decode path).  Root
+-- cause: bm25_decode_term read a block header's `count` from disk and unpacked
+-- that many values into fixed 128-element stack arrays (gaps/tfs/dls) with no
+-- bound check -- a torn/corrupt header with count > BM25_BLOCK_SIZE overflowed
+-- the stack (the WAND loader already clamped; this decoder did not).  The fix
+-- clamps count to BM25_BLOCK_SIZE and stops decoding a block whose declared
+-- byte lengths run past the page.  This exercises the decoder over a large
+-- multi-block posting list (df >> 128, with positions) through count/phrase
+-- scans and a merge; it must complete with stable counts.
+-- ============================================================================
+CREATE TABLE decreg (id int, body text);
+CREATE INDEX decreg_idx ON decreg USING fts (to_ftsdoc('simple', body)) WITH (positions = on);
+-- 'common' appears in every row -> a df=4000 posting list spanning ~32 blocks;
+-- 'alpha beta' phrase spans blocks too (positions decoded across block boundaries).
+INSERT INTO decreg SELECT g, 'alpha beta common tok' || (g % 200) FROM generate_series(1, 4000) g;
+VACUUM decreg;                              -- flush pending -> segment blocks
+SELECT fts_merge('decreg_idx'::regclass);   -- one segment; longest posting lists
+ fts_merge 
+-----------
+ f
+(1 row)
+
+SET enable_seqscan = off;
+SELECT count(*) AS common_df FROM decreg
+  WHERE to_ftsdoc('simple', body) @@@ to_ftsquery('simple','common');
+ common_df 
+-----------
+      4000
+(1 row)
+
+SELECT count(*) AS phrase_hits FROM decreg
+  WHERE to_ftsdoc('simple', body) @@@ to_ftsquery('simple','"alpha beta"');
+ phrase_hits 
+-------------
+        4000
+(1 row)
+
+RESET enable_seqscan;
+DROP TABLE decreg;

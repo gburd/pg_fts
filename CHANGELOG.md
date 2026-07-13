@@ -2,6 +2,29 @@
 
 All notable changes to pg_fts are documented here.
 
+## 0.3.4
+
+Crash-safety bug-fix release. **No on-disk format change**; no **REINDEX**
+required (`ALTER EXTENSION pg_fts UPDATE TO '0.3.4'`).
+
+- **Fixed an intermittent crash in the segment posting-decode path**
+  (`fts_doc_matches` <- `bm25_collect_matches` <- `bm25_gettuple`), a follow-on to
+  the 0.3.3 pending-list fix that its validator did not cover. `bm25_decode_term`
+  read a posting block header's `count` from disk and unpacked that many values
+  into fixed 128-element (`BM25_BLOCK_SIZE`) stack arrays (`gaps`/`tfs`/`dls`)
+  **with no bound check** -- a torn or corrupt block header with `count >
+  BM25_BLOCK_SIZE` overflowed the stack (an AddressSanitizer heap/stack-buffer-
+  overflow, reproduced against the FOR codec). The WAND block loader already
+  clamped its count; this decoder (used by the boolean/`@@@`/count-pushdown/
+  ranked/anomaly/trigram scan paths -- every `bm25_decode_term` caller) did not.
+  It now clamps the per-block count to `BM25_BLOCK_SIZE` and stops decoding a
+  block whose declared column byte lengths (`bytelen`/`posbytelen`) run past the
+  page, so a corrupt block is a bounded miss (with a `WARNING` hinting `REINDEX`)
+  instead of a crash. Fixing it inside `bm25_decode_term` protects all callers at
+  once. Valid indexes are unaffected; a regression test decodes a large
+  multi-block posting list (df >> 128, with positions).
+
+
 ## 0.3.3
 
 Crash-safety bug-fix release. **No on-disk format change**; no **REINDEX**
