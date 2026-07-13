@@ -41,3 +41,13 @@ add_executable(test_lev test_lev.c)
 target_include_directories(test_lev PRIVATE ${PG_FTS_ROOT})
 target_link_libraries(test_lev PRIVATE hegel cmocka::cmocka)
 add_test(NAME test_lev COMMAND test_lev)
+
+add_executable(test_for_props test_for_props.c)
+target_include_directories(test_for_props PRIVATE ${PG_FTS_ROOT})
+target_link_libraries(test_for_props PRIVATE hegel cmocka::cmocka)
+add_test(NAME test_for_props COMMAND test_for_props)
+
+add_executable(test_docvalid test_docvalid.c)
+target_include_directories(test_docvalid PRIVATE ${PG_FTS_ROOT})
+target_link_libraries(test_docvalid PRIVATE hegel cmocka::cmocka)
+add_test(NAME test_docvalid COMMAND test_docvalid)

@@ -14,6 +14,13 @@ Coverage:
 - `test_lev.c` — the Levenshtein automaton (`pg_fts_lev.c`:
   `fts_lev_start/step/accept/match_prefix`), compared against an independent
   naive edit-distance oracle.
+- `test_for_props.c` — FOR codec **safety/bounds** (`pg_fts_for.h`), complementing
+  `test_for.c`'s round-trip: unpack write/read bounds, `bytelen` vs `unpack`
+  agreement, and corrupt-width (>64) safety. Guards the exact overflow the
+  posting-decode crashes came from; run under ASan.
+- `test_docvalid.c` — the structural FtsDoc validator (`pg_fts_docvalid.h`:
+  `fts_doc_check`), the trust boundary for a hostile/corrupt ftsdoc datum.
+  Builds valid images byte-for-byte like `fts_doc_build()` and mutates them.
 
 Both include the real source directly (the header / the `.c`), so the tests and
 the extension share one copy — no duplicated logic to drift.
@@ -60,6 +67,33 @@ Levenshtein (`test_lev.c`):
   fallback threshold).
 - **Robustness / no-crash** — arbitrary query + candidate bytes and any k never
   crash; the reported dead-prefix length stays in `[0, candlen]`.
+
+FOR codec safety (`test_for_props.c`, complements `test_for.c`):
+
+- **Unpack bounds** — `bm25_for_unpack(buf, n, out)` writes exactly `n` values
+  (canary just past `out[n]` untouched) and returns exactly
+  `bm25_for_bytelen(buf, n)` bytes consumed, for every width `0..64` and n.
+- **Bytelen agreement** — `bm25_for_bytelen(buf, n)` equals `bm25_for_unpack`'s
+  return for all widths `0..64`; column-skip and column-decode advance the
+  stream by the same amount.
+- **Corrupt-width safety** — a width byte `65..255` (never produced by pack,
+  reachable via on-disk corruption) stays inside exact-size `buf`/`out`
+  allocations: garbage values allowed, OOB read/write is not (ASan-enforced).
+
+FtsDoc validator (`test_docvalid.c`):
+
+- **Accepts well-formed** — an image serialized byte-for-byte like
+  `fts_doc_build()` (header, entries[nterms], lexemes, MAXALIGN, positions[])
+  is accepted for `sz == VARSIZE`.
+- **Monotone truncation** — cutting readable `sz` or declared VARSIZE below the
+  true image size is rejected (fails closed on any short read).
+- **OOB mutation rejected** — a single field bumped so a derived offset
+  provably escapes the buffer (nterms, lexbytes, an entry `len`, a term `tf`,
+  or a sub-header VARSIZE) is rejected — the contrapositive of
+  "accept implies in-bounds".
+- **Fuzz no-OOB** — arbitrary bytes + arbitrary declared VARSIZE over an
+  exact-size allocation return a clean boolean without reading past `sz`
+  (ASan-enforced).
 
 Generators are deliberately broad (full uint64, boundary values 0 / 1 / powers
 of two / `UINT64_MAX`, n drawn separately to reach full 128-value blocks). Do
