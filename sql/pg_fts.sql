@@ -1437,3 +1437,35 @@ RESET max_parallel_maintenance_workers;
 RESET min_parallel_table_scan_size;
 RESET maintenance_work_mem;
 DROP TABLE parbig;
+
+-- ============================================================================
+-- Coverage: the BM25 scoring functions (fts_bm25 / fts_bm25_opts / fts_bm25f)
+-- across all variants and parameter paths -- pure scalar functions, so these
+-- are deterministic and index-free.
+-- ============================================================================
+-- fts_bm25: default scoring, with and without an explicit per-term df array.
+SELECT round(fts_bm25(to_ftsdoc('the quick brown fox'), 'quick & fox'::ftsquery,
+                      1000.0, 12.0)::numeric, 4) AS bm25_default;
+SELECT round(fts_bm25(to_ftsdoc('the quick brown fox'), 'quick'::ftsquery,
+                      1000.0, 12.0, ARRAY[50.0])::numeric, 4) AS bm25_with_dfs;
+SELECT fts_bm25(to_ftsdoc('no match here'), 'zzz'::ftsquery, 1000.0, 12.0) AS bm25_nomatch;
+
+-- fts_bm25_opts: every variant + custom k1/b.
+SELECT v AS variant,
+       round(fts_bm25_opts(to_ftsdoc('the quick brown fox jumps'),
+                           'quick & fox'::ftsquery,
+                           1000.0, 12.0, 1.2, 0.75, v)::numeric, 4) AS score
+FROM unnest(ARRAY['lucene','robertson','atire','bm25+','bm25l']) AS v
+ORDER BY v;
+-- non-default k1/b (parameter path).
+SELECT round(fts_bm25_opts(to_ftsdoc('alpha beta alpha gamma'),
+                           'alpha'::ftsquery, 500.0, 8.0, 2.0, 0.5, 'lucene')::numeric, 4)
+       AS bm25_opts_tuned;
+
+-- fts_bm25f: multi-field weighted scoring (title weighted higher than body).
+SELECT round(fts_bm25f(
+         ARRAY[to_ftsdoc('quick fox'), to_ftsdoc('the quick brown fox runs fast')],
+         'quick & fox'::ftsquery,
+         ARRAY[2.0, 1.0],          -- field weights (title x2, body x1)
+         1000.0,
+         ARRAY[3.0, 10.0])::numeric, 4) AS bm25f_score;
