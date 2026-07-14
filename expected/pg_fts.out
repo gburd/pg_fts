@@ -2939,3 +2939,91 @@ SELECT to_ftsdoc('xyz') @@@ '/a+b*c?/'::ftsquery AS rx_mixed_quant;
  f
 (1 row)
 
+-- ============================================================================
+-- Character-encoding / multi-script correctness (UTF-8 database).
+-- The 'simple' analyzer path (to_ftsdoc('simple',...) / to_tsvector('simple',...))
+-- is the ground truth: pg_fts's @@@ match set MUST equal PostgreSQL's native
+-- to_tsvector('simple', body) @@ to_tsquery('simple', term) for the same text,
+-- because pg_fts's regconfig analyzer uses the same parsetext() tokenizer.
+-- Divergence here = a pg_fts encoding bug.  We test the 3 most common web
+-- encodings' characters (represented in UTF-8: ASCII/Latin, plus Windows-1252
+-- smart punctuation) and the known-tricky scripts (CJK, combining marks / NFC
+-- vs NFD, emoji / 4-byte, RTL Arabic+Hebrew, Turkish dotless-i, German ß).
+-- ============================================================================
+SET client_encoding = 'UTF8';
+CREATE TABLE enc (id int, script text, body text);
+INSERT INTO enc VALUES
+  (1,  'ascii',        'the quick brown fox'),
+  (2,  'latin1',       'café société naïve Zürich'),
+  (3,  'win1252-punct','“smart quotes” and — em‑dash € 90%'),
+  (4,  'cjk-han',      '東京都 の 図書館 で 本 を 読む'),
+  (5,  'cjk-mixed',    'PostgreSQL は 全文検索 が できる'),
+  (6,  'hangul',       '서울 도서관 에서 책 을 읽다'),
+  (7,  'combining-nfc',E'caf\u00e9 na\u00efve'),        -- precomposed é, ï
+  (8,  'combining-nfd',E'cafe\u0301 nai\u0308ve'),      -- decomposed e+◌́, i+◌̈
+  (9,  'emoji',        'deploy 🚀 ship it 😀 done'),
+  (10, 'cjk-ext-b',    E'rare glyph \U00020000 here'),  -- 4-byte CJK ext-B
+  (11, 'arabic-rtl',   'اللغة العربية مكتبة كتاب'),
+  (12, 'hebrew-rtl',   'ספרייה ספר עברית'),
+  (13, 'turkish-i',    'İstanbul ışık DİYARBAKIR'),
+  (14, 'german-ss',    'Straße Fußball GROSSE');
+-- Ground-truth parity: for a set of probe terms, pg_fts @@@ must equal native
+-- to_tsvector('simple') @@ to_tsquery('simple').  Any mismatch is a bug.
+SELECT bool_and(fts_hit = native_hit) AS enc_parity_ok
+FROM (
+  SELECT e.id, t.term,
+         (to_ftsdoc('simple', e.body) @@@ to_ftsquery('simple', t.term)) AS fts_hit,
+         (to_tsvector('simple', e.body) @@ to_tsquery('simple', t.term)) AS native_hit
+  FROM enc e
+  CROSS JOIN (VALUES ('fox'),('café'),('naïve'),('東京都'),('図書館'),
+                     ('서울'),('책'),('العربية'),('كتاب'),('עברית'),
+                     ('istanbul'),('ışık'),('straße'),('fußball'),('quotes')) AS t(term)
+) q;
+ enc_parity_ok 
+---------------
+ t
+(1 row)
+
+-- Corpus-wide df parity across ALL distinct tokens: the pg_fts index-native
+-- count must equal native tsvector for every script (build an index, count @@@).
+CREATE INDEX enc_idx ON enc USING fts (to_ftsdoc('simple', body));
+SET enable_seqscan = off;
+SELECT bool_and(idx_ct = native_ct) AS df_parity_ok
+FROM (
+  SELECT t.term,
+         (SELECT count(*) FROM enc WHERE to_ftsdoc('simple',body) @@@ to_ftsquery('simple',t.term)) AS idx_ct,
+         (SELECT count(*) FROM enc WHERE to_tsvector('simple',body) @@ to_tsquery('simple',t.term)) AS native_ct
+  FROM (VALUES ('東京都'),('図書館'),('서울'),('책'),('العربية'),('عربية'),
+               ('كتاب'),('עברית'),('ספר'),('café'),('naïve'),('straße'),('rocket')) AS t(term)
+) q;
+ df_parity_ok 
+--------------
+ t
+(1 row)
+
+-- NFC vs NFD: precomposed 'café' (id 7) and decomposed 'cafe\u0301' (id 8) are
+-- DIFFERENT byte sequences; PostgreSQL does not normalize, so pg_fts follows
+-- native behavior exactly.  Assert pg_fts agrees with native on both forms
+-- (whatever native does, pg_fts must match -- documenting, not judging).
+SELECT bool_and(
+         (to_ftsdoc('simple',body) @@@ to_ftsquery('simple', E'caf\u00e9'))
+         = (to_tsvector('simple',body) @@ to_tsquery('simple', E'caf\u00e9'))
+       ) AS nfc_parity_ok
+FROM enc WHERE id IN (7, 8);
+ nfc_parity_ok 
+---------------
+ t
+(1 row)
+
+-- The built-in (non-regconfig) analyzer must not crash on any script and must
+-- round-trip its own analysis (ftsdoc_in(ftsdoc_out(x)) = x) for multi-script text.
+SELECT bool_and(ftsdoc_send(ftsdoc_out(to_ftsdoc(body))::text::ftsdoc)
+              = ftsdoc_send(to_ftsdoc(body))) AS builtin_multiscript_roundtrip_ok
+FROM enc;
+ builtin_multiscript_roundtrip_ok 
+----------------------------------
+ t
+(1 row)
+
+RESET enable_seqscan;
+DROP TABLE enc;
