@@ -25,7 +25,11 @@ tsvector/GIN is the built-in baseline everyone beats on ranked retrieval.)
 - **Index size**: ~2.9× VectorChord, ~2.2× pg_textsearch (pos=off). Larger, but
   the gap roughly halved from the 1.20 era once positions became opt-in.
 - **Ranked top-10 latency**: ~2–6× VectorChord, ~3–5× pg_textsearch. Still the
-  weak axis (decode-bound; no impact-ordered codec yet).
+  weak axis (decode-bound; no impact-ordered codec yet). **But profiling
+  (`bench/PROFILE_STEP0.md`) shows 40–88% of the measured latency is
+  `to_ftsdoc(body)` re-analysis in the ORDER BY (an expression-index benchmark
+  artifact), not the index scan** — a stored-`ftsdoc`-column app avoids it, so the
+  true scan-latency gap is materially smaller than this headline.
 - **Capability (pg_fts-only among these)**: index-native `count(*)` / `fts_count`;
   positional phrase / NEAR; boolean AND/NOT; prefix / fuzzy / regex — all over
   one `@@@` / `<=>` surface. VectorChord and pg_textsearch are bag-of-words
