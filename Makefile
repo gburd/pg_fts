@@ -55,6 +55,22 @@ dist:
 	git archive --format=zip --prefix=$(DISTNAME)/ -o $(DISTNAME).zip HEAD
 	@echo "created $(DISTNAME).zip"
 
+# --- Pure-ASCII install SQL guard -------------------------------------------
+# A non-ASCII byte anywhere in an install/upgrade .sql (e.g. a UTF-8 default
+# like ellipsis '\u2026') makes CREATE EXTENSION FAIL on a non-UTF-8 server
+# database (LATIN1, EUC_JP, ...) with "invalid byte sequence for encoding".
+# This guard keeps the shipped SQL installable on every server encoding.
+# Run standalone (`make check-ascii`); also runnable in CI.
+.PHONY: check-ascii
+check-ascii:
+	@bad=$$(grep -lP '[^\x00-\x7F]' pg_fts--*.sql pg_fts.control 2>/dev/null); \
+	if [ -n "$$bad" ]; then \
+		echo "ERROR: non-ASCII bytes in install SQL (breaks CREATE EXTENSION on non-UTF-8 servers):" >&2; \
+		for f in $$bad; do echo "  $$f:"; grep -nP '[^\x00-\x7F]' "$$f" | head; done >&2; \
+		exit 1; \
+	fi; \
+	echo "install SQL is pure ASCII (installs on any server encoding)"
+
 # --- Rendered HTML docs -----------------------------------------------------
 # Render the DocBook fragment doc/pg_fts.sgml to standalone HTML in doc/html/.
 # Needs xsltproc + a docbook-xsl-ns stylesheet (auto-detected; override with

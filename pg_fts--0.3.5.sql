@@ -194,7 +194,7 @@ LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 -- Best-matching window (snippet) of the source text.
 CREATE FUNCTION fts_snippet(doc text, query ftsquery,
                             pre text DEFAULT '<b>', post text DEFAULT '</b>',
-                            ellipsis text DEFAULT '…', max_tokens int DEFAULT 15)
+                            ellipsis text DEFAULT '...', max_tokens int DEFAULT 15)
 RETURNS text
 AS 'MODULE_PATHNAME', 'fts_snippet'
 LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
