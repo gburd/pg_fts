@@ -29,11 +29,31 @@ they are not rediscovered. Ordered roughly by value.
    segment per worker, shrinking the post-build merge input. Complements #1/#2.
 
 4. **Index size and ranked latency — the competitive gap (see
-   `bench/NOTE_SIZE_AND_SPEED.md` for the full code-verified analysis).**
-   pg_fts trails VectorChord/pg_textsearch on index size (~5.5×) and ranked
-   latency (rare-term ~10×, common-term ~20×). The verified root causes — which
-   correct the earlier "positions make the index big" narrative (the bm25 index
-   stores **no** positions; those live in the heap `ftsdoc`) — and the plan:
+   `bench/RESULTS_VS_CURRENT.md` for the current 0.3.5 3-way; `bench/NOTE_SIZE_AND_SPEED.md`
+   for the code-verified root-cause analysis).**
+   As of **0.3.5** (2.19M Wikipedia, r7i.4xlarge, matched Snowball analyzer):
+   pg_fts trails VectorChord/pg_textsearch on index size (**~2.9×** vs
+   VectorChord, ~2.2× vs pg_textsearch, pos=off) and ranked top-10 latency
+   (**~2–6×** vs VectorChord, ~3–5× vs pg_textsearch). That is materially
+   narrower than the historical (pg_fts 1.20) ~5.5× size / ~10–20× latency gap:
+   making positions **opt-in** (`WITH positions=on`) roughly halved the default
+   index (7541→**4188 MB**) with no codec change, and lazy-boolean-eval + scan
+   tuning cut ranked latency ~20–25% per band (rare 15.8→12.3, common 39.9→32.1 ms).
+   Ranked latency remains the weak axis (still decode-bound), and pg_fts keeps
+   its capability edge (index-native `count(*)`, positional phrase, and the
+   boolean/NEAR/prefix/fuzzy/regex query language — all competitor-N/A). The
+   verified root causes — which correct the earlier "positions make the index
+   big" narrative (the bm25 index stores **no** positions by default; those live
+   in the heap `ftsdoc` or the opt-in positions column) — and the plan:
+
+   Two rough edges the 0.3.5 re-run surfaced, worth fixing:
+   - **`fts_vacuum` oscillates** (§5.1): a compaction pass can *grow* the index
+     (e.g. 4188→8376→4188 MB) before re-converging — the reported floor needs
+     a re-run. A converging compaction is the fix.
+   - **The `FtsCount` CustomScan pushdown is priced out** by its own cost model,
+     so the planner always picks the Bitmap Index Scan instead (still
+     index-native, no seq fallback — a cost-model rough edge, not a capability
+     loss).
 
    - **P1 — doclen sidecar (highest-leverage, format change).** `doclen` is a
      per-document value but is stored once per posting (once per doc×term pair),
