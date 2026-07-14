@@ -38,6 +38,9 @@ jobs:
           make PG_CONFIG=/usr/bin/pg_config
           make install PG_CONFIG=/usr/bin/pg_config
 
+      - name: Install SQL is pure ASCII (installs on non-UTF-8 servers)
+        run: make check-ascii
+
       - name: Regression + isolation tests
         run: |
           # Start an ephemeral cluster owned by the postgres user (the postgres

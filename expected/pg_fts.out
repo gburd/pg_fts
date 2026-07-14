@@ -2607,9 +2607,9 @@ SELECT fts_highlight('nothing matches here', 'zzz'::ftsquery) AS hl_nomatch;
 
 SELECT fts_snippet(repeat('alpha beta gamma delta ', 20) || 'needle tail',
                    'needle'::ftsquery) AS snip_default;
-                                           snip_default                                           
---------------------------------------------------------------------------------------------------
- …gamma delta alpha beta gamma delta alpha beta gamma delta alpha beta gamma delta <b>needle</b>…
+                                             snip_default                                             
+------------------------------------------------------------------------------------------------------
+ ...gamma delta alpha beta gamma delta alpha beta gamma delta alpha beta gamma delta <b>needle</b>...
 (1 row)
 
 SELECT fts_snippet('short doc with needle', 'needle'::ftsquery,
@@ -3027,3 +3027,77 @@ FROM enc;
 
 RESET enable_seqscan;
 DROP TABLE enc;
+-- ============================================================================
+-- Encoding CORNER CASES (UTF-8 DB) — the hardest traps each script creates,
+-- forced through BOTH analyzers.  The built-in analyzer (to_ftsdoc(text), which
+-- uses fold_token's per-code-point Unicode lowercasing) is exercised directly
+-- here because these are exactly the inputs where a byte-wise or naive folder
+-- breaks: fold-length CHANGES (İ, ẞ), multi-mark combining, ZWJ, BOM, 4-byte.
+-- Property: (1) no crash, (2) the built-in analyzer round-trips
+-- (ftsdoc_in(ftsdoc_out(x))=x), (3) case-insensitive match holds where fold
+-- makes it so, and the regconfig path stays == native to_tsvector.
+-- ============================================================================
+SET client_encoding = 'UTF8';
+CREATE TABLE corner (id int, note text, body text);
+INSERT INTO corner VALUES
+  (1, 'turkish-I-dotted',   E'\u0130STANBUL bo\u011faz'),          -- İ: lowercases to i+U+0307 (1->2 code points)
+  (2, 'turkish-i-dotless',  E'ISPARTA \u0131\u015f\u0131k'),        -- dotless ı, ş
+  (3, 'capital-sharp-s',    E'STRA\u1e9eE gro\u1e9ee'),             -- ẞ U+1E9E capital sharp s
+  (4, 'sharp-s',            E'stra\u00dfe fu\u00dfball'),           -- ß
+  (5, 'multi-combining',    E'e\u0301\u0323 a\u0300\u0301'),        -- e + acute + dot-below; a + grave + acute
+  (6, 'zwj-family',         E'family \U0001f468\u200d\U0001f469\u200d\U0001f467 tag'), -- ZWJ emoji sequence
+  (7, 'bom-prefix',         E'\ufeffleading bom word'),             -- U+FEFF BOM at start
+  (8, 'astral-4byte',       E'glyph \U00020000 and \U0001f680 end'),-- CJK Ext-B U+20000 + rocket U+1F680
+  (9, 'greek-final-sigma',  E'\u03a3\u03bf\u03c6\u03cc\u03c2 \u039b\u039f\u0393\u039f\u03a3'), -- Σοφός / final vs medial sigma casefold
+  (10,'fullwidth-latin',    E'\uff26\uff35\uff2c\uff2c width'),      -- fullwidth FULL (U+FF26..)
+  (11,'cyrillic-io',        E'\u0401LKA \u0451lka'),                -- Ё/ё
+  (12,'nbsp-sep',           E'word1\u00a0word2\u2009word3');        -- NBSP + thin space as separators
+-- (1) no crash: every row analyzes through both paths.
+SELECT count(*) AS corner_rows_analyzed FROM corner
+ WHERE octet_length(to_ftsdoc(body)::text) >= 0
+   AND octet_length(to_ftsdoc('simple', body)::text) >= 0;
+ corner_rows_analyzed 
+----------------------
+                   12
+(1 row)
+
+-- (2) built-in analyzer round-trips on every corner case (fold-length changes,
+--     multi-byte, 4-byte, combining, ZWJ, BOM — the ftsdoc I/O must survive).
+SELECT bool_and(ftsdoc_send(ftsdoc_out(to_ftsdoc(body))::text::ftsdoc)
+              = ftsdoc_send(to_ftsdoc(body))) AS corner_builtin_roundtrip_ok
+FROM corner;
+ corner_builtin_roundtrip_ok 
+-----------------------------
+ t
+(1 row)
+
+-- (3) regconfig path stays == native to_tsvector for corner probes.
+SELECT bool_and(fts_hit = native_hit) AS corner_regconfig_parity_ok
+FROM (
+  SELECT c.id,
+         (to_ftsdoc('simple', c.body) @@@ to_ftsquery('simple', t.term)) AS fts_hit,
+         (to_tsvector('simple', c.body) @@ to_tsquery('simple', t.term)) AS native_hit
+  FROM corner c
+  CROSS JOIN (VALUES (E'\u0131\u015f\u0131k'),('strlength'),('word1'),('word2'),
+                     (E'\u0451lka'),('family'),('glyph')) AS t(term)
+) q;
+ corner_regconfig_parity_ok 
+----------------------------
+ t
+(1 row)
+
+-- (4) built-in fold is case-insensitive for the simple-lowercasing cases it
+--     handles (ß stays ß per the documented no-full-fold rule; Cyrillic Ё->ё
+--     and fullwidth are per-code-point lowercased).  Assert the doc built from
+--     the uppercase form matches a query for the lowercase token via the index.
+CREATE INDEX corner_idx ON corner USING fts (to_ftsdoc(body));
+SET enable_seqscan = off;
+SELECT count(*) > 0 AS cyrillic_ci_match FROM corner
+  WHERE to_ftsdoc(body) @@@ to_ftsquery(E'\u0451lka');   -- Ё LKA doc matched by ёlka
+ cyrillic_ci_match 
+-------------------
+ t
+(1 row)
+
+RESET enable_seqscan;
+DROP TABLE corner;

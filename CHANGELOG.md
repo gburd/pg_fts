@@ -2,6 +2,24 @@
 
 All notable changes to pg_fts are documented here.
 
+## Unreleased
+
+- **`fts_snippet` default ellipsis is now ASCII `...` (was the UTF-8 `…`).** The
+  non-ASCII default made `CREATE EXTENSION pg_fts` FAIL on a non-UTF-8 server
+  database (LATIN1, EUC_JP, ...) with "invalid byte sequence for encoding" --
+  pg_fts was uninstallable there. The install SQL is now pure ASCII (guarded by
+  `make check-ascii` in CI on both forges), so pg_fts installs on every server
+  encoding. Callers who want the `…` glyph pass it explicitly:
+  `fts_snippet(doc, q, ellipsis => Eu2026)`.
+- **Character-encoding / multi-script correctness is now permanently tested.** A
+  UTF-8 regression block asserts pg_fts `@@@` == native `to_tsvector @@` across
+  14 scripts (Latin, Windows-1252 punctuation, CJK Han, Japanese, Hangul, NFC vs
+  NFD combining marks, emoji + 4-byte astral, CJK Ext-B, Arabic/Hebrew RTL,
+  Turkish dotless-i, German sharp-s), plus a corner-case block (fold-length
+  changes, multi-mark combining, ZWJ, BOM, fullwidth, Cyrillic) exercising the
+  built-in analyzer; and `t/004_encodings.pl` gates LATIN1 + EUC_JP *server*
+  encodings (install + native parity on high/multibyte bytes).
+
 ## 0.3.5
 
 Hardening + testing release. **No on-disk format change**; no **REINDEX**
