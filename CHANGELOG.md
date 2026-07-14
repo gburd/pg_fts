@@ -2,7 +2,7 @@
 
 All notable changes to pg_fts are documented here.
 
-## Unreleased
+## 0.3.6
 
 - **`fts_snippet` default ellipsis is now ASCII `...` (was the UTF-8 `…`).** The
   non-ASCII default made `CREATE EXTENSION pg_fts` FAIL on a non-UTF-8 server
