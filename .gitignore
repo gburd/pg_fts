@@ -40,3 +40,4 @@ pg_fts-*.zip
 # GitHub/Codeberg Pages by CI, never committed to main)
 /doc/html/
 /build/
+VSIC-FiC16.pdf
