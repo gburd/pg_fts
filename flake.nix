@@ -19,6 +19,28 @@
           pg18 = pkgs.postgresql_18 or pkgs.postgresql_17;
         };
 
+        # nixpkgs' postgresql is built WITHOUT --enable-tap-tests and does not
+        # ship the PostgreSQL::Test perl harness, so `make installcheck` silently
+        # skips the t/*.pl TAP tests.  This override rebuilds PostgreSQL with TAP
+        # enabled (IPC::Run at configure time) and installs the harness, so the
+        # tap-* checks below actually run t/*.pl.  (--enable-tap-tests is a
+        # configure flag, so this is a full PG rebuild; it is only pulled in by
+        # the tap-* checks, not the normal build/installcheck.)
+        pgTapFor = pg:
+          pg.overrideAttrs (o: {
+            configureFlags = (o.configureFlags or [ ]) ++ [ "--enable-tap-tests" ];
+            nativeBuildInputs = (o.nativeBuildInputs or [ ])
+              ++ [ pkgs.perl pkgs.perlPackages.IPCRun ];
+            postInstall = (o.postInstall or "") + ''
+              for d in "$NIX_BUILD_TOP"/*/src/test/perl; do
+                if [ -d "$d/PostgreSQL" ]; then
+                  mkdir -p "$out/lib/perl5"
+                  cp -r "$d/PostgreSQL" "$out/lib/perl5/"
+                fi
+              done
+            '';
+          });
+
         # Build pg_fts against a given postgresql package via its bundled PGXS.
         # In nixpkgs the pg_config binary lives in the `.pg_config` output.
         buildFor = postgresql:
@@ -93,6 +115,55 @@
               touch $out
             '';
           };
+
+        # TAP check: runs the t/*.pl tests (crash recovery, replication,
+        # corruption, encodings), which the plain checkFor SKIPS because stock
+        # nixpkgs postgresql lacks --enable-tap-tests + the perl harness.  Uses
+        # the pgTapFor override (TAP enabled, harness installed) with pg_fts
+        # installed, and points PERL5LIB at the harness so PostgreSQL::Test
+        # resolves.  Each t/*.pl inits + tears down its own cluster.
+        tapCheckFor = pg:
+          let
+            pgt = pgTapFor pg;
+            pgFts = buildFor pgt;
+            # One prefix (symlinks, no rebuild) that has pgt's server binaries +
+            # perl harness AND pg_fts's extension files.  initdb/postgres run
+            # from their real store paths (rpaths intact -- unlike a cp of the
+            # prefix, which breaks them).  A wrapped pg_config reports THIS prefix
+            # so PostgreSQL::Test inits clusters that can CREATE EXTENSION pg_fts.
+            pgtJoin = pkgs.symlinkJoin {
+              name = "pg_fts-tap-prefix-${pg.version}";
+              paths = [ pgFts pgt ];
+            };
+            pgConfigWrapped = pkgs.writeShellScriptBin "pg_config" ''
+              exec ${pgt.pg_config}/bin/pg_config "$@" | sed "s#${pgt}#${pgtJoin}#g"
+            '';
+          in pkgs.stdenv.mkDerivation {
+            name = "pg_fts-tap-${pg.version}";
+            src = ./.;
+            nativeBuildInputs =
+              [ pgtJoin pgConfigWrapped pkgs.perl pkgs.perlPackages.IPCRun ];
+            dontInstall = true;
+            buildPhase = ''
+              # pgConfigWrapped (reporting the joined prefix) must win over the
+              # join's own symlinked pg_config, so it goes first on PATH.
+              export PATH=${pgConfigWrapped}/bin:${pgtJoin}/bin:$PATH
+              export PERL5LIB=${pgt}/lib/perl5''${PERL5LIB:+:$PERL5LIB}
+              # Run the t/*.pl TAP tests via prove against the TAP-enabled server.
+              # PROVE_TESTS selects the pg_fts-behavior tests that run cleanly in
+              # the nix build sandbox (corruption, multi-encoding).  The crash-
+              # recovery (t/001) and replication (t/002) tests use an older
+              # PostgreSQL::Test idiom that the nixpkgs-shipped harness rejects
+              # under the sandbox; they are gated in CI (real PG, matching
+              # harness), not here.  This is what makes `nix flake check`
+              # actually exercise TAP instead of silently skipping it.
+              make installcheck REGRESS= ISOLATION= \
+                PROVE_TESTS='t/003_corruption.pl t/004_encodings.pl' \
+                PG_CONFIG=${pgConfigWrapped}/bin/pg_config \
+                || { echo '--- TAP logs ---'; cat tmp_check/log/*.log tmp_check/log/regress_log_* 2>/dev/null | tail -120; exit 1; }
+              touch $out
+            '';
+          };
       in
       {
         packages = packages // {
@@ -103,6 +174,16 @@
         checks = packages // {
           installcheck-pg17 = checkFor pgVersions.pg17;
           installcheck-pg18 = checkFor pgVersions.pg18;
+          # TAP checks run t/*.pl (which the plain installcheck SKIPS: stock
+          # nixpkgs PG is built without --enable-tap-tests and ships no perl
+          # harness).  Each rebuilds PostgreSQL with --enable-tap-tests (a
+          # one-time ~20-min compile per major, then cached), installs the perl
+          # harness, and runs the pg_fts-behavior TAP tests (corruption,
+          # multi-encoding) against it.  The crash-recovery/replication tests
+          # (t/001/t/002) run in CI where the harness version matches; they use
+          # an idiom the nixpkgs-shipped harness rejects under the build sandbox.
+          tap-pg17 = tapCheckFor pgVersions.pg17;
+          tap-pg18 = tapCheckFor pgVersions.pg18;
         };
 
         devShells.default = pkgs.mkShell {
