@@ -34,7 +34,16 @@ they are not rediscovered. Ordered roughly by value.
    As of **0.3.5** (2.19M Wikipedia, r7i.4xlarge, matched Snowball analyzer):
    pg_fts trails VectorChord/pg_textsearch on index size (**~2.9×** vs
    VectorChord, ~2.2× vs pg_textsearch, pos=off) and ranked top-10 latency
-   (**~2–6×** vs VectorChord, ~3–5× vs pg_textsearch). That is materially
+   (**~2–6×** vs VectorChord, ~3–5× vs pg_textsearch). **Caveat (profiled
+   2026-07-14, `bench/PROFILE_STEP0.md`):** 40–88% of that measured ranked
+   latency is `to_ftsdoc('english', body)` *re-analysis* in the executor's
+   ORDER BY — the whole article body re-tokenized + Snowball-stemmed per returned
+   row — because the benchmark uses an *expression* index (`ORDER BY
+   to_ftsdoc(body) <=> q`). That tax is **outside pg_fts's index scan** and a real
+   application using a *stored* `ftsdoc` column (`ORDER BY col <=> q`) would not
+   pay it. The true index-scan latency gap is smaller than the headline; the
+   exec micro-opts (metapage/dict/slot caching) are all below the perf floor at
+   2.19M and were correctly NOT implemented.
    narrower than the historical (pg_fts 1.20) ~5.5× size / ~10–20× latency gap:
    making positions **opt-in** (`WITH positions=on`) roughly halved the default
    index (7541→**4188 MB**) with no codec change, and lazy-boolean-eval + scan
