@@ -56,6 +56,16 @@ jobs:
             make installcheck PROVE_TESTS=ci/noop.pl PG_CONFIG=/usr/bin/pg_config PGHOST=/tmp PGUSER=postgres
           '
 
+      - name: TAP tests (crash recovery, replication, corruption, encodings)
+        # The postgres:NN image is built with --enable-tap-tests + ships
+        # PostgreSQL::Test, so `make installcheck` with REGRESS=/ISOLATION= empty
+        # runs the t/*.pl suite via prove.  Each t/*.pl inits its own cluster.
+        run: |
+          chown -R postgres:postgres .
+          su postgres -c '
+            make installcheck REGRESS= ISOLATION= PG_CONFIG=/usr/bin/pg_config
+          ' || { echo "=== TAP logs ==="; cat tmp_check/log/*.log tmp_check/log/regress_log_* 2>/dev/null | tail -120 || true; exit 1; }
+
       - name: Show diffs on failure
         if: failure()
         run: |

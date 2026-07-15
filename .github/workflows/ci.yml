@@ -61,14 +61,19 @@ jobs:
           pg_virtualenv -v ${{ matrix.pg }} \
             make installcheck PROVE_TESTS=ci/noop.pl PG_CONFIG=$PGBIN/pg_config
 
-      - name: TAP tests (crash recovery, replication) — non-fatal
-        continue-on-error: true
+      - name: TAP tests (crash recovery, replication, corruption, encodings)
+        # Gating on 17/18 (the supported majors); best-effort on 19-devel whose
+        # packaging/harness may lag.  The pgdg PostgreSQL is built with
+        # --enable-tap-tests and ships PostgreSQL::Test, so `make installcheck`
+        # with REGRESS=/ISOLATION= empty runs the t/*.pl suite via prove.
+        continue-on-error: ${{ matrix.pg == 19 }}
         run: |
           PGBIN=/usr/lib/postgresql/${{ matrix.pg }}/bin
           pg_virtualenv -v ${{ matrix.pg }} \
             make installcheck REGRESS= ISOLATION= PG_CONFIG=$PGBIN/pg_config || {
-              echo '::warning::TAP tests did not pass on this runner (harness setup); REGRESS+ISOLATION are the release gate.'
-              cat tmp_check/log/*.log 2>/dev/null | tail -40 || true
+              echo '=== TAP logs ==='
+              cat tmp_check/log/*.log tmp_check/log/regress_log_* 2>/dev/null | tail -120 || true
+              exit 1
             }
 
       - name: Show diffs on failure
