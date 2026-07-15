@@ -251,9 +251,15 @@ Query execution
     count(*) ... WHERE col @@@ q is transparently answered by this fast path via
     a Custom Scan (FtsCount) -- no need to call fts_count() explicitly.
   * fts_vacuum(regclass) reclaims the physical space left by builds and merges:
-    it compacts to one segment reusing the lowest free blocks, then truncates
-    the free tail back to the OS (runs automatically during VACUUM when the
-    index is substantially bloated).
+    it compacts to a single segment (relocating live pages toward the front of
+    the file) and truncates the freed tail back to the OS, converging to the
+    size floor in one call (runs automatically during VACUUM when the index is
+    substantially bloated).  Compaction rewrites the live data before freeing
+    the old copy (write-before-free, for crash safety), so it transiently needs
+    free disk space of roughly the live index size -- like VACUUM FULL / CLUSTER
+    / pg_repack.  It is interruptible: pg_cancel_backend and statement_timeout
+    stop it promptly, and a cancelled (or out-of-disk) run leaves the index
+    valid and correct, just not fully compacted.
   * Ranked (<=>/fts_search) results cover merged segments; pending (unflushed)
     docs are found by @@@ and counted by fts_count, and become ranked after the
     next flush (fts_merge() forces one immediately).

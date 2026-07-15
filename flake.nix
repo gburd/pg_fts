@@ -80,7 +80,7 @@
 
             meta = with pkgs.lib; {
               description = "Full-text search with BM25/BM25F ranking and a dedicated bm25 index AM";
-              homepage = "https://github.com/gburd/pg_fts";
+              homepage = "https://codeberg.org/gregburd/pg_fts";
               license = licenses.postgresql;
               platforms = postgresql.meta.platforms;
             };
