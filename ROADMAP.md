@@ -56,17 +56,17 @@ they are not rediscovered. Ordered roughly by value.
    in the heap `ftsdoc` or the opt-in positions column) — and the plan:
 
    Two rough edges the 0.3.5 re-run surfaced:
-   - **`fts_vacuum` convergence + scale** (§5.1): the oscillation (index could
-     *grow* 4188->8376->4188 MB before re-converging) is FIXED -- a two-phase
-     compaction now converges to the size floor in one call, never grows past
-     the pre-call size, and is interruptible (nine CHECK_FOR_INTERRUPTS points).
-     BUT an EC2 scale run (bench/RESULTS_VACUUM_SCALE.md) found that on a
-     multi-GB index the compaction is far too expensive (it rewrites the whole
-     segment twice) and the final RelationTruncate wedges in PostgreSQL's
-     O(NBuffers) DropRelationBuffers sweep, so a large-index vacuum can run for
-     a very long time and resist cancellation. The index stays correct
-     throughout (index-scan count == seqscan). A cheaper compaction (less
-     rewrite volume) is the remaining fix; this blocks 1.0.0.
+   - **`fts_vacuum` convergence + scale** (§5.1): RESOLVED. The oscillation is
+     fixed (two-phase compaction converges to the floor, never grows past the
+     pre-call size, is interruptible), and the multi-GB scale cost is fixed too:
+     a pre-pass guard (`bm25_index_is_compacted`) skips the vacate+pack rewrite
+     when the index is already front-packed and single-segment, so a bloated
+     index converges in ONE pass and an already-compact index is a near-no-op.
+     EC2-validated (bench/RESULTS_VACUUM_SCALE.md): first vacuum 91s->37s on an
+     780MB bloat, repeat vacuum 91s->3ms, identical reclaim, parity exact,
+     cancel mid-rewrite ~1s. The one remaining non-interruptible step is a
+     SINGLE `RelationTruncate` (PostgreSQL's O(NBuffers) `DropRelationBuffers`
+     sweep, shared by all relation truncation) -- bounded (seconds), paid once.
    - **The `FtsCount` CustomScan pushdown** is now priced as the index-only
      visibility-map count it performs, so the planner chooses it at scale
      (FIXED, commit in the 1.0 prep series).
