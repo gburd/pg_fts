@@ -125,14 +125,20 @@ jobs:
       - name: Regression + isolation under AddressSanitizer
         run: |
           PGBIN=/usr/lib/postgresql/17/bin
-          # The .so is clang-built, so preload CLANG's libasan (matching the
+          # The .so is clang-built, so preload CLANG's asan runtime (matching the
           # build compiler's runtime) -- gcc's would trip a link-order error.
           ASAN_LIB=$(clang -print-file-name=libclang_rt.asan-x86_64.so)
           test -f "$ASAN_LIB" || ASAN_LIB=$(clang -print-file-name=libasan.so)
           test -f "$ASAN_LIB" || { echo "asan runtime not found ($ASAN_LIB)"; exit 1; }
-          # REGRESS overridden to drop the timing-sensitive idx_scan_stats test.
+          # The asan runtime lives in clang's private resource dir, not a
+          # standard loader path; the postmaster dlopen()s pg_fts.so and needs to
+          # find it, so put its directory on the server's LD_LIBRARY_PATH too
+          # (LD_PRELOAD alone only covers this make process, not the running
+          # server that pg_virtualenv starts).
+          ASAN_DIR=$(dirname "$ASAN_LIB")
           pg_virtualenv -v 17 env \
             LD_PRELOAD="$ASAN_LIB" \
+            LD_LIBRARY_PATH="$ASAN_DIR:${LD_LIBRARY_PATH:-}" \
             ASAN_OPTIONS="detect_leaks=0:abort_on_error=1:print_stacktrace=1:verify_asan_link_order=0" \
             make installcheck REGRESS="pg_fts unicode_fold" PROVE_TESTS=ci/noop.pl PG_CONFIG=$PGBIN/pg_config
       - name: Show diffs on failure
