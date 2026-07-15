@@ -14,8 +14,10 @@ answered from the index with no heap recheck.
 
 ## Requirements
 
-- PostgreSQL **17 or newer** (17, 18, and current `master`/devel are supported;
-  version differences are handled with compile-time guards).
+- PostgreSQL **17 and 18** are fully supported and gated in CI (build +
+  regression + isolation + TAP on both).  PostgreSQL **19/`master`-devel**
+  builds and is exercised best-effort in CI (it is unreleased; packaging can
+  lag).  Version differences are handled with compile-time guards.
 - A C toolchain and the PostgreSQL server headers (`postgresql-server-dev-*`
   or a source install exposing `pg_config`).
 

@@ -248,15 +248,36 @@ fts_create_upper_paths(PlannerInfo *root, UpperRelationKind stage,
 	if (!OidIsValid(indexoid))
 		return;
 
-	/* build the CustomPath -- rows=1 */
+	/* build the CustomPath -- rows=1.
+	 *
+	 * Cost model: the count is answered from the bm25 index + the visibility
+	 * map (bm25_count_visible_oid), visiting NO heap tuples -- unlike the
+	 * Bitmap Index Scan + Aggregate alternative, whose cost scales with the
+	 * number of matching heap tuples it must fetch/recheck.  The old estimate
+	 * (baserel->pages) priced this at the whole heap and always lost to the
+	 * bitmap path even though the VM-based count is measurably faster on
+	 * common terms.  Price it as a small dictionary/posting walk (a handful of
+	 * index pages, VM-only) so the planner chooses the pushdown when it applies;
+	 * this stays an underestimate of the true cost only relative to a full heap
+	 * scan, and the pushdown is exact (index-native, no seq fallback). */
 	cpath = makeNode(CustomPath);
 	cpath->path.pathtype = T_CustomScan;
 	cpath->path.parent = output_rel;
 	cpath->path.pathtarget = output_rel->reltarget;
 	cpath->path.param_info = NULL;
 	cpath->path.rows = 1;
-	cpath->path.startup_cost = baserel->pages;	/* rough: one index bulk-count */
-	cpath->path.total_cost = baserel->pages + 1;
+	{
+		/* index-only walk: a few index pages + the VM, no heap-tuple visits.
+		 * Price it at a small fraction of the heap so it beats the Bitmap Index
+		 * Scan + Aggregate alternative (whose cost scales with matching-tuple
+		 * fetches) yet still scales mildly with table size.  The pushdown is
+		 * exact and index-native; this only changes the planner's choice
+		 * between two correct count paths. */
+		double		c = (double) baserel->pages * 0.01 + 1.0;
+
+		cpath->path.startup_cost = 0.0;
+		cpath->path.total_cost = c;
+	}
 	cpath->flags = 0;
 	cpath->custom_paths = NIL;
 	cpath->custom_private = list_make2(makeInteger((int) indexoid),
