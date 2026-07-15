@@ -2215,6 +2215,67 @@ bm25_truncate_free_tail(Relation index)
 	return nblocks;
 }
 
+/*
+ * Is the index already at its compaction floor -- i.e. would a vacate+pack
+ * rewrite be pure waste?  True only when BOTH:
+ *   (1) the live data is already front-packed (negligible free space below the
+ *       highest live block), so a rewrite would only re-grow then re-truncate
+ *       to the same size, and
+ *   (2) there is at most ONE live segment, so there is nothing to coalesce
+ *       (fts_vacuum's other job is to merge segments to one for scan speed).
+ * If either fails, the vacate+pack pass still has work to do.  Scan-only for
+ * the FSM part; a brief shared lock on the metapage for the segment count.
+ */
+static bool
+bm25_index_is_compacted(Relation index)
+{
+	BlockNumber nblocks = RelationGetNumberOfBlocks(index);
+	BlockNumber lastlive = 0;
+	BlockNumber freebelow = 0;
+	BlockNumber threshold;
+	BlockNumber blk;
+	uint32		nlive = 0;
+
+	/* (2) segment count: only a single live segment counts as coalesced */
+	{
+		BM25MetaPageData meta;
+		Buffer		mb = ReadBuffer(index, BM25_METAPAGE_BLKNO);
+		uint32		i;
+
+		LockBuffer(mb, BUFFER_LOCK_SHARE);
+		memcpy(&meta, BM25PageGetMeta(BufferGetPage(mb)), sizeof(meta));
+		UnlockReleaseBuffer(mb);
+		for (i = 0; i < meta.nsegments; i++)
+			if (meta.segs[i].dictstart != InvalidBlockNumber)
+				nlive++;
+	}
+	if (nlive > 1)
+		return false;				/* multiple segments: pack must coalesce */
+
+	/* (1) front-packed: highest live block, then free-below count */
+	for (blk = nblocks; blk > 1; blk--)
+	{
+		CHECK_FOR_INTERRUPTS();		/* scan-only, no lock held */
+		if (GetRecordedFreeSpace(index, blk - 1) < BLCKSZ / 2)
+		{
+			lastlive = blk - 1;
+			break;
+		}
+	}
+	if (lastlive <= 1)
+		return true;				/* empty / only the metapage: nothing to pack */
+
+	/* count mostly-free blocks strictly below the last live block */
+	for (blk = 1; blk < lastlive; blk++)
+	{
+		CHECK_FOR_INTERRUPTS();
+		if (GetRecordedFreeSpace(index, blk) >= BLCKSZ / 2)
+			freebelow++;
+	}
+	threshold = Max(nblocks / 50, 8);
+	return freebelow <= threshold;
+}
+
 static bool
 bm25_vacuum_compact(Relation index)
 {
@@ -2266,6 +2327,24 @@ bm25_vacuum_compact(Relation index)
 	for (pass = 0; pass < BM25_VACUUM_MAX_PASSES; pass++)
 	{
 		CHECK_FOR_INTERRUPTS();		/* between passes: no lock/window held */
+
+		/*
+		 * Pre-pass convergence guard.  If the live data is already at the front
+		 * of the file, a vacate+pack rewrite would only re-grow it and truncate
+		 * back to the same floor -- pure waste, and the dominant cost on a large
+		 * index (each rewrite streams the whole multi-GB segment through the
+		 * buffer pool twice).  Just truncate any free tail and stop.  This makes
+		 * a bloated index converge in ONE vacate+pack+truncate pass and an
+		 * already-compact index a near-no-op (no rewrite at all).
+		 */
+		if (bm25_index_is_compacted(index))
+		{
+			nblocks = bm25_truncate_free_tail(index);
+			if (nblocks < prevblocks)
+				didwork = true;
+			prevblocks = nblocks;
+			break;
+		}
 
 		/* Phase 1: vacate -- push the live segment onto fresh high blocks so the
 		 * freed old pages form one contiguous low free region >= live size. */

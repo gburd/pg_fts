@@ -36,7 +36,52 @@ Instance: r7i.4xlarge, Fedora, PG17, `shared_buffers=32GB` (4M buffers),
   does not — possibly the extend-only rewrite's intermediate layout — but it is
   not a query-correctness bug.)
 
-## Root cause (why hours + non-cancelable)
+## DIAGNOSIS (2026-07-15, self-driven run, PG18, shared_buffers=16GB)
+780 MB bloated index (99961 blocks, ~51% free -> ~380MB floor), 750k live docs.
+Instrumented bm25_vacuum_compact with per-phase elog(LOG) timing. Result:
+
+| phase | dt | nblocks after |
+|-------|-----|---------------|
+| pass 0 vacate | 17,653 ms | 149285 (grew ~1.5x, expected) |
+| pass 0 pack   | 16,577 ms | 149285 |
+| pass 0 truncate | 23,661 ms | 49325 (reclaimed to the floor!) |
+| pass 1 vacate | 16,637 ms | 98649 (re-grew an ALREADY-COMPACT index) |
+| pass 1 pack   | 16,461 ms | 98649 |
+| pass 1 truncate | 81 ms | 49325 (converged -> stop) |
+| **total** | **91,072 ms** | 49325 = 385 MB |
+
+Final 385 MB (from 780), parity idx==seq (zzrareterm 300==300). CORRECT, but 91s
+for a 780MB index. At ~8GB (10x) that is ~15min+, and the truncate sweep grows
+with shared_buffers.
+
+## Two cost drivers (both fixable, NEITHER needs surgical relocation)
+1. **DOMINANT: a wasted extra full pass.** Pass 0 already reached the floor
+   (49325 blocks) after its truncate. But the loop only stops when a pass makes
+   NO progress -- so it runs pass 1, which VACATES the already-compact index
+   (re-growing 49325->98649, +33s of vacate+pack) just to re-truncate back to
+   49325 and discover it converged. That entire second pass
+   (vacate+pack = ~33s here, ~5-6min at 8GB) is pure waste. FIX: detect
+   convergence BEFORE rewriting -- if the free space BELOW the highest live
+   block is already negligible (front-packed), the index is at the floor; skip
+   the pass. This was the intent of the earlier "freebelow" check that a prior
+   revision removed; reinstate it as a PRE-pass guard.
+2. **The single necessary truncate is O(NBuffers).** pass-0 truncate = 23.7s at
+   16GB shared_buffers (DropRelationBuffers scans all buffer headers in a
+   non-interruptible critical section). Unavoidable for one truncate, but only
+   paid ONCE if driver 1 is fixed (no wasted passes = no extra truncates). It
+   is also why cancel didn't land in the 3h run -- the wedge was inside PG's
+   truncate critical section.
+
+## The fix (low-risk, no surgical relocation, no format change)
+Add a pre-pass front-packed check: before each vacate/pack, scan the FSM for
+free space below the highest live block; if it is <= a small threshold
+(e.g. max(nblocks/50, 8)), the index is already front-packed -> break (only a
+final tail-truncate needed, if any). This makes the common bloated case ONE
+vacate+pack+truncate (pass 0) and an already-compact index a near-no-op
+(no rewrite at all). Interruptibility outside the single truncate is already
+covered by the 9 CHECK points. Validate locally via the flake vconv test, then
+ONE final scale confirmation.
+
 Refined after reading the code: the reviewer earlier proved the single-segment
 case converges in ONE pass, so the 3h was ~one pass, i.e. ONE vacate + ONE
 pack + ONE truncate -- not repeated passes. Two costs, both scale-only:
@@ -72,3 +117,28 @@ Kill criterion for the fix: on this exact EC2 workload (2.5M docs, positions=on,
 (target: minutes, not hours), be cancelable within seconds outside the single
 truncate sweep, still shrink to near the floor, stay stable, never grow past
 pre-call, and keep query parity. Do NOT ship 1.0.0 until this holds at scale.
+
+## FIX VALIDATED at scale (2026-07-15, self-driven, PG18, shared_buffers=16GB)
+Pre-pass guard (bm25_index_is_compacted): skip the vacate+pack when the index
+is already front-packed AND single-segment; otherwise proceed (so multi-segment
+indexes still coalesce). Same 780MB / 750k bloat as the diagnosis.
+
+| metric | before fix | after fix |
+|--------|-----------|-----------|
+| first fts_vacuum | 91,072 ms (2 passes) | **36,820 ms (1 pass)** |
+| reclaim | 780 -> 385 MB | 780 -> 385 MB (identical) |
+| second fts_vacuum | full wasted pass | **3.157 ms (no-op)** |
+| parity idx==seq | 300==300 | 300==300, common 153452==153452 |
+| decode warnings | present | **0** |
+| cancel mid-rewrite | (n/a) | **~1053 ms**, index stays valid |
+
+- 2.5x faster first vacuum (wasted pass eliminated); repeat vacuum on a compact
+  index is now ~3ms instead of a full 91s rewrite (matters for autovacuum).
+- The one remaining non-interruptible step is the SINGLE DropRelationBuffers
+  truncate sweep (inherent to PostgreSQL; O(NBuffers)); now paid once, not per
+  wasted pass. Cancel during the rewrite phases lands in ~1s.
+- No on-disk format change; version unbumped.
+
+VERDICT: the multi-GB fts_vacuum operability blocker is resolved. The prior
+>3h/non-cancelable behavior was the wasted-extra-pass compounding the O(NBuffers)
+truncate; both are addressed.

@@ -41,3 +41,4 @@ pg_fts-*.zip
 /doc/html/
 /build/
 VSIC-FiC16.pdf
+bench_vac/
