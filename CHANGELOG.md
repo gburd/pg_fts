@@ -2,6 +2,40 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.0.0
+
+First stable release. **No on-disk format change** from 0.3.x; no **REINDEX**
+required (`ALTER EXTENSION pg_fts UPDATE TO '1.0.0'`). The on-disk format
+(BM25_VERSION 3, FTS_DOC_VERSION 3) and the SQL surface are now considered
+stable; future 1.x releases keep backward compatibility.
+
+- **`fts_vacuum` now converges and reclaims space in a single call, never
+  grows the index, and is interruptible.** Compaction previously could
+  oscillate (transiently grow the index before shrinking) and, in a first
+  correctness pass, could stabilize without reclaiming dead space; and no pg_fts
+  operation checked for interrupts, so a long build/merge/vacuum could not be
+  cancelled. `fts_vacuum` now compacts to the size floor in one call, is stable
+  across repeated calls, and never returns larger than it started. It honors
+  `pg_cancel_backend` and `statement_timeout` (nine interrupt-check points along
+  the merge/vacuum path); a cancelled or out-of-disk run leaves the index valid
+  and correct, just not fully compacted. Because compaction rewrites live data
+  before freeing the old copy (for crash safety), it transiently needs free disk
+  space of roughly the live index size, like `VACUUM FULL` / `CLUSTER` /
+  `pg_repack`.
+- **The transparent `count(*) ... WHERE col @@@ q` fast path is now chosen at
+  scale.** The `FtsCount` custom-scan cost model was priced against the whole
+  heap and lost to a bitmap index scan on large tables; it is now priced as the
+  index-only visibility-map count it actually performs, so the planner uses the
+  faster path automatically.
+- **Supported versions.** PostgreSQL 17 and 18 are fully supported and gated in
+  CI (regression + isolation + TAP). PostgreSQL 19 / `master`-devel builds and
+  is exercised best-effort (it is unreleased).
+- **Testing.** The TAP suite (crash recovery, replication, torn-page recovery,
+  server-encoding install/parity) is now a gating part of CI on both forges,
+  alongside regression + isolation, AddressSanitizer / UndefinedBehaviorSanitizer
+  builds, a fuzz harness for the posting-decode path, property-based tests, and a
+  line-coverage floor.
+
 ## 0.3.6
 
 - **`fts_snippet` default ellipsis is now ASCII `...` (was the UTF-8 `…`).** The
