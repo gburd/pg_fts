@@ -37,7 +37,7 @@ pg_fts is a PostgreSQL extension for full-text search with BM25/BM25F relevance
 ranking and a dedicated inverted-index access method: boolean, phrase, NEAR,
 prefix, fuzzy, and regex queries over one operator, an index-native count(*),
 and MVCC- and crash-safe storage (all page writes via GenericXLog). It supports
-PostgreSQL 17, 18, and 19.
+PostgreSQL 17 and 18.
 
 Changes in ${VERSION}:
 
@@ -46,8 +46,7 @@ ${CHANGES}
 Install from PGXN (\`pgxn install pg_fts\`) or from source:
   ${REPO_WEB}
 
-Documentation and the migration guide from Timescale pg_textsearch are in the
-repository.
+Documentation is in the repository.
 EOF
 )"
 
