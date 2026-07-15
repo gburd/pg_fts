@@ -55,14 +55,21 @@ they are not rediscovered. Ordered roughly by value.
    big" narrative (the bm25 index stores **no** positions by default; those live
    in the heap `ftsdoc` or the opt-in positions column) — and the plan:
 
-   Two rough edges the 0.3.5 re-run surfaced, worth fixing:
-   - **`fts_vacuum` oscillates** (§5.1): a compaction pass can *grow* the index
-     (e.g. 4188→8376→4188 MB) before re-converging — the reported floor needs
-     a re-run. A converging compaction is the fix.
-   - **The `FtsCount` CustomScan pushdown is priced out** by its own cost model,
-     so the planner always picks the Bitmap Index Scan instead (still
-     index-native, no seq fallback — a cost-model rough edge, not a capability
-     loss).
+   Two rough edges the 0.3.5 re-run surfaced:
+   - **`fts_vacuum` convergence + scale** (§5.1): the oscillation (index could
+     *grow* 4188->8376->4188 MB before re-converging) is FIXED -- a two-phase
+     compaction now converges to the size floor in one call, never grows past
+     the pre-call size, and is interruptible (nine CHECK_FOR_INTERRUPTS points).
+     BUT an EC2 scale run (bench/RESULTS_VACUUM_SCALE.md) found that on a
+     multi-GB index the compaction is far too expensive (it rewrites the whole
+     segment twice) and the final RelationTruncate wedges in PostgreSQL's
+     O(NBuffers) DropRelationBuffers sweep, so a large-index vacuum can run for
+     a very long time and resist cancellation. The index stays correct
+     throughout (index-scan count == seqscan). A cheaper compaction (less
+     rewrite volume) is the remaining fix; this blocks 1.0.0.
+   - **The `FtsCount` CustomScan pushdown** is now priced as the index-only
+     visibility-map count it performs, so the planner chooses it at scale
+     (FIXED, commit in the 1.0 prep series).
 
    - **P1 — doclen sidecar (highest-leverage, format change).** `doclen` is a
      per-document value but is stored once per posting (once per doc×term pair),
