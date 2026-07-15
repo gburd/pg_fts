@@ -110,22 +110,26 @@ jobs:
           curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            postgresql-17 postgresql-server-dev-17 gcc make libipc-run-perl
+            postgresql-17 postgresql-server-dev-17 clang make libipc-run-perl
       - name: Build + install with AddressSanitizer (shared runtime)
         run: |
           PGBIN=/usr/lib/postgresql/17/bin
           # -shared-libasan belongs only at LINK time (SHLIB_LINK), so the .so
           # references the SHARED asan runtime and can be loaded into a stock
-          # postmaster; gcc's default static asan cannot.
-          make PG_CONFIG=$PGBIN/pg_config with_llvm=no \
+          # postmaster; gcc's default static asan cannot.  Use clang: the
+          # runner's gcc does not accept -shared-libasan (it is a clang flag).
+          make CC=clang PG_CONFIG=$PGBIN/pg_config with_llvm=no \
             COPT="-fsanitize=address -fno-omit-frame-pointer -g -O1 -DUSE_ASSERT_CHECKING" \
             SHLIB_LINK="-fsanitize=address -shared-libasan"
           sudo make install PG_CONFIG=$PGBIN/pg_config
       - name: Regression + isolation under AddressSanitizer
         run: |
           PGBIN=/usr/lib/postgresql/17/bin
-          ASAN_LIB=$(gcc -print-file-name=libasan.so)
-          test -f "$ASAN_LIB" || { echo "libasan.so not found ($ASAN_LIB)"; exit 1; }
+          # The .so is clang-built, so preload CLANG's libasan (matching the
+          # build compiler's runtime) -- gcc's would trip a link-order error.
+          ASAN_LIB=$(clang -print-file-name=libclang_rt.asan-x86_64.so)
+          test -f "$ASAN_LIB" || ASAN_LIB=$(clang -print-file-name=libasan.so)
+          test -f "$ASAN_LIB" || { echo "asan runtime not found ($ASAN_LIB)"; exit 1; }
           # REGRESS overridden to drop the timing-sensitive idx_scan_stats test.
           pg_virtualenv -v 17 env \
             LD_PRELOAD="$ASAN_LIB" \
