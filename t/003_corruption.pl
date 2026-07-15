@@ -125,7 +125,20 @@ sub corrupt_index_file
 }
 
 my $node = PostgreSQL::Test::Cluster->new('primary');
-$node->init;
+# no_data_checksums: this test injects torn bytes to exercise pg_fts's OWN
+# decode-path hardening (bm25_decode_term / fts_doc_is_valid cast raw on-disk
+# bytes to C structs and must survive).  PostgreSQL 18's initdb turns data
+# checksums ON by default (PG<=17 defaulted them OFF); with checksums on, the
+# smashed page fails PG's page-checksum verification in ReadBuffer and the read
+# ERRORs ("invalid page in block N") BEFORE pg_fts's decoder ever sees the
+# bytes -- so the query aborts (rc!=0) instead of returning a bounded-miss
+# count, hiding the very code path this test targets.  Disabling checksums lets
+# the torn bytes reach pg_fts's decoder exactly as they do on PG17, which is
+# what these assertions were written to verify.  (no_data_checksums is a PG18+
+# init param; PG<=17's harness ignores the unknown key -- checksums are already
+# off there.)  PG's page-checksum gate is a separate defense layer; pg_fts's
+# in-decoder hardening is what must hold when a torn page does reach it.
+$node->init(no_data_checksums => 1);
 # fsync off: the test never relies on durability, only on the page bytes we
 # write while the server is down being what the server reads on restart.
 $node->append_conf('postgresql.conf', "fsync = off\n");
