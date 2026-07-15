@@ -854,6 +854,61 @@ SELECT fts_index_nsegments('vac_bm25') AS nseg_after;                 -- 1
 RESET enable_seqscan;
 DROP TABLE vac;
 
+-- fts_vacuum convergence + genuine reclaim (regression: the compactor used to
+-- either OSCILLATE (shrink then re-grow) or be STABLE-but-INEFFECTIVE (never
+-- reclaim), leaving ~35-65% of the file as stranded free space on the dominant
+-- bloat layout, where the live segment sits at HIGH blocks and the freed dead
+-- pages form a LOW free region SMALLER than the live segment).  Build that
+-- layout deterministically, then assert a single fts_vacuum():
+--   (i)   SHRINKS the bloated index toward its floor,
+--   (ii)  reaches a low dead-space ratio (within 15% of a freshly-built twin),
+--   (iii) is STABLE across repeated calls (no oscillation, never exceeds pre).
+-- Deterministic: fixed data, parallelism off (a parallel merge/build changes
+-- the page layout and the segment count).
+SET max_parallel_maintenance_workers = 0;
+SET max_parallel_workers_per_gather = 0;
+CREATE TABLE vconv (id int, d ftsdoc);
+INSERT INTO vconv SELECT g, to_ftsdoc('term'||(g%800)||' shared'||' w'||(g%53)||' doc'||g)
+  FROM generate_series(1,40000) g;
+CREATE INDEX vconv_bm25 ON vconv USING fts (d);
+INSERT INTO vconv SELECT g+40000, to_ftsdoc('term'||(g%800)||' shared'||' w'||(g%53)||' doc'||g)
+  FROM generate_series(1,40000) g;
+SELECT fts_merge('vconv_bm25') IS NOT NULL AS merged1;
+DELETE FROM vconv WHERE id % 5 = 0;
+-- fts_merge (NO vacuum here: a VACUUM would auto-compact and hide the bloat)
+-- folds the tombstones into a smaller segment written to fresh HIGH blocks,
+-- freeing the old segment's LOW pages -- the free<live layout the fix reclaims.
+SELECT fts_merge('vconv_bm25') IS NOT NULL AS merged2;
+-- A freshly-built twin over the SAME surviving rows is the size FLOOR reference.
+CREATE TABLE vfloor (id int, d ftsdoc);
+INSERT INTO vfloor SELECT id, d FROM vconv;
+CREATE INDEX vfloor_bm25 ON vfloor USING fts (d);
+SELECT fts_merge('vfloor_bm25') IS NOT NULL AS floor_merged;
+SET enable_seqscan = off;
+SELECT pg_relation_size('vconv_bm25') AS sz_bloat \gset
+SELECT pg_relation_size('vfloor_bm25') AS sz_floor \gset
+SELECT fts_vacuum('vconv_bm25') IS NOT NULL AS vac1;
+SELECT pg_relation_size('vconv_bm25') AS sz1 \gset
+SELECT fts_vacuum('vconv_bm25') IS NOT NULL AS vac2;
+SELECT pg_relation_size('vconv_bm25') AS sz2 \gset
+SELECT fts_vacuum('vconv_bm25') IS NOT NULL AS vac3;
+SELECT pg_relation_size('vconv_bm25') AS sz3 \gset
+-- (i) SHRANK: the single vacuum reclaimed a large fraction of the bloated file
+SELECT :sz1 < :sz_bloat AS shrank;                                   -- t
+-- (ii) EFFECTIVE: within 15% of the freshly-built floor (dead space nearly gone)
+SELECT :sz1 <= :sz_floor * 1.15 AS near_floor;                       -- t
+-- (iii) STABLE + never grew: repeated calls do not change size or exceed pre
+SELECT :sz1 = :sz2 AND :sz2 = :sz3 AS converged;                     -- t
+SELECT :sz1 <= :sz_bloat AND :sz2 <= :sz_bloat AND :sz3 <= :sz_bloat AS never_grew; -- t
+-- contents intact after convergence (count parity vs the surviving rows)
+SELECT fts_count('vconv_bm25', 'shared'::ftsquery) AS shared_cnt;    -- 64000
+SELECT fts_index_nsegments('vconv_bm25') AS nseg;                    -- 1
+RESET enable_seqscan;
+RESET max_parallel_maintenance_workers;
+RESET max_parallel_workers_per_gather;
+DROP TABLE vconv;
+DROP TABLE vfloor;
+
 -- COUNT pushdown CustomScan (transparent count(*) WHERE @@@ answered from the
 -- index).  The plan is a Custom Scan (FtsCount); the count matches fts_count;
 -- and it must NOT trigger when the shape is unsupported (extra qual, GROUP BY).

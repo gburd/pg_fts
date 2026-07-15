@@ -73,6 +73,14 @@ typedef struct BM25SegMeta
 										 * tiered merge keeps the live count far below
 										 * this, so it is only a safety backstop */
 
+/* Max vacate+pack+truncate passes fts_vacuum makes to converge to the size
+ * floor.  One pass reaches the floor in the common single-segment case (phase 1
+ * vacates the live segment onto fresh high blocks so the freed pages form one
+ * contiguous low free region >= live size; phase 2 packs the segment to the
+ * front and truncates the freed high tail); the loop exits early once a pass
+ * stops shrinking, so this is only a backstop against a pathological layout. */
+#define BM25_VACUUM_MAX_PASSES 6
+
 typedef struct BM25MetaPageData
 {
 	uint32		magic;

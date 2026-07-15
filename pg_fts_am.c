@@ -755,6 +755,16 @@ static BlockNumber *bm25_lowfree = NULL;
 static int	bm25_lowfree_n = 0;
 static int	bm25_lowfree_i = 0;
 
+/*
+ * Extend-only allocation mode.  When set, bm25_new_buffer() skips ALL free-page
+ * reuse (the low-free list AND the FSM) and only extends the relation, so a
+ * rewrite writes its whole output to fresh high blocks.  Used by the vacuum
+ * compactor's "vacate" phase to push a live segment above the free region,
+ * turning the freed old pages into one contiguous low-free run big enough for
+ * the following "pack" phase to relocate the segment to the front and truncate.
+ */
+static bool bm25_alloc_extend_only = false;
+
 static int
 cmp_blocknumber(const void *a, const void *b)
 {
@@ -807,7 +817,7 @@ bm25_new_buffer(Relation index)
 	 * Low-bias reuse: during a compaction, prefer the lowest free block so
 	 * live pages pack at the front of the file.
 	 */
-	while (bm25_lowfree && bm25_lowfree_i < bm25_lowfree_n)
+	while (!bm25_alloc_extend_only && bm25_lowfree && bm25_lowfree_i < bm25_lowfree_n)
 	{
 		BlockNumber blk = bm25_lowfree[bm25_lowfree_i++];
 
@@ -821,7 +831,7 @@ bm25_new_buffer(Relation index)
 	}
 
 	/* Try to reuse a page freed by a previous merge before extending. */
-	for (;;)
+	while (!bm25_alloc_extend_only)
 	{
 		BlockNumber blk = GetFreeIndexPage(index);
 
@@ -1222,6 +1232,8 @@ bm25_write_dictionary(Relation index, BM25BuildState *bs,
 		char	   *dst;
 		bool		newpage = false;
 
+		CHECK_FOR_INTERRUPTS();		/* per-term; page-copy semantics keep it safe */
+
 		if (buffer == InvalidBuffer ||
 			((PageHeader) page)->pd_lower + need >
 			BLCKSZ - sizeof(BM25PageOpaqueData))
@@ -1367,7 +1379,13 @@ bm25_write_segment(Relation index, BM25BuildState *bs, BM25SegMeta *seg)
 	offsets = (uint32 *) palloc(Max(bs->nterms, 1) * sizeof(uint32));
 	pw_begin(&pw, index);
 	for (i = 0; i < bs->nterms; i++)
+	{
+		/* per-term: safe to cancel here (GenericXLog works on a page copy, so a
+		 * throw mid-write leaves on-disk pages untouched; unwind releases the
+		 * buffer lock and leaks at most the new segment's pages) */
+		CHECK_FOR_INTERRUPTS();
 		bm25_write_postings(&pw, &bs->terms[i], &postings[i], &offsets[i]);
+	}
 	pw_finish(&pw);
 
 	MemSet(seg, 0, sizeof(BM25SegMeta));
@@ -1442,12 +1460,17 @@ bm25_read_segment_into(Relation index, const BM25SegMeta *seg, BM25BuildState *b
 
 	while (blk != InvalidBlockNumber)
 	{
-		Buffer		buffer = ReadBuffer(index, blk);
+		Buffer		buffer;
 		Page		page;
 		char	   *ptr,
 				   *end;
 		BlockNumber next;
-		MemoryContext old = MemoryContextSwitchTo(bs->ctx);
+		MemoryContext old;
+
+		/* between pages, no buffer lock held: safe to let a cancel unwind */
+		CHECK_FOR_INTERRUPTS();
+		buffer = ReadBuffer(index, blk);
+		old = MemoryContextSwitchTo(bs->ctx);
 
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buffer);
@@ -1654,6 +1677,7 @@ bm25_merge_group_to_seg(Relation index, const BM25SegMeta *group, uint32 ngroup,
 
 	for (i = 0; i < ngroup; i++)
 	{
+		CHECK_FOR_INTERRUPTS();		/* between source segments (no lock/window held) */
 		bs.sumdoclen += group[i].sumdoclen;
 		bm25_read_segment_into(index, &group[i], &bs);
 	}
@@ -1703,6 +1727,7 @@ bm25_merge_selected(Relation index, const uint32 *sel, uint32 nsel)
 
 	for (i = 0; i < nsel; i++)
 	{
+		CHECK_FOR_INTERRUPTS();		/* between source segments (no lock/window held) */
 		bs.sumdoclen += chosen[i].sumdoclen;
 		bm25_read_segment_into(index, &chosen[i], &bs);
 	}
@@ -2086,33 +2111,29 @@ bm25_merge_all(Relation index)
  * Single-writer only (holds a lock that excludes concurrent writers, e.g.
  * VACUUM's ShareUpdateExclusiveLock or CIC's AccessExclusiveLock).
  */
-static bool
-bm25_vacuum_compact(Relation index)
-{
-	BlockNumber nblocks;
-	BlockNumber blk;
-	BlockNumber truncpoint;
-	bool		didwork = false;
 
-	/*
-	 * Compact to a single segment, reusing the lowest free blocks first so the
-	 * merged output lands at the front of the file.  Do NOT use the parallel
-	 * merge here: the low-page allocator is a single backend-scoped hint, and
-	 * VACUUM wants a deterministic front-packed layout.
-	 */
-	bm25_alloc_begin(index);
+/*
+ * Coalesce every live segment into a single segment, allocating either
+ * low-first (extend_only=false: pack toward the front) or extend-only
+ * (extend_only=true: write the whole output to fresh high blocks, vacating the
+ * free region below).  Returns true if anything was written.  Not parallel:
+ * the allocator hints are backend-scoped and compaction wants a deterministic
+ * layout.
+ */
+static bool
+bm25_compact_to_one(Relation index, bool extend_only)
+{
+	bool		didwork = false;
+	int			guard;
+
+	if (extend_only)
+		bm25_alloc_extend_only = true;
+	else
+		bm25_alloc_begin(index);	/* gather + hand out lowest free first */
+
 	PG_TRY();
 	{
-		int			guard;
-
-		/*
-		 * First, always REWRITE the current live segments through the low-page
-		 * allocator -- even a single segment -- so their live pages relocate to
-		 * the front of the file and the stale post-build/-merge pages become a
-		 * contiguous free tail.  Without this, an index that is already nseg=1
-		 * (e.g. straight after a build that merged to one) keeps its dead pages
-		 * interleaved and nothing is truncatable.
-		 */
+		/* rewrite all live segments once (relocates their pages) ... */
 		{
 			BM25MetaPageData meta;
 			uint32		sel[BM25_MAX_SEGMENTS];
@@ -2130,14 +2151,17 @@ bm25_vacuum_compact(Relation index)
 				didwork = true;
 		}
 
+		/* ... then coalesce any remaining segments down to one */
 		for (guard = 0; guard < BM25_MAX_SEGMENTS; guard++)
 		{
 			BM25MetaPageData meta;
 			uint32		sel[BM25_MAX_SEGMENTS];
 			uint32		nsel = 0;
 			uint32		i;
-			Buffer		mb = ReadBuffer(index, BM25_METAPAGE_BLKNO);
+			Buffer		mb;
 
+			CHECK_FOR_INTERRUPTS();	/* between merges (no lock/window held) */
+			mb = ReadBuffer(index, BM25_METAPAGE_BLKNO);
 			LockBuffer(mb, BUFFER_LOCK_SHARE);
 			memcpy(&meta, BM25PageGetMeta(BufferGetPage(mb)), sizeof(meta));
 			UnlockReleaseBuffer(mb);
@@ -2155,30 +2179,148 @@ bm25_vacuum_compact(Relation index)
 	}
 	PG_FINALLY();
 	{
-		bm25_alloc_end();
+		if (extend_only)
+			bm25_alloc_extend_only = false;
+		else
+			bm25_alloc_end();
 	}
 	PG_END_TRY();
 
-	/* Make freed pages visible in the FSM, then find the free tail. */
-	IndexFreeSpaceMapVacuum(index);
-	nblocks = RelationGetNumberOfBlocks(index);
-	truncpoint = nblocks;
+	return didwork;
+}
+
+/* Truncate the contiguous run of free blocks at the end of the file back to
+ * the OS.  Returns the new block count.  Scan is cancel-safe (no lock held). */
+static BlockNumber
+bm25_truncate_free_tail(Relation index)
+{
+	BlockNumber nblocks = RelationGetNumberOfBlocks(index);
+	BlockNumber truncpoint = nblocks;
+	BlockNumber blk;
+
 	for (blk = nblocks; blk > 1; blk--)
 	{
+		CHECK_FOR_INTERRUPTS();		/* scan-only, no lock held */
 		if (GetRecordedFreeSpace(index, blk - 1) >= BLCKSZ / 2)
 			truncpoint = blk - 1;	/* free -> part of the truncatable tail */
 		else
 			break;				/* first live block from the end; stop */
 	}
-
 	if (truncpoint < nblocks)
 	{
-		/* drop the FSM entries for the pages we are about to remove, then
-		 * truncate the relation to release the space to the OS */
 		FreeSpaceMapVacuumRange(index, truncpoint, nblocks);
 		RelationTruncate(index, truncpoint);
-		didwork = true;
+		nblocks = truncpoint;
 	}
+	return nblocks;
+}
+
+static bool
+bm25_vacuum_compact(Relation index)
+{
+	BlockNumber startblocks;
+	BlockNumber nblocks;
+	BlockNumber prevblocks;
+	bool		didwork = false;
+	int			pass;
+
+	/*
+	 * Converge a bloated index to its size floor in ONE call, stably (repeated
+	 * calls do not oscillate) and NEVER returning larger than we started.
+	 *
+	 * The hard case (verified): after ordinary merges the single live segment
+	 * sits at the HIGH end of the file with the freed dead pages as a LOW free
+	 * region, and that free region is SMALLER than the live segment (the file is
+	 * >50% live).  A plain low-bias rewrite then fills the low free and EXTENDS
+	 * the rest, so the new segment straddles the file and its tail is live --
+	 * nothing is truncatable.  Iterating that rewrite just oscillates between two
+	 * layouts and never reaches the floor.  (This is the "stable but never
+	 * shrinks" defect; the earlier code instead oscillated and could end larger.)
+	 *
+	 * The fix is a two-phase relocation per pass, because a merge writes the new
+	 * segment BEFORE freeing the old one (write-before-free, required for crash
+	 * safety -- the old on-disk pages must stay valid until the metapage swap
+	 * commits):
+	 *
+	 *   Phase 1 (VACATE): rewrite the segment EXTEND-ONLY, so the new copy lands
+	 *     on fresh high blocks and the old pages -- wherever they were -- are all
+	 *     freed.  The free region below the new (high) copy is now contiguous and
+	 *     at least as large as the live segment.  The file grows transiently.
+	 *
+	 *   Phase 2 (PACK): rewrite the segment LOW-BIAS.  Its free list now includes
+	 *     that whole low region (>= live size), so the copy fits entirely at the
+	 *     front; the phase-1 high copy is freed and becomes a contiguous free
+	 *     TAIL, which we truncate.  Result: front-packed at the floor.
+	 *
+	 * One vacate+pass reaches the floor in the common single-segment case; the
+	 * loop re-checks and stops as soon as a pass stops shrinking, bounded by
+	 * BM25_VACUUM_MAX_PASSES.  A final backstop guarantees we never return above
+	 * the pre-call size even if the cap is hit mid-vacate.
+	 *
+	 * Single-writer only (holds a lock that excludes concurrent writers, e.g.
+	 * VACUUM's ShareUpdateExclusiveLock or CIC's AccessExclusiveLock).
+	 */
+	startblocks = RelationGetNumberOfBlocks(index);
+	prevblocks = startblocks;
+
+	for (pass = 0; pass < BM25_VACUUM_MAX_PASSES; pass++)
+	{
+		CHECK_FOR_INTERRUPTS();		/* between passes: no lock/window held */
+
+		/* Phase 1: vacate -- push the live segment onto fresh high blocks so the
+		 * freed old pages form one contiguous low free region >= live size. */
+		if (bm25_compact_to_one(index, true))
+			didwork = true;
+		IndexFreeSpaceMapVacuum(index);
+
+		/* Phase 2: pack -- relocate the segment to the front (its free list now
+		 * spans that whole low region), freeing the phase-1 high copy. */
+		if (bm25_compact_to_one(index, false))
+			didwork = true;
+		IndexFreeSpaceMapVacuum(index);
+
+		/* Truncate the free tail the pack phase left above the front-packed data. */
+		nblocks = bm25_truncate_free_tail(index);
+		if (nblocks < prevblocks)
+			didwork = true;
+
+		/* Converged: a full vacate+pack+truncate pass made no further progress. */
+		if (nblocks >= prevblocks)
+		{
+			prevblocks = nblocks;
+			break;
+		}
+		prevblocks = nblocks;
+	}
+
+	/*
+	 * Backstop: never return larger than we started.  Phase 1 grows the file
+	 * transiently; if the pass cap were somehow hit right after a vacate, the
+	 * pack phase would still have run, but guard anyway by truncating any free
+	 * tail down to at most the pre-call size.
+	 */
+	nblocks = RelationGetNumberOfBlocks(index);
+	if (nblocks > startblocks)
+	{
+		BlockNumber truncpoint = nblocks;
+		BlockNumber blk;
+
+		for (blk = nblocks; blk > startblocks; blk--)
+		{
+			CHECK_FOR_INTERRUPTS();		/* scan-only, no lock held */
+			if (GetRecordedFreeSpace(index, blk - 1) >= BLCKSZ / 2)
+				truncpoint = blk - 1;
+			else
+				break;
+		}
+		if (truncpoint < nblocks)
+		{
+			FreeSpaceMapVacuumRange(index, truncpoint, nblocks);
+			RelationTruncate(index, truncpoint);
+			didwork = true;
+		}
+	}
+
 	return didwork;
 }
 
