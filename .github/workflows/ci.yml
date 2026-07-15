@@ -123,6 +123,14 @@ jobs:
             SHLIB_LINK="-fsanitize=address -shared-libasan"
           sudo make install PG_CONFIG=$PGBIN/pg_config
       - name: Regression + isolation under AddressSanitizer
+        # Best-effort. Loading a clang+ASan-built .so into the pg_virtualenv-
+        # started postmaster needs the asan runtime on the SERVER's loader path,
+        # which pg_virtualenv's env handling does not reliably propagate on the
+        # GH runner -- so CREATE EXTENSION can fail to dlopen the .so here. The
+        # GATING memory-safety signal is the `fuzz` job (standalone ASan+UBSan
+        # with planted-bug teeth over the same on-disk parse surface), so this
+        # step is informational: it must not fail the (already non-gating) job.
+        continue-on-error: true
         run: |
           PGBIN=/usr/lib/postgresql/17/bin
           # The .so is clang-built, so preload CLANG's asan runtime (matching the
