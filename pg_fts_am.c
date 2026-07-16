@@ -145,6 +145,11 @@ typedef struct BuildTerm
 	int			maxpos;
 	int			nposts;
 	int			maxposts;
+	uint32		max_tf;		/* max tf across postings; set by bm25_write_postings
+								 * so bm25_write_dictionary reads it instead of
+								 * rescanning tfs[] -- lets a streaming merge keep
+								 * only term metadata (no tfs[] body) and still write
+								 * a correct max_tf */
 	int			next;			/* next BuildTerm sharing the same hash key, or -1 */
 } BuildTerm;
 
@@ -289,6 +294,7 @@ add_posting(BM25BuildState *bs, const char *term, int len,
 		bt->len = len;
 		bt->maxposts = 4;
 		bt->nposts = 0;
+		bt->max_tf = 0;			/* filled by bm25_write_postings */
 		bt->tids = (ItemPointerData *) FTS_ALLOC_MAYBE_HUGE(bt->maxposts * sizeof(ItemPointerData));
 		bt->tfs = (uint32 *) FTS_ALLOC_MAYBE_HUGE(bt->maxposts * sizeof(uint32));
 		bt->doclens = (uint32 *) FTS_ALLOC_MAYBE_HUGE(bt->maxposts * sizeof(uint32));
@@ -1014,6 +1020,7 @@ bm25_write_postings(BM25PostWriter *pw, BuildTerm *bt,
 	BM25PostingSort *sorted;
 	int			i;
 	bool		start_recorded = false;
+	uint32		term_max_tf = 0;
 
 	*firstblk = InvalidBlockNumber;
 	*firstoff = 0;
@@ -1065,6 +1072,8 @@ bm25_write_postings(BM25PostWriter *pw, BuildTerm *bt,
 			dls[bcount] = sorted[i].doclen;
 			if (sorted[i].tf > blk_max_tf)
 				blk_max_tf = sorted[i].tf;
+			if (sorted[i].tf > term_max_tf)
+				term_max_tf = sorted[i].tf;
 			if (sorted[i].doclen < blk_min_dl)
 				blk_min_dl = sorted[i].doclen;
 			prev_docid = sorted[i].docid;
@@ -1199,6 +1208,7 @@ bm25_write_postings(BM25PostWriter *pw, BuildTerm *bt,
 	}
 
 	pfree(sorted);
+	bt->max_tf = term_max_tf;	/* dictionary reads this; no tfs[] rescan */
 }
 
 /*
@@ -1275,15 +1285,10 @@ bm25_write_dictionary(Relation index, BM25BuildState *bs,
 		dst = (char *) page + ((PageHeader) page)->pd_lower;
 		{
 			BM25DictEntry *de = (BM25DictEntry *) dst;
-			int			p;
-			uint32		maxtf = 0;
 
 			de->termlen = bt->len;
 			de->df = bt->nposts;
-			for (p = 0; p < bt->nposts; p++)
-				if (bt->tfs[p] > maxtf)
-					maxtf = bt->tfs[p];
-			de->max_tf = maxtf;
+			de->max_tf = bt->max_tf;	/* set by bm25_write_postings */
 			de->firstposting = postings[i];
 			de->firstoffset = offsets[i];
 			memcpy(de->term, bt->term, bt->len);
@@ -1439,23 +1444,77 @@ bm25_meta_add_segment(Relation index, const BM25SegMeta *seg)
 	UnlockReleaseBuffer(buf);
 }
 
-/* Read one segment's dictionary + posting lists into a build state. */
+
+/* ---- bounded, streaming k-way segment merge --------------------------------
+ *
+ * bm25_read_segment_into (above) decodes an ENTIRE segment's postings into the
+ * build state; merging K segments that way buffers all their live postings at
+ * once, so the final full compaction of a large index holds the whole index in
+ * RAM and can OOM the server.  The streaming merge below bounds peak memory to
+ * ONE term's merged postings at a time (plus the per-segment dictionary
+ * metadata, which is small relative to the postings).
+ *
+ * Every segment's dictionary is written term-sorted (bm25_write_dictionary
+ * emits bs->terms in cmp_buildterm order), so a merge is a k-way merge of
+ * sorted streams: read each source's dictionary METADATA (term/df/firstposting/
+ * firstoffset, no posting bodies), then sweep the distinct terms in sorted
+ * order; for each term decode ONLY that term's postings from the segments that
+ * carry it, tombstone-filter + merge into one single-term build state, write
+ * that term's postings immediately, record its dict metadata, and free the
+ * term's postings before advancing.  The rare huge stopword is covered by the
+ * FTS_ALLOC_MAYBE_HUGE path in add_posting/bm25_write_postings.
+ */
+typedef struct MergeDictTerm
+{
+	char	   *term;			/* term bytes */
+	uint32		termlen;
+	uint32		df;
+	BlockNumber firstposting;
+	uint32		firstoffset;
+} MergeDictTerm;
+
+typedef struct MergeSource
+{
+	MergeDictTerm *terms;		/* this segment's dict, term-sorted */
+	uint32		nterms;
+	uint32		cur;			/* index of the current (unconsumed) term */
+	uint8	   *tombbuf;		/* tombstone bitmap blob, or NULL */
+	sm_t		tomb;
+	bool		hastomb;
+	sm_cursor_cached_t tombcache;
+} MergeSource;
+
+typedef struct MergeOutTerm
+{
+	char	   *term;			/* term bytes (in the merge ctx) */
+	int			termlen;
+	uint32		df;				/* live df after tombstone drops */
+	uint32		max_tf;
+	BlockNumber firstposting;	/* set by bm25_write_postings */
+	uint32		firstoffset;
+} MergeOutTerm;
+
+/* Read one segment's dictionary metadata (no posting bodies) into src->terms. */
 static void
-bm25_read_segment_into(Relation index, const BM25SegMeta *seg, BM25BuildState *bs)
+merge_source_open(Relation index, const BM25SegMeta *seg, MergeSource *src,
+				  MemoryContext ctx)
 {
 	BlockNumber blk = seg->dictstart;
-	uint8	   *tombbuf = NULL;
-	sm_t		tomb;
-	bool		hastomb = false;
-	sm_cursor_cached_t tombcache = SM_CURSOR_CACHED_INIT;
+	uint32		cap = 0;
+	MemoryContext old = MemoryContextSwitchTo(ctx);
 
-	/* open this segment's tombstone bitmap so merge physically DROPS deleted
-	 * docs (otherwise re-adding their postings would resurrect them) */
+	src->terms = NULL;
+	src->nterms = 0;
+	src->cur = 0;
+	src->tombbuf = NULL;
+	src->hastomb = false;
+	memset(&src->tombcache, 0, sizeof(src->tombcache));
+
 	if (seg->livedocs != InvalidBlockNumber && seg->livedocslen > 0)
 	{
-		tombbuf = bm25_read_blob(index, seg->livedocs, seg->livedocslen);
-		sm_open(&tomb, (uint8_t *) tombbuf, seg->livedocslen);
-		hastomb = true;
+		src->tombbuf = bm25_read_blob(index, seg->livedocs, seg->livedocslen);
+		sm_open(&src->tomb, (uint8_t *) src->tombbuf, seg->livedocslen);
+		src->hastomb = true;
 	}
 
 	while (blk != InvalidBlockNumber)
@@ -1465,13 +1524,9 @@ bm25_read_segment_into(Relation index, const BM25SegMeta *seg, BM25BuildState *b
 		char	   *ptr,
 				   *end;
 		BlockNumber next;
-		MemoryContext old;
 
-		/* between pages, no buffer lock held: safe to let a cancel unwind */
-		CHECK_FOR_INTERRUPTS();
+		CHECK_FOR_INTERRUPTS();		/* between pages, no lock held across the loop body's yields */
 		buffer = ReadBuffer(index, blk);
-		old = MemoryContextSwitchTo(bs->ctx);
-
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buffer);
 		ptr = (char *) PageGetContents(page);
@@ -1481,43 +1536,220 @@ bm25_read_segment_into(Relation index, const BM25SegMeta *seg, BM25BuildState *b
 		{
 			BM25DictEntry *de = (BM25DictEntry *) ptr;
 			Size		esize = MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
+			MergeDictTerm *mt;
+
+			if (src->nterms >= cap)
+			{
+				cap = cap ? cap * 2 : 256;
+				src->terms = src->terms
+					? (MergeDictTerm *) repalloc(src->terms, cap * sizeof(MergeDictTerm))
+					: (MergeDictTerm *) palloc(cap * sizeof(MergeDictTerm));
+			}
+			mt = &src->terms[src->nterms++];
+			mt->termlen = de->termlen;
+			mt->df = de->df;
+			mt->firstposting = de->firstposting;
+			mt->firstoffset = de->firstoffset;
+			mt->term = (char *) palloc(de->termlen);
+			memcpy(mt->term, de->term, de->termlen);
+			ptr += esize;
+		}
+		UnlockReleaseBuffer(buffer);
+		blk = next;
+	}
+	MemoryContextSwitchTo(old);
+}
+
+/* Order two term keys the same way cmp_buildterm orders BuildTerms. */
+static int
+merge_cmp_term(const char *a, uint32 alen, const char *b, uint32 blen)
+{
+	uint32		min = Min(alen, blen);
+	int			c = memcmp(a, b, min);
+
+	if (c != 0)
+		return c;
+	return (int) alen - (int) blen;
+}
+
+/*
+ * Streaming k-way merge of the `chosen` segments into ONE new segment, bounded
+ * to one term's postings at a time.  Writes the new segment's pages and fills
+ * *seg (dictstart/dictindexstart) plus the corpus totals in bs (ndocs,
+ * sumdoclen).  All allocations live in bs->ctx, which the caller owns.
+ */
+static void
+bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
+							  uint32 nsel, BM25BuildState *bs, BM25SegMeta *seg)
+{
+	MergeSource *srcv;
+	BM25PostWriter pw;
+	MergeOutTerm *out;			/* per output term: dict metadata (small) */
+	BlockNumber *dpost;
+	uint32	   *doff;
+	uint32		ocap;
+	uint32		nout = 0;
+	uint32		i;
+	MemoryContext old = MemoryContextSwitchTo(bs->ctx);
+
+	srcv = (MergeSource *) palloc0(nsel * sizeof(MergeSource));
+	for (i = 0; i < nsel; i++)
+	{
+		bs->sumdoclen += chosen[i].sumdoclen;
+		bs->ndocs += chosen[i].ndocs - chosen[i].ndeleted;
+		merge_source_open(index, &chosen[i], &srcv[i], bs->ctx);
+	}
+
+	ocap = 256;
+	out = (MergeOutTerm *) palloc(ocap * sizeof(MergeOutTerm));
+
+	pw_begin(&pw, index);
+
+	for (;;)
+	{
+		const char *smterm = NULL;
+		uint32		smlen = 0;
+		MemoryContext termctx;
+		MemoryContext told;
+		BM25BuildState tbs;
+		BuildTerm  *bt;
+		BlockNumber fb;
+		uint32		fo;
+
+		CHECK_FOR_INTERRUPTS();		/* per output term; no lock/window held */
+
+		/* smallest current term across all live cursors */
+		for (i = 0; i < nsel; i++)
+		{
+			MergeSource *s = &srcv[i];
+
+			if (s->cur >= s->nterms)
+				continue;
+			if (smterm == NULL ||
+				merge_cmp_term(s->terms[s->cur].term, s->terms[s->cur].termlen,
+							   smterm, smlen) < 0)
+			{
+				smterm = s->terms[s->cur].term;
+				smlen = s->terms[s->cur].termlen;
+			}
+		}
+		if (smterm == NULL)
+			break;				/* all cursors exhausted */
+
+		/* gather this term's postings from every segment that carries it into a
+		 * fresh single-term build state in its own child context */
+		termctx = AllocSetContextCreate(bs->ctx, "bm25 merge term",
+										ALLOCSET_DEFAULT_SIZES);
+		told = MemoryContextSwitchTo(termctx);
+		tbs.ctx = termctx;
+		tbs.want_positions = bs->want_positions;
+		tbs.terms = NULL;
+		tbs.nterms = 0;
+		tbs.maxterms = 0;
+		tbs.ndocs = 0;
+		tbs.sumdoclen = 0;
+		bm25_build_ht_init(&tbs);
+
+		for (i = 0; i < nsel; i++)
+		{
+			MergeSource *s = &srcv[i];
+			MergeDictTerm *mt;
 			BM25Posting *post;
 			uint32	   *posarena = NULL;
 			int			np,
 						k;
 
-			/* carry positions through the merge/vacuum rewrite iff this index
-			 * keeps them (WITH positions=on); otherwise decode is skipped */
-			np = bm25_decode_term(index, de->firstposting, de->firstoffset,
-								  de->df, &post, NULL,
-								  bs->want_positions, &posarena);
+			if (s->cur >= s->nterms)
+				continue;
+			mt = &s->terms[s->cur];
+			if (merge_cmp_term(mt->term, mt->termlen, smterm, smlen) != 0)
+				continue;		/* this segment lacks the smallest term */
+
+			np = bm25_decode_term(index, mt->firstposting, mt->firstoffset,
+								  mt->df, &post, NULL, bs->want_positions,
+								  &posarena);
 			for (k = 0; k < np; k++)
 			{
-				if (hastomb)
-				{
-					/* postings are docid-ascending within a term; a cached MRU
-					 * chunk cache turns the per-posting membership test into
-					 * O(1) hits over the hot chunks */
-					if (sm_contains_cached(&tomb, bm25_tid_to_docid(&post[k].tid),
-										   &tombcache))
-						continue;	/* tombstoned: drop from the merged segment */
-				}
-				add_posting(bs, de->term, de->termlen,
+				if (s->hastomb &&
+					sm_contains_cached(&s->tomb,
+									   bm25_tid_to_docid(&post[k].tid),
+									   &s->tombcache))
+					continue;	/* tombstoned: physically drop */
+				add_posting(&tbs, mt->term, mt->termlen,
 							&post[k].tid, post[k].tf, post[k].doclen,
 							post[k].pos, post[k].pos ? (int) post[k].tf : 0);
 			}
 			pfree(post);
 			if (posarena)
 				pfree(posarena);
-			ptr += esize;
+			s->cur++;			/* advance the cursors that matched this term */
 		}
-		UnlockReleaseBuffer(buffer);
-		MemoryContextSwitchTo(old);
-		blk = next;
+		MemoryContextSwitchTo(told);
+
+		/* the term may have been entirely tombstoned away */
+		if (tbs.nterms == 0)
+		{
+			MemoryContextDelete(termctx);
+			continue;
+		}
+		Assert(tbs.nterms == 1);
+		bt = &tbs.terms[0];
+
+		/* write this term's postings now (sets bt->max_tf), then keep only its
+		 * small dictionary metadata and free the postings arena */
+		bm25_write_postings(&pw, bt, &fb, &fo);
+
+		if (nout >= ocap)
+		{
+			ocap *= 2;
+			out = (MergeOutTerm *) repalloc(out, ocap * sizeof(MergeOutTerm));
+		}
+		out[nout].termlen = bt->len;
+		out[nout].df = bt->nposts;
+		out[nout].max_tf = bt->max_tf;
+		out[nout].firstposting = fb;
+		out[nout].firstoffset = fo;
+		out[nout].term = (char *) palloc(bt->len);	/* in bs->ctx (current) */
+		memcpy(out[nout].term, bt->term, bt->len);
+		nout++;
+
+		MemoryContextDelete(termctx);	/* frees this term's postings */
 	}
-	if (tombbuf)
-		pfree(tombbuf);
-	bs->ndocs += seg->ndocs - seg->ndeleted;
+
+	pw_finish(&pw);
+
+	/* Emit the dictionary from the streamed metadata.  bm25_write_dictionary
+	 * reads term/len/df/max_tf plus the firstposting/firstoffset arrays; build
+	 * a minimal BuildTerm array carrying exactly those. */
+	bs->terms = (BuildTerm *) FTS_ALLOC_MAYBE_HUGE(Max(nout, 1) * sizeof(BuildTerm));
+	dpost = (BlockNumber *) palloc(Max(nout, 1) * sizeof(BlockNumber));
+	doff = (uint32 *) palloc(Max(nout, 1) * sizeof(uint32));
+	for (i = 0; i < nout; i++)
+	{
+		MemSet(&bs->terms[i], 0, sizeof(BuildTerm));
+		bs->terms[i].term = out[i].term;
+		bs->terms[i].len = out[i].termlen;
+		bs->terms[i].nposts = out[i].df;
+		bs->terms[i].max_tf = out[i].max_tf;
+		dpost[i] = out[i].firstposting;
+		doff[i] = out[i].firstoffset;
+	}
+	bs->nterms = (int) nout;
+
+	MemSet(seg, 0, sizeof(BM25SegMeta));
+	seg->dictstart = bm25_write_dictionary(index, bs, dpost, doff,
+										   &seg->dictindexstart);
+	seg->trgmstart = bm25_write_trigrams(index, bs);
+	seg->livedocs = InvalidBlockNumber;
+	seg->ndocs = bs->ndocs;
+	seg->sumdoclen = bs->sumdoclen;
+	seg->nterms = bs->nterms;
+	seg->ndeleted = 0;
+	seg->livedocslen = 0;
+
+	pfree(dpost);
+	pfree(doff);
+	MemoryContextSwitchTo(old);
 }
 
 /* Recycle a chained page list (dict/trigram/posting/data) to the FSM. */
@@ -1663,7 +1895,6 @@ bm25_merge_group_to_seg(Relation index, const BM25SegMeta *group, uint32 ngroup,
 						BM25SegMeta *out)
 {
 	BM25BuildState bs;
-	uint32		i;
 
 	bs.ctx = AllocSetContextCreate(CurrentMemoryContext, "bm25 merge group",
 								   ALLOCSET_DEFAULT_SIZES);
@@ -1673,19 +1904,10 @@ bm25_merge_group_to_seg(Relation index, const BM25SegMeta *group, uint32 ngroup,
 	bs.maxterms = 0;
 	bs.ndocs = 0;
 	bs.sumdoclen = 0;
-	bm25_build_ht_init(&bs);
 
-	for (i = 0; i < ngroup; i++)
-	{
-		CHECK_FOR_INTERRUPTS();		/* between source segments (no lock/window held) */
-		bs.sumdoclen += group[i].sumdoclen;
-		bm25_read_segment_into(index, &group[i], &bs);
-	}
-	if (bs.nterms > 1)
-		qsort(bs.terms, bs.nterms, sizeof(BuildTerm), cmp_buildterm);
-
-	/* page appends are serialized per-page inside bm25_new_buffer */
-	bm25_write_segment(index, &bs, out);
+	/* Streaming k-way merge (bounded memory); page appends are serialized
+	 * per-page inside bm25_new_buffer under the extension lock. */
+	bm25_merge_segments_streaming(index, group, ngroup, &bs, out);
 	out->ndocs = bs.ndocs;
 	out->sumdoclen = bs.sumdoclen;
 
@@ -1723,18 +1945,11 @@ bm25_merge_selected(Relation index, const uint32 *sel, uint32 nsel)
 	bs.maxterms = 0;
 	bs.ndocs = 0;
 	bs.sumdoclen = 0;
-	bm25_build_ht_init(&bs);
 
-	for (i = 0; i < nsel; i++)
-	{
-		CHECK_FOR_INTERRUPTS();		/* between source segments (no lock/window held) */
-		bs.sumdoclen += chosen[i].sumdoclen;
-		bm25_read_segment_into(index, &chosen[i], &bs);
-	}
-	if (bs.nterms > 1)
-		qsort(bs.terms, bs.nterms, sizeof(BuildTerm), cmp_buildterm);
-
-	bm25_write_segment(index, &bs, &newseg);
+	/* Streaming k-way merge: bounded to one term's postings at a time, so a
+	 * full compaction of a large index does not buffer the whole index in RAM
+	 * (see bm25_merge_segments_streaming). */
+	bm25_merge_segments_streaming(index, chosen, nsel, &bs, &newseg);
 	newseg.ndocs = bs.ndocs;
 	newseg.sumdoclen = bs.sumdoclen;
 
