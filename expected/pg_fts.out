@@ -1520,6 +1520,90 @@ SELECT fts_index_nsegments('tier_bm25') <= 8 AS segments_bounded;        -- t (c
 
 RESET enable_seqscan;
 DROP TABLE tier;
+-- Streaming merge (memory-bounded k-way merge): a low maintenance_work_mem
+-- forces many segment flushes during build; a full merge then coalesces them
+-- to one segment via the streaming path (one term's postings at a time, not
+-- the whole index buffered).  Exercise it with positions=on (position carry),
+-- deletes (tombstone drop), and a multi-term corpus that spans several dict
+-- pages, then assert exact parity vs a seqscan ground truth after the merge.
+SET maintenance_work_mem = '1MB';               -- floor is 32MB, but small anyway
+CREATE TABLE strm (id serial, body text);
+INSERT INTO strm(body) SELECT 'term'||(g%400)||' shared w'||(g%37)||' doc'||g
+  FROM generate_series(1,8000) g;
+CREATE INDEX strm_bm25 ON strm USING fts (to_ftsdoc('simple', body)) WITH (positions = on);
+INSERT INTO strm(body) SELECT 'term'||(g%400)||' shared extra'||g
+  FROM generate_series(8001,14000) g;
+SELECT fts_merge('strm_bm25') IS NOT NULL AS strm_flushed;   -- create >1 segment
+ strm_flushed 
+--------------
+ t
+(1 row)
+
+DELETE FROM strm WHERE id % 4 = 0;                            -- tombstones
+VACUUM strm;                                                 -- write tombstones into the segment(s)
+INSERT INTO strm(body) SELECT 'term'||(g%400)||' shared fresh'||g
+  FROM generate_series(14001,18000) g;                       -- a fresh, un-tombstoned segment
+SELECT fts_merge('strm_bm25') IS NOT NULL AS strm_merged;     -- streaming merge (tombstoned + fresh) to 1 seg
+ strm_merged 
+-------------
+ t
+(1 row)
+
+SET enable_seqscan = off;
+-- term-count parity: index scan vs a forced seqscan of the SAME @@@ predicate
+-- (ground truth), for a common and a rarer term.
+SELECT (SELECT count(*) FROM strm WHERE to_ftsdoc('simple',body) @@@ 'shared'::ftsquery) AS idx_shared \gset
+SET enable_seqscan = on;
+SET enable_indexscan = off; SET enable_bitmapscan = off;
+SELECT :idx_shared = (SELECT count(*) FROM strm WHERE to_ftsdoc('simple',body) @@@ 'shared'::ftsquery)
+       AS strm_shared_parity;
+ strm_shared_parity 
+--------------------
+ t
+(1 row)
+
+RESET enable_indexscan; RESET enable_bitmapscan;
+SET enable_seqscan = off;
+SELECT (SELECT count(*) FROM strm WHERE to_ftsdoc('simple',body) @@@ 'term5'::ftsquery) AS idx_term5 \gset
+SET enable_seqscan = on;
+SET enable_indexscan = off; SET enable_bitmapscan = off;
+SELECT :idx_term5 = (SELECT count(*) FROM strm WHERE to_ftsdoc('simple',body) @@@ 'term5'::ftsquery)
+       AS strm_term5_parity;
+ strm_term5_parity 
+-------------------
+ t
+(1 row)
+
+RESET enable_indexscan; RESET enable_bitmapscan;
+SET enable_seqscan = off;
+-- tombstones dropped: the merged segment's live ndocs equals the live heap
+-- rows (14000 - 3500 deleted + 4000 fresh = 14500), not the pre-delete total.
+-- If the streaming merge failed to drop tombstoned postings, ndocs would be
+-- inflated by the ~3500 deleted docs.
+SELECT ndocs = (SELECT count(*) FROM strm) AS strm_tombstones_dropped
+  FROM fts_index_stats('strm_bm25');
+ strm_tombstones_dropped 
+-------------------------
+ t
+(1 row)
+
+-- phrase (position carry through the streaming merge) still matches
+SELECT count(*) > 0 AS strm_phrase_ok
+  FROM strm WHERE to_ftsdoc('simple',body) @@@ to_ftsquery('simple','"term5 shared"');
+ strm_phrase_ok 
+----------------
+ t
+(1 row)
+
+SELECT fts_index_nsegments('strm_bm25') = 1 AS strm_one_segment;   -- coalesced
+ strm_one_segment 
+------------------
+ t
+(1 row)
+
+RESET enable_seqscan;
+RESET maintenance_work_mem;
+DROP TABLE strm;
 -- FOR-128 block posting codec: a term spanning many 128-doc blocks and pages
 -- decodes correctly and block-max WAND top-k matches a full scan+sort.
 CREATE TABLE blk (id serial, d ftsdoc);
