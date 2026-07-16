@@ -2,6 +2,23 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.0.1
+
+Bug-fix release. **No on-disk format change** from 1.0.0; no **REINDEX**
+required (`ALTER EXTENSION pg_fts UPDATE TO '1.0.1'`).
+
+- **Fixed an out-of-memory crash when building or merging a large index.** The
+  segment-merge phase (used by the final compaction of an index build, by
+  `fts_merge`, and by parallel builds) decoded every posting of every term from
+  all merged segments into memory at once before writing the result, so
+  compacting a large index could hold the entire index's postings in RAM and
+  OOM the server. Merging is now a bounded, streaming k-way merge that holds
+  only one term's postings at a time; peak merge memory is independent of index
+  size. Measured on a 3M-document build: peak merge memory dropped from 2240 MB
+  to ~1 MB, with the same result and no build-time regression. No on-disk
+  format change and results are unchanged (index-vs-sequential-scan parity, with
+  positions, tombstone drops, and phrase queries all preserved).
+
 ## 1.0.0
 
 First stable release. **No on-disk format change** from 0.3.x; no **REINDEX**
