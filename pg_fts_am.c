@@ -660,17 +660,66 @@ bm25_decode_term(Relation index, BlockNumber firstblk, uint32 firstoff,
 
 				for (i = 0; i < cnt; i++)
 					sumtf += (int) tfs[i];
+
+				/*
+				 * Sanity-bound sumtf against the declared positions bytes before
+				 * trusting it: the positions column is one FOR block of sumtf
+				 * values at width pstream[0], occupying exactly
+				 *   width==0 ? 1 : 1 + ceil(sumtf*width/8)   bytes.
+				 * A corrupt/inflated tfs[] (each value in range, but summing huge)
+				 * can push sumtf far above what posbytelen actually encodes;
+				 * without this check bm25_for_unpack would read past the block and
+				 * we would size a bogus multi-GB arena.  The existing bh->count /
+				 * FOR-column guards do not catch an inflated tfs[].  Compute the
+				 * exact required length in 64-bit Size arithmetic (NOT via
+				 * bm25_for_bytelen, whose int n*width would itself overflow on a
+				 * corrupt sumtf); comparing the exact length avoids false positives
+				 * on a legitimate width-0 (all-zero-delta) block with large sumtf.
+				 * pstream[0] is in-bounds: the guard above proved
+				 * stream+bytelen+posbytelen <= pend and posbytelen>0 here.
+				 */
+				{
+					unsigned int pw = pstream[0];	/* FOR width byte */
+					Size		need;
+
+					if (sumtf < 0)
+						need = MaxAllocSize + 1;	/* overflow -> force reject */
+					else
+						need = (pw == 0) ? 1
+							: (Size) 1 + (((Size) sumtf * pw + 7) / 8);
+
+					if (need > (Size) bh->posbytelen)
+					{
+						ereport(WARNING,
+								(errcode(ERRCODE_DATA_CORRUPTED),
+								 errmsg("pg_fts: corrupt posting block (positions count exceeds declared bytes) in index \"%s\"; stopping term decode",
+										RelationGetRelationName(index)),
+								 errhint("REINDEX the index to rebuild it from the heap.")));
+						UnlockReleaseBuffer(buf);
+						goto done;
+					}
+				}
+
+				/*
+				 * A legitimately huge sumtf (a term repeated very many times in
+				 * one document) needs a huge-safe alloc: a plain palloc throws
+				 * "invalid memory alloc request size" once sumtf*8 crosses
+				 * MaxAllocSize, aborting any decode caller (scan/merge/bulkdelete/
+				 * CIC validation).  Mirrors the write-side guard in
+				 * bm25_write_postings.
+				 */
 				if (sumtf > (int) (sizeof(deltas) / sizeof(deltas[0])))
-					dbuf = (uint64 *) palloc((Size) sumtf * sizeof(uint64));
+					dbuf = (uint64 *) FTS_ALLOC_MAYBE_HUGE((Size) sumtf * sizeof(uint64));
 				(void) bm25_for_unpack(pstream, sumtf, dbuf);
 
-				/* grow the arena to hold this block's positions */
+				/* grow the arena to hold this block's positions.  parena_cap*4 is
+				 * likewise huge-safe (accumulated across the term's blocks). */
 				if (parena_n + sumtf > parena_cap)
 				{
 					parena_cap = Max(parena_cap * 2, parena_n + sumtf);
 					parena = parena == NULL
-						? (uint32 *) palloc((Size) parena_cap * sizeof(uint32))
-						: (uint32 *) repalloc(parena, (Size) parena_cap * sizeof(uint32));
+						? (uint32 *) FTS_ALLOC_MAYBE_HUGE((Size) parena_cap * sizeof(uint32))
+						: (uint32 *) FTS_REALLOC_MAYBE_HUGE(parena, (Size) parena_cap * sizeof(uint32));
 				}
 
 				/* un-delta each posting's run (delta reset at posting boundaries) */

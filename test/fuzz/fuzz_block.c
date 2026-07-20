@@ -145,8 +145,43 @@ decode_block_inner(const unsigned char *page, size_t pd_lower, size_t off,
 
 		for (i = 0; i < cnt; i++)
 			sumtf += (int) tfs[i];
+
+		/*
+		 * Guard #3 (1.0.2): sanity-bound sumtf against the declared positions
+		 * bytes.  The positions column is one FOR block of sumtf values whose
+		 * exact size is width==0?1:1+ceil(sumtf*width/8) (width=pstream[0]); a
+		 * corrupt/inflated
+		 * tfs[] (values each in range, but summing huge) pushes sumtf far above
+		 * what posbytelen encodes, so bm25_for_unpack would read past the block
+		 * AND a plain palloc(sumtf*8) throws "invalid memory alloc request size"
+		 * once it crosses MaxAllocSize -- the 1.0.1 read-path crash reported
+		 * against CREATE INDEX CONCURRENTLY.  The shipped fix rejects the block
+		 * here for the corrupt case and uses a huge-safe alloc for the
+		 * legitimately-large case.
+		 *
+		 * FUZZ_NO_SUMTF_GUARD reverts to the 1.0.1 behavior (no bound, plain
+		 * malloc) so the fuzzer demonstrates it detects this bug class.
+		 */
+#if defined(FUZZ_NO_SUMTF_GUARD)
 		if (sumtf < 0)
-			sumtf = 0;
+			sumtf = 0;			/* 1.0.1: negative-overflow floor only, no posbytelen bound */
+#else
+		{
+			/* mirror the shipped guard: exact FOR-block length in 64-bit
+			 * arithmetic (bm25_for_bytelen's int n*width would itself overflow
+			 * on a corrupt sumtf), reject if it exceeds posbytelen. */
+			unsigned int pw = pstream[0];
+			size_t		need;
+
+			if (sumtf < 0)
+				need = (size_t) -1;
+			else
+				need = (pw == 0) ? 1
+					: (size_t) 1 + (((size_t) sumtf * pw + 7) / 8);
+			if (need > (size_t) bh->posbytelen)
+				return 0;		/* corrupt: reject the block */
+		}
+#endif
 		if (sumtf > (int) (sizeof(deltas) / sizeof(deltas[0])))
 			dbuf = (uint64_t *) malloc((size_t) sumtf * sizeof(uint64_t));
 		if (dbuf != NULL && sumtf > 0)
@@ -329,6 +364,35 @@ fuzz_blocks(void)
 		 * -- is the separate residual finding covered by FUZZ_RANDOM_STREAM. */
 		bh->bytelen = (uint32_t) (streamlen - posbytelen);
 		bh->posbytelen = (uint32_t) posbytelen;
+
+#if defined(FUZZ_NO_SUMTF_GUARD)
+		/*
+		 * SUMTF teeth: inflate the decoded tf column so Sum(tf) vastly exceeds
+		 * what posbytelen encodes, then decode WITH positions.  Under the 1.0.1
+		 * (unguarded) model this drives bm25_for_unpack(pstream, huge_sumtf, ..)
+		 * to read far past the positions column / page -> ASan OOB (and the real
+		 * code would palloc(huge) -> "invalid memory alloc request size").  The
+		 * shipped guard rejects the block first, so the default build is clean.
+		 * Rewrite the tfs column (2nd of 3, after the gaps column) to a wide,
+		 * all-ones stream so each decoded tf is large.
+		 */
+		{
+			int			gl = bm25_for_bytelen(stream, real_cnt);
+			unsigned char *tcol = stream + gl;
+			int			w = 20;		/* wide tf values -> big Sum(tf) */
+			int			tbytes = 1 + (real_cnt * w + 7) / 8;
+			int			z;
+
+			if (tcol + tbytes <= page + PAGESZ)
+			{
+				tcol[0] = (unsigned char) w;
+				for (z = 1; z < tbytes; z++)
+					tcol[z] = 0xff;
+				bh->count = (uint32_t) real_cnt;	/* honest count, poisoned tfs */
+				decode_block_inner(page, pd_lower, off, 1);
+			}
+		}
+#endif
 
 		decode_block_inner(page, pd_lower, off, want_pos);
 

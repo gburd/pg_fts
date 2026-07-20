@@ -35,6 +35,7 @@ done
 $CC $CFLAGS -DFUZZ_NO_CLAMP=1 "$here/fuzz_block.c" -o "$out/fuzz_block_noclamp"
 $CC $CFLAGS -DFUZZ_SIGNED_COUNT=1 "$here/fuzz_block.c" -o "$out/fuzz_block_signed"
 $CC $CFLAGS -DFUZZ_RANDOM_STREAM=1 "$here/fuzz_block.c" -o "$out/fuzz_block_randstream"
+$CC $CFLAGS -DFUZZ_NO_SUMTF_GUARD=1 "$here/fuzz_block.c" -o "$out/fuzz_block_nosumtf"
 
 echo "== running fuzzers =="
 rc=0
@@ -76,6 +77,17 @@ if "$out/fuzz_block_randstream" >/dev/null 2>&1; then
     rc=1
 else
     echo "PASS: fuzz_block_randstream aborted as expected (corrupt-width teeth)"
+fi
+
+# The no-sumtf-guard build reverts the 1.0.1 positions-decode: an inflated tfs[]
+# makes Sum(tf) exceed what posbytelen encodes, so bm25_for_unpack reads past the
+# block -> ASan OOB (and the real code would over-alloc past MaxAllocSize).  ASan
+# must abort -- proving the harness detects the 1.0.1 read-path crash class.
+if "$out/fuzz_block_nosumtf" >/dev/null 2>&1; then
+    echo "FAIL: fuzz_block_nosumtf exited 0 -- harness did NOT catch the inflated-sumtf read!"
+    rc=1
+else
+    echo "PASS: fuzz_block_nosumtf aborted as expected (sumtf-vs-posbytelen teeth)"
 fi
 
 if [ "$rc" -eq 0 ]; then
