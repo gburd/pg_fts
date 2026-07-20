@@ -2361,6 +2361,60 @@ SELECT count(*) > 0 AS phrase_survives_vacuum
 (1 row)
 
 DROP TABLE pos_on; DROP TABLE pos_off;
+-- Positions-decode allocation guard (regression for the 1.0.1 read-path crash):
+-- bm25_decode_term sizes a per-block scratch from Sum(tf) of one block.  A doc
+-- that repeats a term very many times drives a large Sum(tf); the decode must
+-- (a) NOT throw "invalid memory alloc request size" (huge-safe alloc), and
+-- (b) NOT false-positive its corruption guard on the legitimate width-0 case
+-- (a term always at the same position -> all-zero position deltas -> a width-0
+-- positions column whose posbytelen is tiny even though Sum(tf) is large).
+-- Build a positions=on index over such docs and assert phrase/count still work
+-- and match the recheck (positions=off) path exactly, with no corruption WARNING.
+CREATE TABLE posbig (id serial, body text);
+-- 'hot' repeated 300x/doc (large per-posting tf -> large Sum(tf) per block);
+-- 'edge' appears once so a phrase mixing them is exercised too.
+INSERT INTO posbig(body)
+SELECT repeat('hot ', 300) || 'edge tail d'||g FROM generate_series(1, 400) g;
+CREATE INDEX posbig_on  ON posbig USING fts (to_ftsdoc('simple'::regconfig, body)) WITH (positions = on);
+CREATE TABLE posbig_off (id serial, body text);
+INSERT INTO posbig_off(body) SELECT body FROM posbig;
+CREATE INDEX posbig_offidx ON posbig_off USING fts (to_ftsdoc('simple'::regconfig, body));
+SET enable_seqscan = off;
+-- (a) a plain term-count over the high-Sum(tf) term does not error
+SELECT count(*) = 400 AS posbig_hot_count
+  FROM posbig WHERE to_ftsdoc('simple'::regconfig, body) @@@ 'hot'::ftsquery;
+ posbig_hot_count 
+------------------
+ t
+(1 row)
+
+-- (b) phrase from positions == phrase from recheck (identical), guard did not
+-- spuriously drop the legitimate high-Sum(tf) block
+SELECT
+  (SELECT count(*) FROM posbig     WHERE to_ftsdoc('simple'::regconfig, body) @@@ to_ftsquery('simple'::regconfig, '"hot edge"'))
+  = (SELECT count(*) FROM posbig_off WHERE to_ftsdoc('simple'::regconfig, body) @@@ to_ftsquery('simple'::regconfig, '"hot edge"'))
+    AS posbig_phrase_parity;
+ posbig_phrase_parity 
+----------------------
+ t
+(1 row)
+
+-- force a merge (re-decodes every block through the same path) then re-check
+SELECT fts_merge('posbig_on') IS NOT NULL AS posbig_merged;
+ posbig_merged 
+---------------
+ t
+(1 row)
+
+SELECT count(*) = 400 AS posbig_hot_after_merge
+  FROM posbig WHERE to_ftsdoc('simple'::regconfig, body) @@@ 'hot'::ftsquery;
+ posbig_hot_after_merge 
+------------------------
+ t
+(1 row)
+
+RESET enable_seqscan;
+DROP TABLE posbig; DROP TABLE posbig_off;
 -- three-word positional phrase + NEAR must match the recheck path exactly (the
 -- phrase_step chain over posting positions == the heap adjacency chain).
 CREATE TABLE pos3 (id serial, body text);
