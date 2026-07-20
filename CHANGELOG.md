@@ -2,6 +2,27 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.0.2
+
+Bug-fix release. **No on-disk format change** from 1.0.1; no **REINDEX**
+required (`ALTER EXTENSION pg_fts UPDATE TO '1.0.2'`).
+
+- **Fixed a read-path crash (`invalid memory alloc request size`) when decoding
+  a posting block with a very large per-block position count.** The
+  positions-decode path in `bm25_decode_term` sized its scratch buffers with an
+  unguarded allocation; when a block's summed term frequency pushed the buffer
+  past the 1 GB `MaxAllocSize` limit, the allocation threw and aborted whatever
+  triggered the decode -- a `CREATE INDEX CONCURRENTLY` validation scan in the
+  reported case, but the same path is reached by ordinary scans (count, ranked,
+  phrase), merges, and vacuum. A legitimately large position count now uses a
+  huge-safe allocation; a corrupt or inflated on-disk term-frequency (a class
+  the existing block-header and column-length corruption checks did not catch)
+  is now detected and rejected with a `WARNING` (a bounded miss, `REINDEX` to
+  rebuild), rather than reading past the block. This was the read-side
+  counterpart of the build-time huge-allocation fix; both sides are now guarded.
+- The corruption/fuzz harness gained a dedicated planted-bug ("teeth") build for
+  this class, so a regression that removed the guard would fail CI.
+
 ## 1.0.1
 
 Bug-fix release. **No on-disk format change** from 1.0.0; no **REINDEX**

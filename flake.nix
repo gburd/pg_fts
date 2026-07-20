@@ -46,7 +46,7 @@
         buildFor = postgresql:
           pkgs.stdenv.mkDerivation {
             pname = "pg_fts";
-            version = "1.0.1";
+            version = "1.0.2";
             src = ./.;
 
             nativeBuildInputs = [ postgresql.pg_config pkgs.clang ];
@@ -63,7 +63,7 @@
               install -D -m 755 -t $out/lib pg_fts.so 2>/dev/null || \
                 install -D -m 755 -t $out/lib pg_fts.dylib
               install -D -m 644 -t $out/share/postgresql/extension pg_fts.control
-              install -D -m 644 -t $out/share/postgresql/extension pg_fts--1.0.1.sql
+              install -D -m 644 -t $out/share/postgresql/extension pg_fts--1.0.2.sql
               install -D -m 644 -t $out/share/postgresql/extension pg_fts--0.2.0--0.2.1.sql
               install -D -m 644 -t $out/share/postgresql/extension pg_fts--0.2.1--0.2.2.sql
               install -D -m 644 -t $out/share/postgresql/extension pg_fts--0.2.2--0.2.3.sql
@@ -77,6 +77,7 @@
               install -D -m 644 -t $out/share/postgresql/extension pg_fts--0.3.5--0.3.6.sql
               install -D -m 644 -t $out/share/postgresql/extension pg_fts--0.3.6--1.0.0.sql
               install -D -m 644 -t $out/share/postgresql/extension pg_fts--1.0.0--1.0.1.sql
+              install -D -m 644 -t $out/share/postgresql/extension pg_fts--1.0.1--1.0.2.sql
               runHook postInstall
             '';
 
