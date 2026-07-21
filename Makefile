@@ -71,6 +71,13 @@ check-ascii:
 	fi; \
 	echo "install SQL is pure ASCII (installs on any server encoding)"
 
+# Allocation-safety lint: flag any palloc/repalloc sized from a corpus/
+# vocabulary-scale quantity that is not huge-safe (the class behind the
+# 0.3.4/1.0.1/1.0.2/1.0.3 crashes).  Run standalone (`make check-alloc`); in CI.
+.PHONY: check-alloc
+check-alloc:
+	@bash ci/check-alloc.sh
+
 # --- Rendered HTML docs -----------------------------------------------------
 # Render the DocBook fragment doc/pg_fts.sgml to standalone HTML in doc/html/.
 # Needs xsltproc + a docbook-xsl-ns stylesheet (auto-detected; override with

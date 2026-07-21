@@ -357,7 +357,7 @@ fts_doc_parse_canonical(const char *in)
 			lens = (int *) repalloc(lens, cap * sizeof(int));
 			tfs = (uint32 *) repalloc(tfs, cap * sizeof(uint32));
 		}
-		terms[nterms] = (char *) palloc(Max(term.len, 1));
+		terms[nterms] = (char *) palloc(Max(term.len, 1));	/* alloc-ok: one term's bytes */
 		memcpy(terms[nterms], term.data, term.len);
 		lens[nterms] = term.len;
 		tfs[nterms] = tf;
@@ -548,9 +548,9 @@ ftsdoc_recv(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_INVALID_BINARY_REPRESENTATION),
 				 errmsg("invalid ftsdoc: term count %u exceeds message size", nterms)));
 
-	terms = (char **) palloc(Max(nterms, 1) * sizeof(char *));
-	lens = (int *) palloc(Max(nterms, 1) * sizeof(int));
-	tfs = (uint32 *) palloc(Max(nterms, 1) * sizeof(uint32));
+	terms = (char **) palloc(Max(nterms, 1) * sizeof(char *));	/* alloc-ok: one document's term count, capped above by nterms > (buf->len-cursor)/8 reject */
+	lens = (int *) palloc(Max(nterms, 1) * sizeof(int));	/* alloc-ok: see terms[] above */
+	tfs = (uint32 *) palloc(Max(nterms, 1) * sizeof(uint32));	/* alloc-ok: see terms[] above */
 
 	for (i = 0; i < nterms; i++)
 	{
@@ -579,7 +579,7 @@ ftsdoc_recv(PG_FUNCTION_ARGS)
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_BINARY_REPRESENTATION),
 					 errmsg("invalid ftsdoc: position count exceeds message size")));
-		positions = (uint32 *) palloc(Max((Size) npos, 1) * sizeof(uint32));
+		positions = (uint32 *) palloc(Max((Size) npos, 1) * sizeof(uint32));	/* alloc-ok: one document's positions, bounded by the ftsdoc size */
 		for (i = 0; i < nterms; i++)
 		{
 			uint32		k;

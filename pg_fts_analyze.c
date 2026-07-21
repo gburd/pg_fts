@@ -178,7 +178,7 @@ fts_analyze_text(const char *str, int len)
 	raw = (RawTerm *) (((Size) maxraw * sizeof(RawTerm)) > MaxAllocSize
 					   ? MemoryContextAllocHuge(CurrentMemoryContext,
 												(Size) maxraw * sizeof(RawTerm))
-					   : palloc((Size) maxraw * sizeof(RawTerm)));
+					   : palloc((Size) maxraw * sizeof(RawTerm)));	/* alloc-ok: huge branch of the > MaxAllocSize ternary above */
 
 	i = 0;
 	while (i < len)
