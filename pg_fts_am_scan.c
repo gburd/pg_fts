@@ -2203,7 +2203,7 @@ fts_index_nsegments(PG_FUNCTION_ARGS)
 
 PG_FUNCTION_INFO_V1(fts_index_stats);
 
-/* fts_index_stats(regclass) -> (ndocs float8, avgdl float8, nterms int) */
+/* fts_index_stats(regclass) -> (ndocs float8, avgdl float8, nterms bigint) */
 Datum
 fts_index_stats(PG_FUNCTION_ARGS)
 {
@@ -2237,7 +2237,7 @@ fts_index_stats(PG_FUNCTION_ARGS)
 
 		for (s = 0; s < meta.nsegments; s++)
 			nterms += meta.segs[s].nterms;
-		values[2] = Int32GetDatum((int32) nterms);
+		values[2] = Int64GetDatum(nterms);	/* bigint: no int32 wrap at scale */
 	}
 
 	tuple = heap_form_tuple(tupdesc, values, nulls);
@@ -2269,7 +2269,8 @@ fts_index_df(PG_FUNCTION_ARGS)
 
 		if (it->type == FTS_QI_VAL)
 		{
-			uint32		df = 0;
+			uint64		df = 0;		/* summed across segments; uint64 so a term in
+									 * >2^32 docs does not wrap (consumed as double) */
 			uint32		s;
 
 			/* document frequency is summed across all segments */
@@ -3300,7 +3301,7 @@ bm25_query_maxhits(Relation index, FtsQuery q, double N)
 				stack[top++] = N;	/* over-generating: no cheap bound */
 			else
 			{
-				uint32		gdf = 0;
+				uint64		gdf = 0;	/* summed across segments; uint64 (consumed as double) */
 				uint32		s;
 
 				for (s = 0; s < meta.nsegments; s++)
@@ -3475,7 +3476,7 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 
 	for (t = 0; t < nterms; t++)
 	{
-		uint32		gdf = 0;
+		uint64		gdf = 0;	/* summed across segments; uint64 (feeds IDF as double) */
 		uint32		s;
 		double		idf;
 		double		b = 0.75;
@@ -3838,7 +3839,8 @@ fts_search(PG_FUNCTION_ARGS)
 typedef struct AnomTermDf
 {
 	char		term[BM25_ANOM_TERMKEYLEN]; /* dynahash string key */
-	uint32		gdf;
+	uint64		gdf;			/* global df, summed across segments (uint64 so a
+								 * term in >2^32 docs does not wrap) */
 } AnomTermDf;
 
 /* per-document running max: its best (rarest) term's idf and that term's df */
@@ -4048,7 +4050,7 @@ fts_anomalous_docs(PG_FUNCTION_ARGS)
 					int			klen = Min((int) de->termlen,
 										   BM25_ANOM_TERMKEYLEN - 1);
 					AnomTermDf *te;
-					uint32		gdf;
+					uint64		gdf;
 					double		idf;
 					BM25Posting *post;
 					int			np,
@@ -4059,8 +4061,11 @@ fts_anomalous_docs(PG_FUNCTION_ARGS)
 					te = (AnomTermDf *) hash_search(dfht, key, HASH_FIND, NULL);
 					gdf = te ? te->gdf : de->df;
 
-					/* THE cheap-tail filter: skip common terms before decode */
-					if (gdf == 0 || (int) gdf > max_df)
+					/* THE cheap-tail filter: skip common terms before decode.
+					 * Compare as unsigned against the (non-negative) max_df so a
+					 * huge gdf cannot cast to a negative int and slip past the
+					 * filter (max_df is >= 1 here). */
+					if (gdf == 0 || gdf > (uint64) max_df)
 					{
 						ptr += esize;
 						continue;

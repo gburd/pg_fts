@@ -242,7 +242,7 @@ DEFAULT FOR TYPE ftsdoc USING fts AS
 --
 CREATE FUNCTION fts_index_stats(regclass,
                                 OUT ndocs float8, OUT avgdl float8,
-                                OUT nterms int)
+                                OUT nterms bigint)
 RETURNS record
 AS 'MODULE_PATHNAME', 'fts_index_stats'
 LANGUAGE C STRICT PARALLEL SAFE;
