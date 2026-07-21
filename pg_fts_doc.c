@@ -47,6 +47,7 @@
 #include "libpq/pqformat.h"
 #include "regex/regex.h"
 #include "utils/builtins.h"
+#include "utils/memutils.h"
 #include "utils/varlena.h"
 
 PG_FUNCTION_INFO_V1(ftsdoc_in);
@@ -180,6 +181,16 @@ fts_doc_build(uint32 nterms, char **terms, const int *lens, const uint32 *tfs,
 	posbase = MAXALIGN(FTS_DOC_HDRSIZE +
 					   (Size) nterms * sizeof(FtsTermEntry) + lexbytes);
 	total = has_pos ? posbase + (Size) npos * sizeof(uint32) : posbase;
+	/* An ftsdoc is a varlena (max 1GB via VARSIZE); a single document whose
+	 * assembled form would exceed that cannot be represented.  Fail with a clear
+	 * error rather than letting palloc0 throw the opaque "invalid memory alloc
+	 * request size" (or SET_VARSIZE silently truncate). */
+	if (total > MaxAllocSize)
+		ereport(ERROR,
+				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+				 errmsg("ftsdoc document is too large"),
+				 errdetail("An ftsdoc value is limited to %zu bytes; this document needs %zu.",
+						   (Size) MaxAllocSize, total)));
 	doc = (FtsDoc) palloc0(total);
 	SET_VARSIZE(doc, total);
 	doc->version = FTS_DOC_VERSION;

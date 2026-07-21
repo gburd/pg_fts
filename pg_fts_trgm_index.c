@@ -162,7 +162,7 @@ bm25_write_trigrams(Relation index, BM25BuildState *bs)
 		c2.hcxt = CurrentMemoryContext;
 		ht = hash_create("bm25 trgm build", 4096, &c2,
 						 HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
-		accs = (TrgmAccum *) palloc(maxaccs * sizeof(TrgmAccum));
+		accs = (TrgmAccum *) FTS_ALLOC_MAYBE_HUGE(maxaccs * sizeof(TrgmAccum));
 
 		for (i = 0; i < bs->nterms; i++)
 		{
@@ -183,7 +183,7 @@ bm25_write_trigrams(Relation index, BM25BuildState *bs)
 					if (naccs >= maxaccs)
 					{
 						maxaccs *= 2;
-						accs = (TrgmAccum *) repalloc(accs, maxaccs * sizeof(TrgmAccum));
+						accs = (TrgmAccum *) FTS_REALLOC_MAYBE_HUGE(accs, maxaccs * sizeof(TrgmAccum));
 					}
 					e->idx = naccs;
 					accs[naccs].trgm = trg[g];
@@ -203,9 +203,9 @@ bm25_write_trigrams(Relation index, BM25BuildState *bs)
 				{
 					acc->maxdocids = acc->maxdocids ? acc->maxdocids * 2 : 8;
 					if (acc->docids == NULL)
-						acc->docids = (uint64 *) palloc(acc->maxdocids * sizeof(uint64));
+						acc->docids = (uint64 *) FTS_ALLOC_MAYBE_HUGE(acc->maxdocids * sizeof(uint64));
 					else
-						acc->docids = (uint64 *) repalloc(acc->docids,
+						acc->docids = (uint64 *) FTS_REALLOC_MAYBE_HUGE(acc->docids,
 															  acc->maxdocids * sizeof(uint64));
 				}
 				acc->docids[acc->ndocids++] = (uint64) i;
