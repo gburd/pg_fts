@@ -165,6 +165,11 @@ typedef struct BM25BuildState
 	 * sorted once before the dictionary is written */
 	double		ndocs;
 	double		sumdoclen;
+	Size		flush_budget;	/* current in-memory budget before a segment is
+								 * flushed; grows as this participant flushes more,
+								 * so the flush count stays far under
+								 * BM25_MAX_SEGMENTS (0 = use the default) */
+	int			nflushes;		/* segments this participant has flushed so far */
 } BM25BuildState;
 
 static int
@@ -391,6 +396,30 @@ bm25_build_mem_budget(void)
 }
 
 /*
+ * Bound a build participant's flush-segment count without merging mid-build.
+ *
+ * Each participant (the serial builder, or the leader + each parallel worker)
+ * flushes an in-memory segment every time its accumulator reaches the flush
+ * budget, plus one residual at the end.  All participants append into the same
+ * fixed BM25_MAX_SEGMENTS metapage directory, so a large build could otherwise
+ * overflow it (bm25_meta_add_segment errors) even though the data is fine and
+ * merges to a single segment at the end.  A parallel worker cannot merge
+ * mid-build to reclaim slots -- it runs while IsInParallelMode() and the
+ * metapage swap is single-writer only -- so instead each participant caps its
+ * own flush count by DOUBLING its budget every BM25_BUILD_FLUSHES_PER_TIER
+ * flushes.  With geometric growth a participant flushes at most
+ *   BM25_BUILD_FLUSHES_PER_TIER * log2(total_volume / initial_budget)
+ * segments regardless of corpus size, so even a multi-terabyte build stays far
+ * under the cap.  This needs no up-front size estimate (the in-memory arena /
+ * heap-bytes ratio varies with the data), touches only this participant's own
+ * state (parallel-safe), and never falls below the operator's
+ * maintenance_work_mem for the first tier.  BM25_MAX_SEGMENTS stays as the hard
+ * backstop.
+ */
+#define BM25_BUILD_FLUSHES_PER_TIER 8
+
+
+/*
  * Flush the current in-memory build state as one immutable segment and reset
  * the state (freeing bs->ctx) so the heap scan can continue within a bounded
  * memory footprint.  A document's terms are always fully accumulated before a
@@ -424,6 +453,19 @@ bm25_build_flush_segment(Relation index, BM25BuildState *bs)
 	bm25_write_segment(index, bs, &seg);
 	bm25_meta_add_segment(index, &seg);
 
+	/*
+	 * Grow the flush budget geometrically so this participant's flush count
+	 * stays far under BM25_MAX_SEGMENTS on a huge build (see the comment on
+	 * BM25_BUILD_FLUSHES_PER_TIER).  Touches only this participant's own state,
+	 * so it is safe in a parallel worker.
+	 */
+	if (bs->flush_budget == 0)
+		bs->flush_budget = bm25_build_mem_budget();
+	bs->nflushes++;
+	if (bs->nflushes % BM25_BUILD_FLUSHES_PER_TIER == 0 &&
+		bs->flush_budget <= SIZE_MAX / 2)
+		bs->flush_budget *= 2;
+
 	/* reset: free everything in the build context and start a fresh segment */
 	MemoryContextReset(bs->ctx);
 	bs->terms = NULL;
@@ -454,7 +496,8 @@ bm25_build_callback(Relation index, ItemPointer tid, Datum *values,
 	 * between tuples so a document's terms are never split across segments.
 	 */
 	if (bs->nterms > 0 &&
-		MemoryContextMemAllocated(bs->ctx, false) >= bm25_build_mem_budget())
+		MemoryContextMemAllocated(bs->ctx, false) >=
+		(bs->flush_budget ? bs->flush_budget : bm25_build_mem_budget()))
 		bm25_build_flush_segment(index, bs);
 
 	old = MemoryContextSwitchTo(bs->ctx);
@@ -2854,6 +2897,8 @@ bm25_parallel_build_main(dsm_segment *seg, shm_toc *toc)
 	bs.maxterms = 0;
 	bs.ndocs = 0;
 	bs.sumdoclen = 0;
+	bs.flush_budget = 0;
+	bs.nflushes = 0;
 	bm25_build_ht_init(&bs);
 	reltuples = bm25_scan_and_build(heap, index, indexInfo, &bs, pscan);
 	bm25_build_flush_segment(index, &bs);	/* worker's residual -> a segment */
@@ -3044,6 +3089,8 @@ bm25_build(Relation heap, Relation index, IndexInfo *indexInfo)
 	bs.maxterms = 0;
 	bs.ndocs = 0;
 	bs.sumdoclen = 0;
+	bs.flush_budget = 0;
+	bs.nflushes = 0;
 	bm25_build_ht_init(&bs);
 
 	if (bm25leader != NULL)
