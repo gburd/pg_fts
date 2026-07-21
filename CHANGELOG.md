@@ -2,6 +2,25 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.0.3
+
+Bug-fix release. **No on-disk format change** from 1.0.2; no **REINDEX**
+required (`ALTER EXTENSION pg_fts UPDATE TO '1.0.3'`).
+
+- **Fixed an `invalid memory alloc request size` crash in a parallel index-build
+  worker** (reported against a ~13-hour parallel `CREATE INDEX CONCURRENTLY`
+  over a large table with a very large vocabulary). This was a different site
+  from the 1.0.2 fix: the trigram inverted-index builder and the streaming
+  segment merge sized several allocations from the *merged-group vocabulary*,
+  which -- unlike the per-segment build path -- is not bounded by
+  `maintenance_work_mem`, so a hot trigram's term list (and the merge output
+  arrays) could exceed the 1 GB allocation limit on a large enough corpus. All
+  corpus/vocabulary-scale allocations in the build, merge, and analyze paths now
+  use a huge-safe allocation, closing this crash class off across the board.
+- **A single document that would assemble into an `ftsdoc` larger than 1 GB now
+  reports a clear "document is too large" error** instead of an opaque
+  allocation failure. An `ftsdoc` is a variable-length value limited to 1 GB.
+
 ## 1.0.2
 
 Bug-fix release. **No on-disk format change** from 1.0.1; no **REINDEX**
