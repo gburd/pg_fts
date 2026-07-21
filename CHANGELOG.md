@@ -2,6 +2,30 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.0.4
+
+Scale-hardening release. **No on-disk format change** from 1.0.3; no **REINDEX**
+required (`ALTER EXTENSION pg_fts UPDATE TO '1.0.4'`).
+
+- **`CREATE INDEX` on a large table with a modest `maintenance_work_mem` no
+  longer fails** with "reached the maximum of 128 segments." The build flushed
+  one segment per `maintenance_work_mem` of accumulation with no intermediate
+  merge, so a large enough index overflowed the segment directory before the
+  end-of-build merge. Each build participant now grows its own flush budget
+  geometrically, so the flush count grows only logarithmically with corpus size
+  (and stays far under the cap) -- parallel-safe, with no on-disk or behavior
+  change to the finished index.
+- **Corrected integer-width overflows that only surface at extreme scale** (wrong
+  results, not crashes): document-frequency sums used in IDF/BM25 scoring and in
+  `fts_index_df()` are now 64-bit (a term in more than ~4 billion documents no
+  longer wraps); the anomaly-scan "skip common terms" filter no longer misfires
+  on a term whose df exceeds ~2.1 billion.
+- **`fts_index_stats`'s `nterms` output is now `bigint`** (was `int`), so an
+  index with more than ~2.1 billion total distinct terms reports a correct
+  count. This widens the function's output column; the upgrade replaces the
+  function definition (a `DROP`/`CREATE`, applied automatically by
+  `ALTER EXTENSION ... UPDATE`).
+
 ## 1.0.3
 
 Bug-fix release. **No on-disk format change** from 1.0.2; no **REINDEX**
