@@ -1591,8 +1591,8 @@ merge_source_open(Relation index, const BM25SegMeta *seg, MergeSource *src,
 			{
 				cap = cap ? cap * 2 : 256;
 				src->terms = src->terms
-					? (MergeDictTerm *) repalloc(src->terms, cap * sizeof(MergeDictTerm))
-					: (MergeDictTerm *) palloc(cap * sizeof(MergeDictTerm));
+					? (MergeDictTerm *) FTS_REALLOC_MAYBE_HUGE(src->terms, cap * sizeof(MergeDictTerm))
+					: (MergeDictTerm *) FTS_ALLOC_MAYBE_HUGE(cap * sizeof(MergeDictTerm));
 			}
 			mt = &src->terms[src->nterms++];
 			mt->termlen = de->termlen;
@@ -1650,7 +1650,7 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 	}
 
 	ocap = 256;
-	out = (MergeOutTerm *) palloc(ocap * sizeof(MergeOutTerm));
+	out = (MergeOutTerm *) FTS_ALLOC_MAYBE_HUGE(ocap * sizeof(MergeOutTerm));
 
 	pw_begin(&pw, index);
 
@@ -1751,7 +1751,7 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 		if (nout >= ocap)
 		{
 			ocap *= 2;
-			out = (MergeOutTerm *) repalloc(out, ocap * sizeof(MergeOutTerm));
+			out = (MergeOutTerm *) FTS_REALLOC_MAYBE_HUGE(out, ocap * sizeof(MergeOutTerm));
 		}
 		out[nout].termlen = bt->len;
 		out[nout].df = bt->nposts;
@@ -1771,8 +1771,8 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 	 * reads term/len/df/max_tf plus the firstposting/firstoffset arrays; build
 	 * a minimal BuildTerm array carrying exactly those. */
 	bs->terms = (BuildTerm *) FTS_ALLOC_MAYBE_HUGE(Max(nout, 1) * sizeof(BuildTerm));
-	dpost = (BlockNumber *) palloc(Max(nout, 1) * sizeof(BlockNumber));
-	doff = (uint32 *) palloc(Max(nout, 1) * sizeof(uint32));
+	dpost = (BlockNumber *) FTS_ALLOC_MAYBE_HUGE(Max(nout, 1) * sizeof(BlockNumber));
+	doff = (uint32 *) FTS_ALLOC_MAYBE_HUGE(Max(nout, 1) * sizeof(uint32));
 	for (i = 0; i < nout; i++)
 	{
 		MemSet(&bs->terms[i], 0, sizeof(BuildTerm));

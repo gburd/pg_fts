@@ -25,6 +25,7 @@
 #include "tsearch/ts_cache.h"
 #include "tsearch/ts_utils.h"
 #include "utils/builtins.h"
+#include "utils/memutils.h"
 
 /* qsort_arg comparator: elements are indices into a ParsedWord array (arg).
  * Ties on (text, len) break by token position so a distinct-term run comes out
@@ -129,6 +130,12 @@ ftsdoc_from_parsed(ParsedText *prs)
 	npos = nw;
 	posbase = MAXALIGN(total);
 	total = posbase + (Size) npos * sizeof(uint32);
+	if (total > MaxAllocSize)
+		ereport(ERROR,
+				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+				 errmsg("ftsdoc document is too large"),
+				 errdetail("An ftsdoc value is limited to %zu bytes; this document needs %zu.",
+						   (Size) MaxAllocSize, total)));
 	doc = (FtsDoc) palloc0(total);
 	SET_VARSIZE(doc, total);
 	doc->version = FTS_DOC_VERSION;

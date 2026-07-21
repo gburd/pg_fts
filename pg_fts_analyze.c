@@ -27,6 +27,7 @@
 #include "common/unicode_case.h"
 #include "mb/pg_wchar.h"
 #include "utils/builtins.h"
+#include "utils/memutils.h"
 
 PG_MODULE_MAGIC;
 
@@ -169,9 +170,15 @@ fts_analyze_text(const char *str, int len)
 	int			i;
 	uint32		doclen = 0;
 
-	/* Upper bound on tokens: every other byte could start a token. */
+	/* Upper bound on tokens: every other byte could start a token.  Size with a
+	 * huge-safe alloc: a very large single document (e.g. an inline patch series)
+	 * can push maxraw*sizeof(RawTerm) past MaxAllocSize, and a plain palloc would
+	 * throw "invalid memory alloc request size" mid-analyze. */
 	maxraw = (len / 2) + 1;
-	raw = (RawTerm *) palloc(maxraw * sizeof(RawTerm));
+	raw = (RawTerm *) (((Size) maxraw * sizeof(RawTerm)) > MaxAllocSize
+					   ? MemoryContextAllocHuge(CurrentMemoryContext,
+												(Size) maxraw * sizeof(RawTerm))
+					   : palloc((Size) maxraw * sizeof(RawTerm)));
 
 	i = 0;
 	while (i < len)
@@ -241,6 +248,12 @@ fts_analyze_text(const char *str, int len)
 		posbase = MAXALIGN(FTS_DOC_HDRSIZE +
 						   (Size) ndistinct * sizeof(FtsTermEntry) + lexbytes);
 		total = posbase + (Size) npos * sizeof(uint32);
+		if (total > MaxAllocSize)
+			ereport(ERROR,
+					(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+					 errmsg("ftsdoc document is too large"),
+					 errdetail("An ftsdoc value is limited to %zu bytes; this document needs %zu.",
+							   (Size) MaxAllocSize, total)));
 		doc = (FtsDoc) palloc0(total);
 		SET_VARSIZE(doc, total);
 		doc->version = FTS_DOC_VERSION;
