@@ -313,7 +313,7 @@ add_posting(BM25BuildState *bs, const char *term, int len,
 			bt->posoff = (uint32 *) FTS_ALLOC_MAYBE_HUGE(bt->maxposts * sizeof(uint32));
 			bt->poscnt = (uint32 *) FTS_ALLOC_MAYBE_HUGE(bt->maxposts * sizeof(uint32));
 			bt->maxpos = 8;
-			bt->positions = (uint32 *) palloc(bt->maxpos * sizeof(uint32));
+			bt->positions = (uint32 *) palloc(bt->maxpos * sizeof(uint32));	/* alloc-ok: seed=8, grown huge-safe below; one term in a budget-bounded segment */
 		}
 		/* push onto the head of this key's chain (-1 = end of chain) */
 		bt->next = found ? entry->termidx : -1;
@@ -592,15 +592,15 @@ bm25_decode_term(Relation index, BlockNumber firstblk, uint32 firstoff,
 	posts = (BM25Posting *) ((Size) df * sizeof(BM25Posting) > MaxAllocSize
 							 ? MemoryContextAllocHuge(CurrentMemoryContext,
 													 Max(df, 1u) * sizeof(BM25Posting))
-							 : palloc(Max(df, 1u) * sizeof(BM25Posting)));
+							 : palloc(Max(df, 1u) * sizeof(BM25Posting)));	/* alloc-ok: huge branch of the > MaxAllocSize ternary above */
 	if (blockmax)
 		bmax = (uint32 *) ((Size) df * sizeof(uint32) > MaxAllocSize
 						   ? MemoryContextAllocHuge(CurrentMemoryContext, Max(df, 1u) * sizeof(uint32))
-						   : palloc(Max(df, 1u) * sizeof(uint32)));
+						   : palloc(Max(df, 1u) * sizeof(uint32)));	/* alloc-ok: huge branch of the > MaxAllocSize ternary above */
 	if (want_positions)
 		pos_start = (int *) ((Size) df * sizeof(int) > MaxAllocSize
 							 ? MemoryContextAllocHuge(CurrentMemoryContext, Max(df, 1u) * sizeof(int))
-							 : palloc(Max(df, 1u) * sizeof(int)));
+							 : palloc(Max(df, 1u) * sizeof(int)));	/* alloc-ok: huge branch of the > MaxAllocSize ternary above */
 
 	while (blk != InvalidBlockNumber && n < (int) df)
 	{
@@ -1120,7 +1120,7 @@ bm25_write_postings(BM25PostWriter *pw, BuildTerm *bt,
 	sorted = (BM25PostingSort *) ((Size) bt->nposts * sizeof(BM25PostingSort) > MaxAllocSize
 								  ? MemoryContextAllocHuge(CurrentMemoryContext,
 													  Max(bt->nposts, 1) * sizeof(BM25PostingSort))
-								  : palloc(Max(bt->nposts, 1) * sizeof(BM25PostingSort)));
+								  : palloc(Max(bt->nposts, 1) * sizeof(BM25PostingSort)));	/* alloc-ok: huge branch of the > MaxAllocSize ternary above */
 	for (i = 0; i < bt->nposts; i++)
 	{
 		sorted[i].docid = bm25_tid_to_docid(&bt->tids[i]);
@@ -1472,8 +1472,8 @@ bm25_write_segment(Relation index, BM25BuildState *bs, BM25SegMeta *seg)
 	BM25PostWriter pw;
 	int			i;
 
-	postings = (BlockNumber *) palloc(Max(bs->nterms, 1) * sizeof(BlockNumber));
-	offsets = (uint32 *) palloc(Max(bs->nterms, 1) * sizeof(uint32));
+	postings = (BlockNumber *) palloc(Max(bs->nterms, 1) * sizeof(BlockNumber));	/* alloc-ok: bs->nterms is a single build/pending segment, bounded by maintenance_work_mem (merge path uses the huge-safe dpost/doff) */
+	offsets = (uint32 *) palloc(Max(bs->nterms, 1) * sizeof(uint32));	/* alloc-ok: see postings[] above */
 	pw_begin(&pw, index);
 	for (i = 0; i < bs->nterms; i++)
 	{
@@ -1801,7 +1801,7 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 		out[nout].max_tf = bt->max_tf;
 		out[nout].firstposting = fb;
 		out[nout].firstoffset = fo;
-		out[nout].term = (char *) palloc(bt->len);	/* in bs->ctx (current) */
+		out[nout].term = (char *) palloc(bt->len);	/* alloc-ok: one term's bytes (in bs->ctx) */
 		memcpy(out[nout].term, bt->term, bt->len);
 		nout++;
 

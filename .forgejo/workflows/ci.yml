@@ -41,6 +41,9 @@ jobs:
       - name: Install SQL is pure ASCII (installs on non-UTF-8 servers)
         run: make check-ascii
 
+      - name: Allocation-safety lint (no unguarded corpus-scale palloc)
+        run: make check-alloc
+
       - name: Regression + isolation tests
         run: |
           # Start an ephemeral cluster owned by the postgres user (the postgres

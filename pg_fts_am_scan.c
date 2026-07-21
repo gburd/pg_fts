@@ -1568,7 +1568,7 @@ bm25_phrase_eval_seg(Relation index, const BM25SegMeta *seg, FtsQuery q,
 					 const int *termidx, const uint32 *stepdist, int nterms,
 					 ItemPointerData **tids, int *ntids, int *captids)
 {
-	PosTermList *tl = (PosTermList *) palloc0(nterms * sizeof(PosTermList));
+	PosTermList *tl = (PosTermList *) palloc0(nterms * sizeof(PosTermList));	/* alloc-ok: nterms = query term count */
 	int			t;
 	int			base = -1;		/* index of the smallest-df (driving) term */
 	PosPosting *driver;
@@ -3133,7 +3133,7 @@ fts_search_maxscore(WandCursor *cursors, int nterms, int k,
 	int			first_essential;	/* cursors[first_essential..) are essential */
 
 	heap = (ScoredTid *) palloc(Max(k, 1) * sizeof(ScoredTid));
-	suffix = (double *) palloc((nterms + 1) * sizeof(double));
+	suffix = (double *) palloc((nterms + 1) * sizeof(double));	/* alloc-ok: nterms = query term count */
 
 	for (t = 0; t < nterms; t++)
 		wand_prime(&cursors[t]);
@@ -3467,7 +3467,7 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 
 	nterms = fts_query_terms(q, &terms, &lens);
 	/* up to one cursor per (term, segment) */
-	cursors = (WandCursor *) palloc(Max(nterms * Max((int) meta.nsegments, 1), 1) *
+	cursors = (WandCursor *) palloc(Max(nterms * Max((int) meta.nsegments, 1), 1) *	/* alloc-ok: query terms x <=128 segments */
 									sizeof(WandCursor));
 
 	/* per-segment tombstones: each cursor skips docids deleted in its own
@@ -3544,7 +3544,7 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 	{
 		gate.q = q;
 		gate.nterms = nterms;
-		gate.present = (bool *) palloc0(Max(nterms, 1) * sizeof(bool));
+		gate.present = (bool *) palloc0(Max(nterms, 1) * sizeof(bool));	/* alloc-ok: nterms = query term count */
 		gate.stack = (bool *) palloc(Max(q->nitems, 1) * sizeof(bool));
 	}
 
@@ -4115,7 +4115,7 @@ fts_anomalous_docs(PG_FUNCTION_ARGS)
 
 		/* collect the rare-tail doc set and take the top-k by score */
 		ndocs_found = (int) hash_get_num_entries(docht);
-		results = (AnomResult *) palloc(Max(ndocs_found, 1) *
+		results = (AnomResult *) palloc(Max(ndocs_found, 1) *	/* alloc-ok: rare-tail result set (low-df anomaly scan) */
 										sizeof(AnomResult));
 		nout = 0;
 		hash_seq_init(&seq, docht);
