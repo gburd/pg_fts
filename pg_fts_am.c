@@ -494,9 +494,20 @@ bm25_build_callback(Relation index, ItemPointer tid, Datum *values,
 	 * Bound build memory: if the accumulated segment has grown past the budget,
 	 * flush it as a segment and continue with a fresh build state.  Checked
 	 * between tuples so a document's terms are never split across segments.
+	 *
+	 * Recurse into child contexts (the `true`): the term dynahash (build_ht) is
+	 * created with hcxt = bs->ctx, so dynahash puts its bucket directory and all
+	 * TermHashEntry entries in a CHILD context of bs->ctx.  Counting only bs->ctx
+	 * itself (the old `false`) missed the hash-table memory entirely, so on a
+	 * huge-vocabulary corpus (e.g. long email/body text: quoted chains, patches,
+	 * code -> millions of distinct terms) the flush undercounted the real working
+	 * set and fired far too late, letting the build's memory grow for hours
+	 * instead of settling at ~maintenance_work_mem.  bs->ctx and its children are
+	 * exactly what MemoryContextReset frees at flush, so `true` counts precisely
+	 * the reclaimable footprint the budget is meant to bound.
 	 */
 	if (bs->nterms > 0 &&
-		MemoryContextMemAllocated(bs->ctx, false) >=
+		MemoryContextMemAllocated(bs->ctx, true) >=
 		(bs->flush_budget ? bs->flush_budget : bm25_build_mem_budget()))
 		bm25_build_flush_segment(index, bs);
 

@@ -731,6 +731,40 @@ RESET enable_seqscan;
 RESET maintenance_work_mem;
 DROP TABLE strm;
 
+-- Build memory accounting (regression for the sustained-growth bug): the
+-- term hash lives in a CHILD context of the build arena, so the flush budget
+-- must count child contexts (MemoryContextMemAllocated(ctx, true)) or a
+-- vocabulary-dominant corpus never triggers a flush and the build grows
+-- unbounded.  Build a HIGH-distinct-vocabulary corpus (every doc contributes
+-- mostly unique terms, so the hash -- not the postings -- dominates memory) at
+-- a low maintenance_work_mem, and assert the build completes and returns exact
+-- results.  With the pre-fix (child-blind) accounting this build's working set
+-- grew far past the budget; with the fix it flushes at the budget as intended.
+SET maintenance_work_mem = '1MB';               -- floors to 32MB internally
+CREATE TABLE vocab (id serial, body text);
+-- ~30k docs, each ~20 unique terms (uniq<id>_<k>) -> ~600k distinct terms, so
+-- the term hash dominates the build arena rather than the posting lists.
+INSERT INTO vocab(body)
+SELECT (SELECT string_agg('uniq'||g||'_'||k, ' ') FROM generate_series(1,20) k)
+       || ' shared common'
+  FROM generate_series(1, 30000) g;
+CREATE INDEX vocab_bm25 ON vocab USING fts (to_ftsdoc('simple', body));
+SET enable_seqscan = off;
+-- 'shared' is in every doc: index-scan count == row count == forced-seqscan
+SELECT (SELECT count(*) FROM vocab WHERE to_ftsdoc('simple',body) @@@ 'shared'::ftsquery) AS idx_shared \gset
+SELECT :idx_shared = 30000 AS vocab_shared_all;
+SET enable_seqscan = on; SET enable_indexscan = off; SET enable_bitmapscan = off;
+SELECT :idx_shared = (SELECT count(*) FROM vocab WHERE to_ftsdoc('simple',body) @@@ 'shared'::ftsquery)
+       AS vocab_shared_parity;
+RESET enable_indexscan; RESET enable_bitmapscan; SET enable_seqscan = off;
+-- a unique term resolves to exactly its one document (dictionary correct across
+-- the many budget-triggered flush segments)
+SELECT count(*) = 1 AS vocab_unique_one FROM vocab WHERE to_ftsdoc('simple',body) @@@ 'uniq7_3'::ftsquery;
+SELECT ndocs = 30000 AS vocab_ndocs FROM fts_index_stats('vocab_bm25');
+RESET enable_seqscan;
+RESET maintenance_work_mem;
+DROP TABLE vocab;
+
 -- FOR-128 block posting codec: a term spanning many 128-doc blocks and pages
 -- decodes correctly and block-max WAND top-k matches a full scan+sort.
 CREATE TABLE blk (id serial, d ftsdoc);
