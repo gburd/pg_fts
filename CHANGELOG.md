@@ -2,6 +2,24 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.0.5
+
+Bug-fix release. **No on-disk format change** from 1.0.4; no **REINDEX**
+required (`ALTER EXTENSION pg_fts UPDATE TO '1.0.5'`).
+
+- **Fixed sustained, unbounded-looking memory growth during a long index build
+  over a high-vocabulary text column** (e.g. email/message bodies with quoted
+  chains, patches, and code -- millions of distinct terms). The build bounds its
+  memory by flushing a segment when the in-memory working set exceeds
+  `maintenance_work_mem`, but the size check did not count the term hash table,
+  which lives in a child memory context -- so on a vocabulary-dominant corpus
+  the check undercounted the real working set and the flush fired far too late,
+  letting a multi-hour build grow well past `maintenance_work_mem` (observed
+  ~19 GB resident+swap on an 83 GB / 1.8M-row build before it was killed). The
+  check now counts child contexts, so a build settles at roughly
+  `maintenance_work_mem` regardless of vocabulary size. Affects both serial and
+  parallel builds; no change to results or on-disk format.
+
 ## 1.0.4
 
 Scale-hardening release. **No on-disk format change** from 1.0.3; no **REINDEX**
