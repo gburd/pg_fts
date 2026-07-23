@@ -272,13 +272,15 @@ bm25_dict_seek(Relation index, const BM25SegMeta *seg,
 
 	while (iblk != InvalidBlockNumber)
 	{
-		Buffer		buf = ReadBuffer(index, iblk);
+		Buffer		buf;
 		Page		page;
 		char	   *ptr,
 				   *end;
 		BlockNumber next;
 		bool		overshot = false;
 
+		CHECK_FOR_INTERRUPTS();		/* between pages, no buffer lock held: safe to let a cancel unwind */
+		buf = ReadBuffer(index, iblk);
 		LockBuffer(buf, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buf);
 		ptr = (char *) PageGetContents(page);
@@ -327,7 +329,7 @@ bm25_lookup_term(Relation index, const BM25SegMeta *seg,
 
 	while (blk != InvalidBlockNumber)
 	{
-		Buffer		buffer = ReadBuffer(index, blk);
+		Buffer		buffer;
 		Page		page;
 		char	   *ptr;
 		char	   *end;
@@ -336,6 +338,8 @@ bm25_lookup_term(Relation index, const BM25SegMeta *seg,
 		uint32		df = 0;
 		bool		found = false;
 
+		CHECK_FOR_INTERRUPTS();		/* between pages, no buffer lock held: safe to let a cancel unwind */
+		buffer = ReadBuffer(index, blk);
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buffer);
 		ptr = (char *) PageGetContents(page);
@@ -562,12 +566,14 @@ bm25_lookup_prefix(Relation index, const BM25SegMeta *seg,
 
 	while (blk != InvalidBlockNumber && !done)
 	{
-		Buffer		buffer = ReadBuffer(index, blk);
+		Buffer		buffer;
 		Page		page;
 		char	   *ptr,
 				   *end;
 		BlockNumber next;
 
+		CHECK_FOR_INTERRUPTS();		/* between pages, no buffer lock held: safe to let a cancel unwind */
+		buffer = ReadBuffer(index, blk);
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buffer);
 		ptr = (char *) PageGetContents(page);
@@ -788,13 +794,15 @@ bm25_fuzzy_terms(Relation index, const BM25SegMeta *seg,
 	blk = seg->dictstart;
 	while (blk != InvalidBlockNumber)
 	{
-		Buffer		buffer = ReadBuffer(index, blk);
+		Buffer		buffer;
 		Page		page;
 		char	   *ptr,
 				   *end;
 		BlockNumber next;
 		bool		reseek = false;
 
+		CHECK_FOR_INTERRUPTS();		/* between pages, no buffer lock held: safe to let a cancel unwind */
+		buffer = ReadBuffer(index, blk);
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buffer);
 		ptr = (char *) PageGetContents(page);
@@ -972,6 +980,7 @@ done:
 			int			best = heap[0];
 			int			c = 0;
 
+			CHECK_FOR_INTERRUPTS();	/* per merged posting; no lock held (chain released above) */
 			if (nout == 0 ||
 				ItemPointerCompare(&tids[nout - 1], RUN_HEAD(best)) != 0)
 				tids[nout++] = *RUN_HEAD(best);
@@ -1025,12 +1034,14 @@ bm25_universe(Relation index, BlockNumber dictstart)
 
 	while (blk != InvalidBlockNumber)
 	{
-		Buffer		buffer = ReadBuffer(index, blk);
+		Buffer		buffer;
 		Page		page;
 		char	   *ptr,
 				   *end;
 		BlockNumber next;
 
+		CHECK_FOR_INTERRUPTS();		/* between pages, no buffer lock held: safe to let a cancel unwind */
+		buffer = ReadBuffer(index, blk);
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buffer);
 		ptr = (char *) PageGetContents(page);
@@ -1451,7 +1462,7 @@ bm25_lookup_term_pos(Relation index, const BM25SegMeta *seg,
 
 	while (blk != InvalidBlockNumber)
 	{
-		Buffer		buffer = ReadBuffer(index, blk);
+		Buffer		buffer;
 		Page		page;
 		char	   *ptr,
 				   *end;
@@ -1460,6 +1471,8 @@ bm25_lookup_term_pos(Relation index, const BM25SegMeta *seg,
 		uint32		df = 0;
 		bool		found = false;
 
+		CHECK_FOR_INTERRUPTS();		/* between pages, no buffer lock held: safe to let a cancel unwind */
+		buffer = ReadBuffer(index, blk);
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buffer);
 		ptr = (char *) PageGetContents(page);
@@ -1605,6 +1618,8 @@ bm25_phrase_eval_seg(Relation index, const BM25SegMeta *seg, FtsQuery q,
 		int			nacc;
 		ItemPointerData tid;
 
+		CHECK_FOR_INTERRUPTS();	/* per driver posting; posting lists in memory, no lock held */
+
 		for (t = 0; t < nterms; t++)
 		{
 			pp[t] = (t == base) ? &driver[di] : bm25_pospost_find(&tl[t], docid);
@@ -1737,6 +1752,7 @@ bm25_collect_matches(Relation index, FtsQuery query, TidSet *out, bool *recheck)
 		BM25SegMeta *sg = &meta.segs[s];
 		TidSet		universe;
 
+		CHECK_FOR_INTERRUPTS();	/* per segment; no lock/window held (meta is in memory) */
 		if (sg->dictstart == InvalidBlockNumber)
 			continue;
 
@@ -1917,12 +1933,14 @@ bm25_collect_matches(Relation index, FtsQuery query, TidSet *out, bool *recheck)
 
 		while (blk != InvalidBlockNumber)
 		{
-			Buffer		buffer = ReadBuffer(index, blk);
+			Buffer		buffer;
 			Page		page;
 			char	   *ptr,
 					   *end;
 			BlockNumber next;
 
+			CHECK_FOR_INTERRUPTS();	/* between pages, no buffer lock held: safe to let a cancel unwind */
+			buffer = ReadBuffer(index, blk);
 			LockBuffer(buffer, BUFFER_LOCK_SHARE);
 			page = BufferGetPage(buffer);
 			ptr = (char *) PageGetContents(page);
@@ -2045,6 +2063,7 @@ bm25_recheck_exact(Relation index, FtsQuery query, TidSet *set)
 		bool		call_again = false;
 		bool		all_dead = false;
 
+		CHECK_FOR_INTERRUPTS();	/* per candidate; no index buffer lock held (heap fetch self-manages) */
 		ExecClearTuple(slot);
 		if (table_index_fetch_tuple(fetch, &tid, snap, slot,
 									&call_again, &all_dead))
@@ -2093,13 +2112,15 @@ bm25_lookup_dict(Relation index, const BM25SegMeta *seg,
 
 	while (blk != InvalidBlockNumber)
 	{
-		Buffer		buffer = ReadBuffer(index, blk);
+		Buffer		buffer;
 		Page		page;
 		char	   *ptr,
 				   *end;
 		BlockNumber next;
 		bool		found = false;
 
+		CHECK_FOR_INTERRUPTS();		/* between pages, no buffer lock held: safe to let a cancel unwind */
+		buffer = ReadBuffer(index, blk);
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buffer);
 		ptr = (char *) PageGetContents(page);
@@ -2147,7 +2168,7 @@ bm25_lookup_df(Relation index, const BM25SegMeta *seg,
 
 	while (blk != InvalidBlockNumber)
 	{
-		Buffer		buffer = ReadBuffer(index, blk);
+		Buffer		buffer;
 		Page		page;
 		char	   *ptr,
 				   *end;
@@ -2155,6 +2176,8 @@ bm25_lookup_df(Relation index, const BM25SegMeta *seg,
 		uint32		df = 0;
 		bool		found = false;
 
+		CHECK_FOR_INTERRUPTS();		/* between pages, no buffer lock held: safe to let a cancel unwind */
+		buffer = ReadBuffer(index, blk);
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buffer);
 		ptr = (char *) PageGetContents(page);
@@ -2448,6 +2471,7 @@ wand_load_block(WandCursor *c)
 		}
 		c->curblk = next;
 		c->curoff = MAXALIGN(SizeOfPageHeaderData);
+		CHECK_FOR_INTERRUPTS();	/* buffer already released above, next not yet read: no lock held */
 		buf = ReadBuffer(c->index, c->curblk);
 		LockBuffer(buf, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buf);
@@ -2631,13 +2655,15 @@ wand_skip_blocks(WandCursor *c, uint64 target)
 {
 	while (c->curblk != InvalidBlockNumber && c->nread < (int) c->df)
 	{
-		Buffer		buf = ReadBuffer(c->index, c->curblk);
+		Buffer		buf;
 		Page		page;
 		char	   *p,
 				   *pend;
 		BlockNumber nextblk;
 		bool		stopped = false;
 
+		CHECK_FOR_INTERRUPTS();	/* between posting-list pages, no buffer lock held: safe to unwind */
+		buf = ReadBuffer(c->index, c->curblk);
 		LockBuffer(buf, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buf);
 		pend = (char *) page + ((PageHeader) page)->pd_lower;
@@ -2961,6 +2987,8 @@ fts_search_bmw(WandCursor *cursors, int nterms, int k, const DocidFilter *filter
 		double		maxsum;
 		double		score;
 
+		CHECK_FOR_INTERRUPTS();	/* per document-at-a-time step; cursor blocks are palloc'd copies, no lock held */
+
 		/* selection-sort cursors by current docid (nterms is small) */
 		for (i = 0; i < nterms; i++)
 			for (j = i + 1; j < nterms; j++)
@@ -3158,6 +3186,8 @@ fts_search_maxscore(WandCursor *cursors, int nterms, int k,
 	{
 		uint64		cand = UINT64_MAX;
 		double		score;
+
+		CHECK_FOR_INTERRUPTS();	/* per document-at-a-time step; cursor blocks are palloc'd copies, no lock held */
 
 		/* recompute the essential boundary from the current threshold: the
 		 * longest low-impact prefix whose max_contrib sum <= threshold is
@@ -3972,12 +4002,14 @@ fts_anomalous_docs(PG_FUNCTION_ARGS)
 
 			while (blk != InvalidBlockNumber)
 			{
-				Buffer		buffer = ReadBuffer(index, blk);
+				Buffer		buffer;
 				Page		page;
 				char	   *ptr,
 						   *end;
 				BlockNumber next;
 
+				CHECK_FOR_INTERRUPTS();	/* between dict pages, no buffer lock held: safe to unwind */
+				buffer = ReadBuffer(index, blk);
 				LockBuffer(buffer, BUFFER_LOCK_SHARE);
 				page = BufferGetPage(buffer);
 				ptr = (char *) PageGetContents(page);
@@ -4029,12 +4061,14 @@ fts_anomalous_docs(PG_FUNCTION_ARGS)
 
 			while (blk != InvalidBlockNumber)
 			{
-				Buffer		buffer = ReadBuffer(index, blk);
+				Buffer		buffer;
 				Page		page;
 				char	   *ptr,
 						   *end;
 				BlockNumber next;
 
+				CHECK_FOR_INTERRUPTS();	/* between dict pages, no buffer lock held: safe to unwind */
+				buffer = ReadBuffer(index, blk);
 				LockBuffer(buffer, BUFFER_LOCK_SHARE);
 				page = BufferGetPage(buffer);
 				ptr = (char *) PageGetContents(page);
