@@ -26,6 +26,7 @@
 #include "catalog/pg_operator.h"
 #include "catalog/pg_type.h"
 #include "executor/executor.h"
+#include "utils/guc.h"
 #include "executor/tuptable.h"
 #include "nodes/extensible.h"
 #include "nodes/makefuncs.h"
@@ -361,11 +362,31 @@ FtsCountReScan(CustomScanState *node)
 
 void		_PG_init(void);
 
+#ifdef PG_FTS_TEST_HOOKS
+/*
+ * Test-only: a scan pauses on this advisory key right after snapshotting the
+ * metapage in bm25_collect_matches, so a concurrent session can free + recycle
+ * the snapshotted segment's pages in exactly the vulnerable window (the A1
+ * scan-vs-merge race).  0 = off (default, and the only value in production).
+ * Guarded by -DPG_FTS_TEST_HOOKS so the hook does not exist in a normal build.
+ */
+int			pg_fts_test_pause_advisory_key = 0;
+#endif
+
 void
 _PG_init(void)
 {
 	bm25_init_reloptions();
 	RegisterCustomScanMethods(&fts_count_scan_methods);
+
+#ifdef PG_FTS_TEST_HOOKS
+	DefineCustomIntVariable("pg_fts.test_pause_advisory_key",
+							"TEST-ONLY: advisory key a scan waits on mid-collect (0=off).",
+							NULL,
+							&pg_fts_test_pause_advisory_key,
+							0, 0, INT_MAX,
+							PGC_USERSET, 0, NULL, NULL, NULL);
+#endif
 
 	prev_upper_paths_hook = create_upper_paths_hook;
 	create_upper_paths_hook = fts_create_upper_paths;

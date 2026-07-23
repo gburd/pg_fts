@@ -1562,6 +1562,7 @@ bm25_meta_add_segment(Relation index, const BM25SegMeta *seg)
 	}
 	m->segs[m->nsegments] = *seg;
 	m->nsegments++;
+	m->generation++;			/* directory changed: invalidate concurrent scan snapshots */
 	m->ndocs += seg->ndocs;
 	m->sumdoclen += seg->sumdoclen;
 	GenericXLogFinish(state);
@@ -2120,6 +2121,7 @@ bm25_merge_selected(Relation index, const uint32 *sel, uint32 nsel)
 			kept[nkept++] = newseg;	/* append the merged segment */
 			memcpy(m->segs, kept, nkept * sizeof(BM25SegMeta));
 			m->nsegments = nkept;
+			m->generation++;	/* directory changed: invalidate concurrent scan snapshots */
 			/* corpus totals unchanged (same docs, tombstones already excluded) */
 			GenericXLogFinish(state);
 			UnlockReleaseBuffer(mb);
@@ -2364,6 +2366,7 @@ bm25_merge_all_parallel(Relation index, int request)
 
 		memcpy(m->segs, kept, nkept * sizeof(BM25SegMeta));
 		m->nsegments = nkept;
+		m->generation++;		/* directory changed: invalidate concurrent scan snapshots */
 		GenericXLogFinish(state);
 		UnlockReleaseBuffer(mb);
 
@@ -3744,6 +3747,7 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 					m->segs[s].livedocs = newblk;
 					m->segs[s].livedocslen = newlen;
 					m->segs[s].ndeleted = ndead;
+					m->generation++;	/* livedocs blob pages freed: invalidate scan snapshots */
 				}
 				GenericXLogFinish(st);
 				UnlockReleaseBuffer(mb);

@@ -256,6 +256,25 @@ bm25_read_meta(Relation index, BM25MetaPageData *out)
 }
 
 /*
+ * Read just the current segment-directory generation (cheap SHARE-locked
+ * metapage peek).  A scan records this at its metapage snapshot and re-checks
+ * it after collecting; if it moved, a concurrent merge/vacuum may have freed +
+ * recycled pages the scan read from a now-stale segment descriptor, so the scan
+ * must discard its result and restart from a fresh snapshot.
+ */
+static uint32
+bm25_read_meta_generation(Relation index)
+{
+	Buffer		buffer = ReadBuffer(index, BM25_METAPAGE_BLKNO);
+	uint32		gen;
+
+	LockBuffer(buffer, BUFFER_LOCK_SHARE);
+	gen = BM25PageGetMeta(BufferGetPage(buffer))->generation;
+	UnlockReleaseBuffer(buffer);
+	return gen;
+}
+
+/*
  * Use a segment's sparse block index to find the single dictionary page that
  * could contain `term`: the last index entry whose term <= target.  Returns
  * that page's block number, or `dictstart` if the segment has no block index
@@ -1701,6 +1720,8 @@ bm25_collect_matches(Relation index, FtsQuery query, TidSet *out, bool *recheck)
 	int			captids = 0;
 	uint32		i;
 	uint32		s;
+	uint32		gen0;			/* directory generation at the metapage snapshot */
+	int			gen_retries = 0;
 
 	acc.tids = NULL;
 	acc.n = 0;
@@ -1712,6 +1733,32 @@ bm25_collect_matches(Relation index, FtsQuery query, TidSet *out, bool *recheck)
 	}
 
 	bm25_read_meta(index, &meta);
+
+#ifdef PG_FTS_TEST_HOOKS
+	/*
+	 * TEST-ONLY window: after snapshotting the segment directory but before
+	 * reading any segment page, briefly acquire+release the configured advisory
+	 * lock.  A blocker session holding pg_advisory_lock(key) stalls the scan
+	 * here while a merger frees the snapshotted segment and an inserter recycles
+	 * its pages -- exposing the A1 scan-vs-merge recycle race deterministically.
+	 * No effect when the key is 0 (default / production).
+	 */
+	if (pg_fts_test_pause_advisory_key != 0)
+	{
+		LOCKTAG		tag;
+		int64		k = pg_fts_test_pause_advisory_key;
+
+		SET_LOCKTAG_ADVISORY(tag, MyDatabaseId,
+							 (uint32) (k >> 32), (uint32) k, 1);
+		(void) LockAcquire(&tag, ShareLock, true, false);
+		LockRelease(&tag, ShareLock, true);
+	}
+#endif
+
+collect_retry:
+	gen0 = meta.generation;
+	acc.tids = NULL;
+	acc.n = 0;
 
 	for (i = 0; i < query->nitems; i++)
 	{
@@ -1989,6 +2036,32 @@ bm25_collect_matches(Relation index, FtsQuery query, TidSet *out, bool *recheck)
 		acc = tidset_or(acc, pending_acc);
 		tidset_sort_uniq(&acc);
 	}
+	/*
+	 * Concurrency guard: if the segment directory changed while we were reading
+	 * (a concurrent merge/vacuum/bulkdelete may have freed + recycled pages we
+	 * read from a now-stale segment descriptor), our result may be a stale read.
+	 * Discard it and redo from a fresh snapshot.  Bounded so a pathological
+	 * merge storm can't spin forever; after the cap we proceed with the last
+	 * result (still no worse than the pre-fix behavior, and merges are rare
+	 * relative to a scan).
+	 */
+	if (bm25_read_meta_generation(index) != gen0 && gen_retries++ < 10)
+	{
+		if (acc.tids)
+			pfree(acc.tids);
+		if (pending_acc.tids)
+			pfree(pending_acc.tids);
+		if (ptids)
+			pfree(ptids);
+		ptids = NULL;
+		nptids = 0;
+		captids = 0;
+		need_recheck = false;
+		bm25_tombstones_free(&seg_tombs);
+		bm25_read_meta(index, &meta);
+		goto collect_retry;
+	}
+
 	*out = acc;
 	*recheck = need_recheck;
 }
@@ -3613,8 +3686,26 @@ bm25_topk_visible(Relation index, FtsQuery q, int k, bool as_distance,
 	Snapshot	snap = GetActiveSnapshot();
 	Relation	heap;
 	IndexFetchTableData *fetch;
+	uint32		gen0;
+	int			gen_retries = 0;
 
-	ncand = bm25_topk_candidates_range(index, q, wantk, 0, UINT64_MAX, &cand);
+	/*
+	 * Candidate generation reads segment pages under only per-page SHARE locks
+	 * off a metapage snapshot; a concurrent merge/vacuum can free + recycle
+	 * those pages mid-scan (the A1 race).  Bracket it with the directory
+	 * generation: if it moved, discard the candidates and redo from a fresh
+	 * snapshot (bounded).  The subsequent MVCC visibility loop reads the heap,
+	 * not the index, so it needs no guard.
+	 */
+	do
+	{
+		gen0 = bm25_read_meta_generation(index);
+		ncand = bm25_topk_candidates_range(index, q, wantk, 0, UINT64_MAX, &cand);
+		if (bm25_read_meta_generation(index) == gen0)
+			break;
+		if (cand)
+			pfree(cand);
+	} while (gen_retries++ < 10);
 	if (k < 1)
 		k = 1;
 

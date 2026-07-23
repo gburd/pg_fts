@@ -92,6 +92,18 @@ typedef struct BM25MetaPageData
 	BlockNumber pendingtail;	/* last pending page, for O(1) append */
 	uint32		npending;		/* number of pending (unmerged) documents */
 	BM25SegMeta segs[BM25_MAX_SEGMENTS];
+	/*
+	 * Directory generation: bumped on every change to the segment directory
+	 * (add/merge/free of segments, and bulkdelete's livedocs-pointer swap).  A
+	 * scan records this at its metapage snapshot and re-checks it before
+	 * trusting results; if it changed, a concurrent merge may have freed +
+	 * recycled pages the scan read from a now-stale descriptor, so the scan
+	 * restarts from a fresh snapshot.  Placed AFTER segs[] so the on-disk offset
+	 * of every existing field is unchanged (no format bump / REINDEX): an index
+	 * written by an older build simply has whatever bytes were here, and only
+	 * the *change* in this value across a scan matters, not its absolute value.
+	 */
+	uint32		generation;
 } BM25MetaPageData;
 
 #define BM25PageGetMeta(page) \
