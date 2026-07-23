@@ -23,6 +23,7 @@
 #include "pg_fts.h"
 #include "catalog/pg_type.h"
 #include "tsearch/ts_cache.h"
+#include "tsearch/ts_type.h"
 #include "tsearch/ts_utils.h"
 #include "utils/builtins.h"
 #include "utils/memutils.h"
@@ -216,6 +217,93 @@ fts_analyze_with_config(Oid cfgId, const char *str, int len)
 }
 
 PG_FUNCTION_INFO_V1(to_ftsdoc_byid);
+PG_FUNCTION_INFO_V1(to_ftsdoc_from_tsvector);
+
+/*
+ * to_ftsdoc(tsvector) -- build an ftsdoc directly from an existing tsvector,
+ * with no re-analysis of source text.  A tsvector is already the exact shape
+ * an ftsdoc needs: lexemes sorted + distinct, each with an ascending position
+ * list (1-based), so this is a straight structural map.  It is the adoption
+ * on-ramp for a table that already materializes a tsvector column.
+ *
+ * Positions: a tsvector entry may be positionless (haspos=0, e.g. after
+ * strip()) or carry positions.  ftsdoc positions are all-or-nothing per doc, so
+ * we keep positions ONLY if EVERY entry has them; if any entry is positionless
+ * we build a positions-off ftsdoc (tf = max(npos,1)), matching how a stripped
+ * tsvector degrades.  A tsvector position of 0 ("unknown") is treated as
+ * positionless for that entry.  Positions are taken via WEP_GETPOS (the 14-bit
+ * position, weight bits dropped) and are already ascending + distinct within an
+ * entry per tsvector's own invariants; fts_doc_build re-validates at the trust
+ * boundary.
+ */
+Datum
+to_ftsdoc_from_tsvector(PG_FUNCTION_ARGS)
+{
+	TSVector	tsv = PG_GETARG_TSVECTOR(0);
+	int			n = tsv->size;
+	WordEntry  *we = ARRPTR(tsv);
+	char	   *lexbase = STRPTR(tsv);
+	char	  **terms;
+	int		   *lens;
+	uint32	   *tfs;
+	uint32	   *positions = NULL;
+	bool		has_pos = true;
+	uint64		npos = 0;
+	int			i;
+	FtsDoc		doc;
+
+	if (n == 0)
+	{
+		doc = fts_doc_build(0, NULL, NULL, NULL, false, NULL, "ftsdoc");
+		PG_FREE_IF_COPY(tsv, 0);
+		PG_RETURN_FTSDOC(doc);
+	}
+
+	/* first pass: decide positions-on/off + total position count */
+	for (i = 0; i < n; i++)
+	{
+		int			np = POSDATALEN(tsv, &we[i]);
+
+		if (np <= 0)
+			has_pos = false;
+		npos += (np > 0) ? (uint64) np : 1;
+	}
+
+	terms = (char **) palloc(n * sizeof(char *));
+	lens = (int *) palloc(n * sizeof(int));
+	tfs = (uint32 *) palloc(n * sizeof(uint32));
+	if (has_pos)
+		positions = (uint32 *) (npos * sizeof(uint32) > MaxAllocSize
+							   ? MemoryContextAllocHuge(CurrentMemoryContext,
+														npos * sizeof(uint32))
+							   : palloc(npos * sizeof(uint32)));	/* alloc-ok: huge branch of the > MaxAllocSize ternary above */
+
+	{
+		uint64		p = 0;
+
+		for (i = 0; i < n; i++)
+		{
+			int			np = POSDATALEN(tsv, &we[i]);
+
+			terms[i] = lexbase + we[i].pos;
+			lens[i] = we[i].len;
+			tfs[i] = (np > 0) ? (uint32) np : 1;
+			if (has_pos)
+			{
+				WordEntryPos *pv = POSDATAPTR(tsv, &we[i]);
+				int			k;
+
+				for (k = 0; k < np; k++)
+					positions[p++] = WEP_GETPOS(pv[k]);
+			}
+		}
+	}
+
+	doc = fts_doc_build((uint32) n, terms, lens, tfs, has_pos, positions,
+						"ftsdoc");
+	PG_FREE_IF_COPY(tsv, 0);
+	PG_RETURN_FTSDOC(doc);
+}
 
 /* to_ftsdoc(regconfig, text) */
 Datum

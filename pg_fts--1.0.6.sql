@@ -95,6 +95,15 @@ RETURNS ftsdoc
 AS 'MODULE_PATHNAME', 'to_ftsdoc_byid'
 LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
+-- Build an ftsdoc directly from an existing tsvector (no re-analysis of source
+-- text): the adoption on-ramp for a table that already materializes a tsvector
+-- column.  A tsvector's lexemes are sorted+distinct with ascending positions,
+-- exactly ftsdoc's shape; positions are kept iff every lexeme has them.
+CREATE FUNCTION to_ftsdoc(tsvector)
+RETURNS ftsdoc
+AS 'MODULE_PATHNAME', 'to_ftsdoc_from_tsvector'
+LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
 -- to_ftsquery(regconfig, text): parse query text AND normalize each plain term
 -- through the given text search configuration (stemming, case, stopwords), so
 -- query terms match the same lexemes an index built with the same config
