@@ -159,6 +159,11 @@ extern char *fold_token(const char *src, int len, int *outlen);
 
 /* pg_fts_tsanalyze.c -- analyzer reusing an installed TS configuration */
 extern FtsDoc fts_analyze_with_config(Oid cfgId, const char *str, int len);
+#ifdef PG_FTS_TEST_HOOKS
+/* TEST-ONLY (see pg_fts_customscan.c _PG_init): advisory key a scan waits on
+ * mid-collect to expose the scan-vs-merge recycle window; 0 = off. */
+extern int pg_fts_test_pause_advisory_key;
+#endif
 extern FtsDoc fts_doc_build(uint32 nterms, char **terms, const int *lens,
 							const uint32 *tfs, bool has_pos,
 							const uint32 *positions, const char *errctx);

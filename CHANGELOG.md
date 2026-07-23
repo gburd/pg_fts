@@ -2,6 +2,34 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.0.7
+
+Bug-fix and usability release. **No on-disk format change** from 1.0.6; no
+**REINDEX** required (`ALTER EXTENSION pg_fts UPDATE TO '1.0.7'`).
+
+- **Fixed a concurrent scan-vs-merge stale read** (the A1 hazard). A scan
+  snapshotted the segment directory, released the metapage lock, then walked
+  segment pages holding only per-page share locks; a concurrent `fts_merge` /
+  `fts_vacuum` / autovacuum could free those pages and a concurrent insert
+  recycle them, so the scan followed a now-stale segment descriptor and returned
+  a wrong (too-low) match count or ranking. The metapage now carries a
+  `generation` counter bumped on every segment-directory change (segment
+  add/merge/free and the bulkdelete livedocs-pointer swap); a scan records it at
+  its snapshot and re-checks it before trusting the result, restarting from a
+  fresh snapshot if it moved. The counter lives after the segment array, so
+  existing indexes are unaffected -- no format change, no REINDEX. Reproduced
+  and verified deterministically (`test/a1_recycle/`).
+- **`to_ftsdoc(tsvector)`**: build an `ftsdoc` directly from an existing
+  `tsvector` (lexemes and positions mapped straight across, no re-analysis).
+  Lets you index a stored `tsvector` column, or migrate a `to_tsvector`
+  workload, without re-parsing text. Positions are preserved only when every
+  lexeme has them (a stripped tsvector indexes positionless).
+- **Long-running scans, `CREATE INDEX CONCURRENTLY` validation, and
+  `fts_count` are now promptly cancellable.** Added interrupt checks at
+  lock-free points in the scan and trigram-scan page walks, so a query stuck on
+  a large or pathological index responds to statement timeout / Ctrl-C instead
+  of spinning to completion.
+
 ## 1.0.6
 
 Bug-fix release. **No on-disk format change** from 1.0.5; no **REINDEX**
