@@ -114,10 +114,12 @@ bm25_read_blob(Relation index, BlockNumber blk, Size len)
 
 	while (blk != InvalidBlockNumber && off < len)
 	{
-		Buffer		b = ReadBuffer(index, blk);
+		Buffer		b;
 		Page		page;
 		Size		avail;
 
+		CHECK_FOR_INTERRUPTS();	/* between blob pages, no buffer lock held: safe to unwind */
+		b = ReadBuffer(index, blk);
 		LockBuffer(b, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(b);
 		avail = ((PageHeader) page)->pd_lower -
@@ -350,7 +352,7 @@ bm25_trgm_candidates(Relation index, BlockNumber trgmstart,
 
 		while (blk != InvalidBlockNumber && !done)
 		{
-			Buffer		buf = ReadBuffer(index, blk);
+			Buffer		buf;
 			Page		page;
 			char	   *ptr,
 					   *end;
@@ -359,6 +361,8 @@ bm25_trgm_candidates(Relation index, BlockNumber trgmstart,
 			BlockNumber firstdata = InvalidBlockNumber;
 			bool		found = false;
 
+			CHECK_FOR_INTERRUPTS();	/* between directory pages, no buffer lock held: safe to unwind */
+			buf = ReadBuffer(index, blk);
 			LockBuffer(buf, BUFFER_LOCK_SHARE);
 			page = BufferGetPage(buf);
 			ptr = (char *) PageGetContents(page);
@@ -391,6 +395,7 @@ bm25_trgm_candidates(Relation index, BlockNumber trgmstart,
 					 v != SM_IDX_MAX;
 					 v = sm_next_member(&sm, v, &cur))
 				{
+					CHECK_FOR_INTERRUPTS();	/* per candidate ordinal; blob in memory, buffer released */
 					if (nords >= maxords)
 					{
 						maxords = maxords ? maxords * 2 : 64;
@@ -435,12 +440,14 @@ bm25_trgm_candidates(Relation index, BlockNumber trgmstart,
 	dblk = dictstart;
 	while (dblk != InvalidBlockNumber && oi < nords)
 	{
-		Buffer		buf = ReadBuffer(index, dblk);
+		Buffer		buf;
 		Page		page;
 		char	   *ptr,
 				   *end;
 		BlockNumber next;
 
+		CHECK_FOR_INTERRUPTS();	/* between dictionary pages, no buffer lock held: safe to unwind */
+		buf = ReadBuffer(index, dblk);
 		LockBuffer(buf, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buf);
 		ptr = (char *) PageGetContents(page);
