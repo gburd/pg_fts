@@ -79,6 +79,27 @@ SELECT ftsdoc_length(to_ftsdoc('english'::regconfig, 'the quick brown fox'));
 SELECT to_ftsdoc('english'::regconfig, 'the foxes were running')
        @@@ 'fox & run'::ftsquery AS stemmed_match;
 
+-- to_ftsdoc(tsvector): build an ftsdoc from an existing tsvector, no re-analysis.
+-- Must be equivalent to to_ftsdoc(cfg, text) over the same text for matching.
+SELECT to_ftsdoc(to_tsvector('english', 'the foxes were running'))
+       @@@ 'fox & run'::ftsquery AS tsvector_stemmed_match;              -- t
+-- phrase from a tsvector's positions (adjacency preserved through the map)
+SELECT to_ftsdoc(to_tsvector('simple', 'quick brown fox'))
+       @@@ '"quick brown"'::ftsquery AS tsvector_phrase;                 -- t
+SELECT to_ftsdoc(to_tsvector('simple', 'quick red brown'))
+       @@@ '"quick brown"'::ftsquery AS tsvector_not_phrase;             -- f
+-- a stripped (positionless) tsvector still matches on presence (positions off)
+SELECT to_ftsdoc(strip(to_tsvector('simple', 'quick brown fox')))
+       @@@ 'brown'::ftsquery AS tsvector_stripped_match;                 -- t
+-- empty tsvector -> empty ftsdoc, matches nothing
+SELECT to_ftsdoc(to_tsvector('english', 'the a of')) @@@ 'x'::ftsquery AS tsvector_empty; -- f
+-- ftsdoc(tsvector) matches the same terms as ftsdoc(cfg,text) for the same text
+-- (doclen may differ: a tsvector has already dropped stopword positions, which
+-- the text analyzer still counts toward doclen -- so compare matching, not len).
+SELECT to_ftsdoc(to_tsvector('english', 'the quick brown fox foxes')) @@@ 'fox & quick'::ftsquery
+     = (to_ftsdoc('english'::regconfig, 'the quick brown fox foxes') @@@ 'fox & quick'::ftsquery)
+       AS tsvector_matches_text;                                        -- t
+
 -- BM25 scoring.
 
 -- score is positive when a query term is present, zero when absent

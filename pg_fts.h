@@ -159,6 +159,9 @@ extern char *fold_token(const char *src, int len, int *outlen);
 
 /* pg_fts_tsanalyze.c -- analyzer reusing an installed TS configuration */
 extern FtsDoc fts_analyze_with_config(Oid cfgId, const char *str, int len);
+extern FtsDoc fts_doc_build(uint32 nterms, char **terms, const int *lens,
+							const uint32 *tfs, bool has_pos,
+							const uint32 *positions, const char *errctx);
 extern char *fts_normalize_term(Oid cfgId, const char *term, int len, int *outlen);
 
 /* pg_fts_query.c -- parse query text into an ftsquery */

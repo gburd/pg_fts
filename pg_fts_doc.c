@@ -118,7 +118,7 @@ fts_doc_is_valid(const FtsDocData *doc, Size sz)
  * Mirrors fts_analyze_text's second pass and ftsdoc_recv's old assembly so the
  * layout is produced in exactly one style.
  */
-static FtsDoc
+FtsDoc
 fts_doc_build(uint32 nterms, char **terms, const int *lens, const uint32 *tfs,
 			  bool has_pos, const uint32 *positions, const char *errctx)
 {

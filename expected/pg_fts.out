@@ -250,6 +250,56 @@ SELECT to_ftsdoc('english'::regconfig, 'the foxes were running')
  t
 (1 row)
 
+-- to_ftsdoc(tsvector): build an ftsdoc from an existing tsvector, no re-analysis.
+-- Must be equivalent to to_ftsdoc(cfg, text) over the same text for matching.
+SELECT to_ftsdoc(to_tsvector('english', 'the foxes were running'))
+       @@@ 'fox & run'::ftsquery AS tsvector_stemmed_match;              -- t
+ tsvector_stemmed_match 
+------------------------
+ t
+(1 row)
+
+-- phrase from a tsvector's positions (adjacency preserved through the map)
+SELECT to_ftsdoc(to_tsvector('simple', 'quick brown fox'))
+       @@@ '"quick brown"'::ftsquery AS tsvector_phrase;                 -- t
+ tsvector_phrase 
+-----------------
+ t
+(1 row)
+
+SELECT to_ftsdoc(to_tsvector('simple', 'quick red brown'))
+       @@@ '"quick brown"'::ftsquery AS tsvector_not_phrase;             -- f
+ tsvector_not_phrase 
+---------------------
+ f
+(1 row)
+
+-- a stripped (positionless) tsvector still matches on presence (positions off)
+SELECT to_ftsdoc(strip(to_tsvector('simple', 'quick brown fox')))
+       @@@ 'brown'::ftsquery AS tsvector_stripped_match;                 -- t
+ tsvector_stripped_match 
+-------------------------
+ t
+(1 row)
+
+-- empty tsvector -> empty ftsdoc, matches nothing
+SELECT to_ftsdoc(to_tsvector('english', 'the a of')) @@@ 'x'::ftsquery AS tsvector_empty; -- f
+ tsvector_empty 
+----------------
+ f
+(1 row)
+
+-- ftsdoc(tsvector) matches the same terms as ftsdoc(cfg,text) for the same text
+-- (doclen may differ: a tsvector has already dropped stopword positions, which
+-- the text analyzer still counts toward doclen -- so compare matching, not len).
+SELECT to_ftsdoc(to_tsvector('english', 'the quick brown fox foxes')) @@@ 'fox & quick'::ftsquery
+     = (to_ftsdoc('english'::regconfig, 'the quick brown fox foxes') @@@ 'fox & quick'::ftsquery)
+       AS tsvector_matches_text;                                        -- t
+ tsvector_matches_text 
+-----------------------
+ t
+(1 row)
+
 -- BM25 scoring.
 -- score is positive when a query term is present, zero when absent
 SELECT round(fts_bm25(to_ftsdoc('quick brown fox'), 'fox'::ftsquery,
