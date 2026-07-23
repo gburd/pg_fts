@@ -407,12 +407,19 @@ bm25_build_mem_budget(void)
  * mid-build to reclaim slots -- it runs while IsInParallelMode() and the
  * metapage swap is single-writer only -- so instead each participant caps its
  * own flush count by DOUBLING its budget every BM25_BUILD_FLUSHES_PER_TIER
- * flushes.  With geometric growth a participant flushes at most
- *   BM25_BUILD_FLUSHES_PER_TIER * log2(total_volume / initial_budget)
- * segments regardless of corpus size, so even a multi-terabyte build stays far
- * under the cap.  This needs no up-front size estimate (the in-memory arena /
- * heap-bytes ratio varies with the data), touches only this participant's own
- * state (parallel-safe), and never falls below the operator's
+ * flushes, UP TO A CEILING of 2 * maintenance_work_mem.  The doubling keeps the
+ * flush (segment) count low on a huge build; the ceiling keeps peak MEMORY
+ * bounded -- memory is the hard limit (exhausting it degrades the host),
+ * segment-count overflow is a clean error backstopped by BM25_MAX_SEGMENTS.
+ * With the cap a participant of total in-memory volume V flushes about
+ *   V / (2 * maintenance_work_mem) + O(BM25_BUILD_FLUSHES_PER_TIER) rampup
+ * segments, which stays well under the cap for realistic corpora, while peak
+ * memory is bounded to (max_parallel_maintenance_workers + 1) * 2 * mwm.  An
+ * UNcapped budget (2GB->4->8->16->32GB ...) instead let a participant grow to
+ * tens of GB before flushing, driving a real 1.8M-doc / 19GB build into swap
+ * death several hours in.  This needs no up-front size estimate (the in-memory
+ * arena / heap-bytes ratio varies with the data), touches only this
+ * participant's own state (parallel-safe), and never falls below the operator's
  * maintenance_work_mem for the first tier.  BM25_MAX_SEGMENTS stays as the hard
  * backstop.
  */
@@ -455,15 +462,29 @@ bm25_build_flush_segment(Relation index, BM25BuildState *bs)
 
 	/*
 	 * Grow the flush budget geometrically so this participant's flush count
-	 * stays far under BM25_MAX_SEGMENTS on a huge build (see the comment on
-	 * BM25_BUILD_FLUSHES_PER_TIER).  Touches only this participant's own state,
-	 * so it is safe in a parallel worker.
+	 * stays far under BM25_MAX_SEGMENTS on a huge build, but CAP it at
+	 * 2 * maintenance_work_mem so peak build memory stays bounded.  The cap is
+	 * the hard limit: memory exhaustion crashes/degrades the host, whereas
+	 * exceeding the segment count is a clean error (bm25_meta_add_segment) with
+	 * the end-of-build merge collapsing to one segment.  Uncapped doubling
+	 * (2GB -> 4 -> 8 -> 16 -> 32GB ...) let bs->ctx grow to tens of GB before a
+	 * flush; with the leader + max_parallel_maintenance_workers each holding its
+	 * own budget, peak memory is (workers+1) * budget, so an uncapped budget
+	 * drove a real 1.8M-doc / 19GB build into swap death several hours in (once
+	 * participants crossed into the 16GB+ tier).  At the 2*mwm cap a
+	 * per-participant build of accumulated in-memory volume V flushes about
+	 * V/(2*mwm) + a few rampup segments; for realistic corpora that stays well
+	 * under BM25_MAX_SEGMENTS, and peak memory is bounded to
+	 * (workers+1) * 2 * maintenance_work_mem.
+	 *
+	 * Note: peak build memory is (max_parallel_maintenance_workers + 1) times
+	 * this budget -- size maintenance_work_mem with that multiplier in mind.
 	 */
 	if (bs->flush_budget == 0)
 		bs->flush_budget = bm25_build_mem_budget();
 	bs->nflushes++;
 	if (bs->nflushes % BM25_BUILD_FLUSHES_PER_TIER == 0 &&
-		bs->flush_budget <= SIZE_MAX / 2)
+		bs->flush_budget < (Size) 2 * bm25_build_mem_budget())
 		bs->flush_budget *= 2;
 
 	/* reset: free everything in the build context and start a fresh segment */
@@ -3148,6 +3169,22 @@ bm25_build(Relation heap, Relation index, IndexInfo *indexInfo)
 		 */
 		bm25_merge_all(index);
 	}
+
+	/*
+	 * Reclaim the free tail the end-of-build merge left on disk.  The merge
+	 * writes the merged output before freeing the input segments (write-before-
+	 * free, for crash safety), so freed input pages accumulate but the file is
+	 * never shrunk during a build (only fts_vacuum truncates).  Truncating the
+	 * contiguous free tail reclaims what the final merge leaves above the
+	 * front-packed data -- substantial on a parallel build (freed tail present),
+	 * a no-op when the free space is interior (a serial single-segment layout);
+	 * fully compacting a freshly built index still needs fts_vacuum.  We hold the
+	 * index AccessExclusiveLock and any parallel workers are already torn down
+	 * (bm25_end_parallel), and during ambuild the index is not yet visible to
+	 * other backends (indisready=false, even under CONCURRENTLY), so this backend
+	 * is the sole writer -- truncating the free tail is safe.
+	 */
+	bm25_truncate_free_tail(index);
 
 	MemoryContextDelete(bs.ctx);
 
