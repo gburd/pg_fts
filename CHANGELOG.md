@@ -2,6 +2,26 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.0.6
+
+Bug-fix release. **No on-disk format change** from 1.0.5; no **REINDEX**
+required (`ALTER EXTENSION pg_fts UPDATE TO '1.0.6'`).
+
+- **Fixed runaway memory during a long index build over a large corpus**
+  (the phase after the 1.0.5 fix). The per-participant build memory budget grew
+  geometrically with no ceiling, so a large build's in-memory working set could
+  climb to tens of gigabytes before flushing; combined with one budget per build
+  participant (the leader plus each parallel worker), a big parallel build could
+  exhaust host memory and thrash into swap hours in. The budget is now capped at
+  `2 x maintenance_work_mem`, so peak build memory is bounded to
+  `(max_parallel_maintenance_workers + 1) x 2 x maintenance_work_mem` regardless
+  of corpus size. (Peak build memory scales with the worker count -- size
+  `maintenance_work_mem` with that multiplier in mind.)
+- **A freshly built or REINDEXed index now reclaims the free tail its final
+  merge leaves on disk**, so it ships closer to its compacted size instead of
+  carrying the merge's freed-input pages until the next VACUUM. (Full
+  compaction of interior free space still comes from `fts_vacuum` / VACUUM.)
+
 ## 1.0.5
 
 Bug-fix release. **No on-disk format change** from 1.0.4; no **REINDEX**
