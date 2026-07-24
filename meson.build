@@ -23,7 +23,7 @@
 # separate PGXS-style plumbing, add when installcheck actually runs on Windows.
 
 project('pg_fts', 'c',
-  version: '1.0.7',
+  version: '1.0.8',
   default_options: ['c_std=c11', 'warning_level=2'])
 
 fs = import('fs')
@@ -95,7 +95,7 @@ pg_fts = shared_module('pg_fts',
 # Install script + upgrades for the 1.0.0 release (the private incremental upgrade
 # series was collapsed).
 install_data('pg_fts.control', install_dir: pg_extension_dir)
-install_data('pg_fts--1.0.7.sql', install_dir: pg_extension_dir)
+install_data('pg_fts--1.0.8.sql', install_dir: pg_extension_dir)
 install_data('pg_fts--0.2.0--0.2.1.sql', install_dir: pg_extension_dir)
 install_data('pg_fts--0.2.1--0.2.2.sql', install_dir: pg_extension_dir)
 install_data('pg_fts--0.2.2--0.2.3.sql', install_dir: pg_extension_dir)
@@ -115,3 +115,4 @@ install_data('pg_fts--1.0.3--1.0.4.sql', install_dir: pg_extension_dir)
 install_data('pg_fts--1.0.4--1.0.5.sql', install_dir: pg_extension_dir)
 install_data('pg_fts--1.0.5--1.0.6.sql', install_dir: pg_extension_dir)
 install_data('pg_fts--1.0.6--1.0.7.sql', install_dir: pg_extension_dir)
+install_data('pg_fts--1.0.7--1.0.8.sql', install_dir: pg_extension_dir)
