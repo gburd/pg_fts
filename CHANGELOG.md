@@ -2,6 +2,26 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.0.8
+
+Bug-fix release. **No on-disk format change** from 1.0.7; no **REINDEX**
+required (`ALTER EXTENSION pg_fts UPDATE TO '1.0.8'`).
+
+- **Fixed out-of-memory / worker SIGKILL during a large index build's merge
+  phase.** The 1.0.6 flush-budget ceiling bounds the scan phase, but the merge
+  phase held two vocabulary-proportional working sets that no setting bounded:
+  it loaded every input segment's entire dictionary into memory (and the final
+  reduction opens all segments at once), and it accumulated the whole merged
+  vocabulary before writing the dictionary. On a large, high-vocabulary corpus
+  (tens of millions of distinct terms) each could reach multiple gigabytes
+  regardless of `maintenance_work_mem`, so a big build could exhaust host memory
+  in the merge phase even at a configuration whose scan phase fit comfortably.
+  The merge now reads each input dictionary a page at a time and spills the
+  output dictionary metadata to a temporary file, so its memory no longer scales
+  with the corpus vocabulary. Measured peak build memory roughly halved on a
+  high-vocabulary corpus, with a much flatter growth curve; build time did not
+  regress. (Memory-only change: on-disk format is byte-identical, no REINDEX.)
+
 ## 1.0.7
 
 Bug-fix and usability release. **No on-disk format change** from 1.0.6; no
