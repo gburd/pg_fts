@@ -64,6 +64,7 @@
 #include "optimizer/optimizer.h"
 #include "pgstat.h"
 #include "storage/bufmgr.h"
+#include "storage/buffile.h"
 #include "catalog/storage.h"
 #include "storage/condition_variable.h"
 #include "storage/freespace.h"
@@ -1340,29 +1341,55 @@ bm25_write_postings(BM25PostWriter *pw, BuildTerm *bt,
  * chain of dictionary pages.  Returns the first dictionary block, and via
  * *indexstart the first page of the sparse block index (Invalid if empty).
  */
+/*
+ * One dictionary record streamed into bm25_write_dictionary_iter: the term
+ * bytes plus the metadata a BM25DictEntry needs.  `term` need only stay valid
+ * until the iterator's next() call.
+ */
+typedef struct DictRec
+{
+	const char *term;
+	int			len;
+	uint32		df;
+	uint32		max_tf;
+	BlockNumber firstposting;
+	uint32		firstoffset;
+} DictRec;
+
+/* Iterator: fill *r with the next term in sorted order, return false at end. */
+typedef bool (*DictNextFn) (void *state, DictRec *r);
+
+/*
+ * Write a segment's on-disk dictionary (dict pages + sparse block index) by
+ * pulling terms from an iterator in sorted order.  O(1) caller memory: the only
+ * state retained across the stream is the per-DICT-PAGE block-index metadata
+ * (one entry per ~8KB page, i.e. index_size/BLCKSZ entries -- tiny), including a
+ * copy of each page's first term's bytes so the block-index pass needs no
+ * random access back into the (possibly spilled) term stream.
+ */
 static BlockNumber
-bm25_write_dictionary(Relation index, BM25BuildState *bs,
-					  BlockNumber *postings, uint32 *offsets,
-					  BlockNumber *indexstart)
+bm25_write_dictionary_iter(Relation index, DictNextFn next, void *nstate,
+						   BlockNumber *indexstart)
 {
 	BlockNumber first = InvalidBlockNumber;
 	Buffer		buffer = InvalidBuffer;
 	GenericXLogState *state = NULL;
 	Page		page = NULL;
-	int			i;
+	DictRec		r;
 
-	/* collect (blk, first-term-index) of each dict page for the block index */
+	/* block index: (blk, first-term bytes) per dict page -- bounded by #pages */
 	BlockNumber *pgblk = NULL;
-	int		   *pgterm = NULL;
+	char	  **pgfirst = NULL;	/* first term bytes of each page (palloc'd) */
+	int		   *pgfirstlen = NULL;
 	int			npages = 0;
 	int			pgcap = 0;
+	int			j;
 
 	*indexstart = InvalidBlockNumber;
 
-	for (i = 0; i < bs->nterms; i++)
+	while (next(nstate, &r))
 	{
-		BuildTerm  *bt = &bs->terms[i];
-		Size		need = MAXALIGN(sizeof(BM25DictEntry) + bt->len);
+		Size		need = MAXALIGN(sizeof(BM25DictEntry) + r.len);
 		char	   *dst;
 		bool		newpage = false;
 
@@ -1372,8 +1399,8 @@ bm25_write_dictionary(Relation index, BM25BuildState *bs,
 			((PageHeader) page)->pd_lower + need >
 			BLCKSZ - sizeof(BM25PageOpaqueData))
 		{
-			Buffer		next = bm25_new_buffer(index);
-			BlockNumber nextblk = BufferGetBlockNumber(next);
+			Buffer		nextbuf = bm25_new_buffer(index);
+			BlockNumber nextblk = BufferGetBlockNumber(nextbuf);
 
 			if (buffer != InvalidBuffer)
 			{
@@ -1384,7 +1411,7 @@ bm25_write_dictionary(Relation index, BM25BuildState *bs,
 			else
 				first = nextblk;
 
-			buffer = next;
+			buffer = nextbuf;
 			state = GenericXLogStart(index);
 			page = GenericXLogRegisterBuffer(state, buffer, GENERIC_XLOG_FULL_IMAGE);
 			bm25_init_page(page, BM25_DICT);
@@ -1398,11 +1425,15 @@ bm25_write_dictionary(Relation index, BM25BuildState *bs,
 				pgcap = Max(pgcap * 2, 64);
 				pgblk = pgblk ? repalloc(pgblk, pgcap * sizeof(BlockNumber))
 					: palloc(pgcap * sizeof(BlockNumber));
-				pgterm = pgterm ? repalloc(pgterm, pgcap * sizeof(int))
+				pgfirst = pgfirst ? repalloc(pgfirst, pgcap * sizeof(char *))
+					: palloc(pgcap * sizeof(char *));
+				pgfirstlen = pgfirstlen ? repalloc(pgfirstlen, pgcap * sizeof(int))
 					: palloc(pgcap * sizeof(int));
 			}
 			pgblk[npages] = BufferGetBlockNumber(buffer);
-			pgterm[npages] = i;		/* this term is the page's first */
+			pgfirstlen[npages] = r.len;
+			pgfirst[npages] = (char *) palloc(Max(r.len, 1));
+			memcpy(pgfirst[npages], r.term, r.len);
 			npages++;
 		}
 
@@ -1410,12 +1441,12 @@ bm25_write_dictionary(Relation index, BM25BuildState *bs,
 		{
 			BM25DictEntry *de = (BM25DictEntry *) dst;
 
-			de->termlen = bt->len;
-			de->df = bt->nposts;
-			de->max_tf = bt->max_tf;	/* set by bm25_write_postings */
-			de->firstposting = postings[i];
-			de->firstoffset = offsets[i];
-			memcpy(de->term, bt->term, bt->len);
+			de->termlen = r.len;
+			de->df = r.df;
+			de->max_tf = r.max_tf;
+			de->firstposting = r.firstposting;
+			de->firstoffset = r.firstoffset;
+			memcpy(de->term, r.term, r.len);
 		}
 		((PageHeader) page)->pd_lower += need;
 	}
@@ -1433,12 +1464,11 @@ bm25_write_dictionary(Relation index, BM25BuildState *bs,
 		Buffer		ib = InvalidBuffer;
 		Page		ip = NULL;
 		GenericXLogState *istate = NULL;
-		int			j;
 
 		for (j = 0; j < npages; j++)
 		{
-			BuildTerm  *bt = &bs->terms[pgterm[j]];
-			Size		need = MAXALIGN(offsetof(BM25DictIndexEntry, term) + bt->len);
+			int			flen = pgfirstlen[j];
+			Size		need = MAXALIGN(offsetof(BM25DictIndexEntry, term) + flen);
 			char	   *dst;
 			BM25DictIndexEntry *ie;
 
@@ -1446,8 +1476,8 @@ bm25_write_dictionary(Relation index, BM25BuildState *bs,
 				((PageHeader) ip)->pd_lower + need >
 				BLCKSZ - sizeof(BM25PageOpaqueData))
 			{
-				Buffer		next = bm25_new_buffer(index);
-				BlockNumber nextblk = BufferGetBlockNumber(next);
+				Buffer		nextbuf = bm25_new_buffer(index);
+				BlockNumber nextblk = BufferGetBlockNumber(nextbuf);
 
 				if (ib != InvalidBuffer)
 				{
@@ -1457,7 +1487,7 @@ bm25_write_dictionary(Relation index, BM25BuildState *bs,
 				}
 				else
 					ifirst = nextblk;
-				ib = next;
+				ib = nextbuf;
 				istate = GenericXLogStart(index);
 				ip = GenericXLogRegisterBuffer(istate, ib, GENERIC_XLOG_FULL_IMAGE);
 				bm25_init_page(ip, BM25_DICTINDEX);
@@ -1465,8 +1495,8 @@ bm25_write_dictionary(Relation index, BM25BuildState *bs,
 			dst = (char *) ip + ((PageHeader) ip)->pd_lower;
 			ie = (BM25DictIndexEntry *) dst;
 			ie->blk = pgblk[j];
-			ie->termlen = bt->len;
-			memcpy(ie->term, bt->term, bt->len);
+			ie->termlen = flen;
+			memcpy(ie->term, pgfirst[j], flen);
 			((PageHeader) ip)->pd_lower += need;
 		}
 		if (ib != InvalidBuffer)
@@ -1476,16 +1506,97 @@ bm25_write_dictionary(Relation index, BM25BuildState *bs,
 		}
 		*indexstart = ifirst;
 	}
+	for (j = 0; j < npages; j++)
+		pfree(pgfirst[j]);
 	if (pgblk)
 		pfree(pgblk);
-	if (pgterm)
-		pfree(pgterm);
+	if (pgfirst)
+		pfree(pgfirst);
+	if (pgfirstlen)
+		pfree(pgfirstlen);
 
 	return first;
 }
 
+/*
+ * Iterator over an in-memory bs->terms[] (the segment-flush path): postings[]/
+ * offsets[] carry the firstposting/firstoffset for each term.
+ */
+typedef struct DictArrayIter
+{
+	BM25BuildState *bs;
+	BlockNumber *postings;
+	uint32	   *offsets;
+	int			i;
+} DictArrayIter;
+
+static bool
+dict_array_next(void *st, DictRec *r)
+{
+	DictArrayIter *it = (DictArrayIter *) st;
+	BuildTerm  *bt;
+
+	if (it->i >= it->bs->nterms)
+		return false;
+	bt = &it->bs->terms[it->i];
+	r->term = bt->term;
+	r->len = bt->len;
+	r->df = bt->nposts;
+	r->max_tf = bt->max_tf;
+	r->firstposting = it->postings[it->i];
+	r->firstoffset = it->offsets[it->i];
+	it->i++;
+	return true;
+}
+
+/* Thin wrapper: write a dictionary from an in-memory bs->terms[] array. */
+static BlockNumber
+bm25_write_dictionary(Relation index, BM25BuildState *bs,
+					  BlockNumber *postings, uint32 *offsets,
+					  BlockNumber *indexstart)
+{
+	DictArrayIter it;
+
+	it.bs = bs;
+	it.postings = postings;
+	it.offsets = offsets;
+	it.i = 0;
+	return bm25_write_dictionary_iter(index, dict_array_next, &it, indexstart);
+}
+
+/*
+ * Iterator over an in-memory bs->terms[] yielding only term bytes (the trigram
+ * writer needs term/len + the running ordinal; not postings/offsets).
+ */
+typedef struct DictTermArrayIter
+{
+	BM25BuildState *bs;
+	int			i;
+} DictTermArrayIter;
+
+static bool
+dict_term_array_next(void *st, DictRec *r)
+{
+	DictTermArrayIter *it = (DictTermArrayIter *) st;
+	BuildTerm  *bt;
+
+	if (it->i >= it->bs->nterms)
+		return false;
+	bt = &it->bs->terms[it->i];
+	r->term = bt->term;
+	r->len = bt->len;
+	r->df = bt->nposts;
+	r->max_tf = bt->max_tf;
+	r->firstposting = InvalidBlockNumber;
+	r->firstoffset = 0;
+	it->i++;
+	return true;
+}
+
 /* forward decl: trigram index writer (pg_fts_trgm_index.c, included below) */
 static BlockNumber bm25_write_trigrams(Relation index, BM25BuildState *bs);
+static BlockNumber bm25_write_trigrams_iter(Relation index, DictNextFn next,
+											void *nstate);
 /* forward decls: blob read/write live in pg_fts_trgm_index.c (included below) */
 static BlockNumber bm25_write_blob(Relation index, const uint8 *data, Size len);
 static uint8 *bm25_read_blob(Relation index, BlockNumber blk, Size len);
@@ -1504,7 +1615,7 @@ bm25_write_segment(Relation index, BM25BuildState *bs, BM25SegMeta *seg)
 	BM25PostWriter pw;
 	int			i;
 
-	postings = (BlockNumber *) palloc(Max(bs->nterms, 1) * sizeof(BlockNumber));	/* alloc-ok: bs->nterms is a single build/pending segment, bounded by maintenance_work_mem (merge path uses the huge-safe dpost/doff) */
+	postings = (BlockNumber *) palloc(Max(bs->nterms, 1) * sizeof(BlockNumber));	/* alloc-ok: bs->nterms is a single build/pending segment, bounded by maintenance_work_mem (the merge path spills to disk instead) */
 	offsets = (uint32 *) palloc(Max(bs->nterms, 1) * sizeof(uint32));	/* alloc-ok: see postings[] above */
 	pw_begin(&pw, index);
 	for (i = 0; i < bs->nterms; i++)
@@ -1591,46 +1702,173 @@ bm25_meta_add_segment(Relation index, const BM25SegMeta *seg)
  */
 typedef struct MergeDictTerm
 {
-	char	   *term;			/* term bytes */
+	char	   *term;			/* term bytes (points INTO the pinned dict page) */
 	uint32		termlen;
 	uint32		df;
 	BlockNumber firstposting;
 	uint32		firstoffset;
 } MergeDictTerm;
 
+/*
+ * A merge source is a forward cursor over one segment's term-sorted dictionary.
+ * It keeps only the CURRENT dict page pinned (~8KB) and exposes the current
+ * term; the k-way merge peeks the current term of each source and advances the
+ * ones carrying the smallest.  This keeps the merge's per-source footprint O(1)
+ * (one page) instead of loading the segment's entire vocabulary into memory --
+ * critical for a large, high-vocabulary corpus where the sum of all input
+ * dictionaries would otherwise be many GB, unbounded by maintenance_work_mem.
+ *
+ * `cur` is valid (points into `curbuf`'s page) iff `valid`; the term bytes it
+ * references stay live until the next merge_source_advance() on this source, so
+ * the merge must consume/copy them (add_posting does) before advancing.
+ */
 typedef struct MergeSource
 {
-	MergeDictTerm *terms;		/* this segment's dict, term-sorted */
-	uint32		nterms;
-	uint32		cur;			/* index of the current (unconsumed) term */
-	uint8	   *tombbuf;		/* tombstone bitmap blob, or NULL */
+	Relation	index;
+	BlockNumber nextblk;			/* next dict page to read, or Invalid */
+	MergeDictTerm *page;			/* decoded entries of the current page (copied) */
+	char	   *pagebytes;			/* backing store for this page's term bytes */
+	int			npage;				/* entries in page[] */
+	int			pcur;				/* index of current entry within page[] */
+	int			pagecap;			/* capacity of page[]/pagebytes reuse */
+	Size		bytescap;
+	MergeDictTerm cur;				/* current term (points into pagebytes) */
+	bool		valid;				/* cur holds a term (source not exhausted) */
+	MemoryContext ctx;
+	uint8	   *tombbuf;			/* tombstone bitmap blob, or NULL */
 	sm_t		tomb;
 	bool		hastomb;
 	sm_cursor_cached_t tombcache;
 } MergeSource;
 
-typedef struct MergeOutTerm
+/*
+ * Load the next dict page (src->nextblk) into src->page[] / src->pagebytes,
+ * copying each entry's metadata and term bytes so the page buffer can be
+ * released immediately (no page pin held across posting reads).  Skips empty
+ * pages.  Sets src->npage = 0 and returns when the dictionary is exhausted.
+ * page[]/pagebytes are sized by ONE page's contents (bounded by BLCKSZ), reused
+ * across pages -- so a source's footprint stays O(one page), not O(vocabulary).
+ */
+static void
+merge_source_load_page(MergeSource *src)
 {
-	char	   *term;			/* term bytes (in the merge ctx) */
-	int			termlen;
-	uint32		df;				/* live df after tombstone drops */
-	uint32		max_tf;
-	BlockNumber firstposting;	/* set by bm25_write_postings */
-	uint32		firstoffset;
-} MergeOutTerm;
+	MemoryContext old = MemoryContextSwitchTo(src->ctx);
 
-/* Read one segment's dictionary metadata (no posting bodies) into src->terms. */
+	src->npage = 0;
+	src->pcur = 0;
+
+	while (src->npage == 0 && src->nextblk != InvalidBlockNumber)
+	{
+		Buffer		buffer;
+		Page		page;
+		char	   *ptr,
+				   *end;
+		BlockNumber next;
+		int			n;
+		Size		used;
+
+		CHECK_FOR_INTERRUPTS();		/* between pages, no lock held across yields */
+		buffer = ReadBuffer(src->index, src->nextblk);
+		LockBuffer(buffer, BUFFER_LOCK_SHARE);
+		page = BufferGetPage(buffer);
+		ptr = (char *) PageGetContents(page);
+		end = (char *) page + ((PageHeader) page)->pd_lower;
+		next = BM25PageGetOpaque(page)->nextblk;
+
+		/* count entries + term bytes on this page (bounded by BLCKSZ) */
+		n = 0;
+		used = 0;
+		while (ptr < end)
+		{
+			BM25DictEntry *de = (BM25DictEntry *) ptr;
+
+			n++;
+			used += de->termlen;
+			ptr += MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
+		}
+
+		if (n > src->pagecap)
+		{
+			src->pagecap = Max(n, src->pagecap ? src->pagecap * 2 : 256);
+			src->page = src->page
+				? repalloc(src->page, src->pagecap * sizeof(MergeDictTerm))
+				: palloc(src->pagecap * sizeof(MergeDictTerm));
+		}
+		if (used > src->bytescap || (n > 0 && src->pagebytes == NULL))
+		{
+			/* floor at BLCKSZ so pagebytes is non-NULL for any n>0 page, even the
+			 * degenerate all-zero-length-term case (avoids memcpy(NULL,...,0)) */
+			src->bytescap = Max(Max(used, (Size) 1), src->bytescap ? src->bytescap * 2 : (Size) BLCKSZ);
+			src->pagebytes = src->pagebytes
+				? repalloc(src->pagebytes, src->bytescap)
+				: palloc(src->bytescap);
+		}
+
+		ptr = (char *) PageGetContents(page);
+		used = 0;
+		n = 0;
+		while (ptr < end)
+		{
+			BM25DictEntry *de = (BM25DictEntry *) ptr;
+			MergeDictTerm *mt = &src->page[n++];
+
+			mt->termlen = de->termlen;
+			mt->df = de->df;
+			mt->firstposting = de->firstposting;
+			mt->firstoffset = de->firstoffset;
+			mt->term = src->pagebytes + used;
+			memcpy(mt->term, de->term, de->termlen);
+			used += de->termlen;
+			ptr += MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
+		}
+		src->npage = n;
+		src->nextblk = next;
+		UnlockReleaseBuffer(buffer);
+	}
+
+	if (src->npage > 0)
+	{
+		src->cur = src->page[0];
+		src->valid = true;
+	}
+	else
+		src->valid = false;
+
+	MemoryContextSwitchTo(old);
+}
+
+/* Advance the cursor to the next term, loading the next page as needed. */
+static void
+merge_source_advance(MergeSource *src)
+{
+	src->pcur++;
+	if (src->pcur < src->npage)
+		src->cur = src->page[src->pcur];
+	else
+		merge_source_load_page(src);	/* refills page[], sets cur/valid */
+}
+
+/*
+ * Open a merge source as a forward, page-at-a-time cursor over one segment's
+ * term-sorted dictionary metadata (no posting bodies).  Positions it on the
+ * first term.  Only one dict page's worth of metadata is resident at a time.
+ */
 static void
 merge_source_open(Relation index, const BM25SegMeta *seg, MergeSource *src,
 				  MemoryContext ctx)
 {
-	BlockNumber blk = seg->dictstart;
-	uint32		cap = 0;
 	MemoryContext old = MemoryContextSwitchTo(ctx);
 
-	src->terms = NULL;
-	src->nterms = 0;
-	src->cur = 0;
+	src->index = index;
+	src->ctx = ctx;
+	src->nextblk = seg->dictstart;
+	src->page = NULL;
+	src->pagebytes = NULL;
+	src->npage = 0;
+	src->pcur = 0;
+	src->pagecap = 0;
+	src->bytescap = 0;
+	src->valid = false;
 	src->tombbuf = NULL;
 	src->hastomb = false;
 	memset(&src->tombcache, 0, sizeof(src->tombcache));
@@ -1642,47 +1880,9 @@ merge_source_open(Relation index, const BM25SegMeta *seg, MergeSource *src,
 		src->hastomb = true;
 	}
 
-	while (blk != InvalidBlockNumber)
-	{
-		Buffer		buffer;
-		Page		page;
-		char	   *ptr,
-				   *end;
-		BlockNumber next;
-
-		CHECK_FOR_INTERRUPTS();		/* between pages, no lock held across the loop body's yields */
-		buffer = ReadBuffer(index, blk);
-		LockBuffer(buffer, BUFFER_LOCK_SHARE);
-		page = BufferGetPage(buffer);
-		ptr = (char *) PageGetContents(page);
-		end = (char *) page + ((PageHeader) page)->pd_lower;
-		next = BM25PageGetOpaque(page)->nextblk;
-		while (ptr < end)
-		{
-			BM25DictEntry *de = (BM25DictEntry *) ptr;
-			Size		esize = MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
-			MergeDictTerm *mt;
-
-			if (src->nterms >= cap)
-			{
-				cap = cap ? cap * 2 : 256;
-				src->terms = src->terms
-					? (MergeDictTerm *) FTS_REALLOC_MAYBE_HUGE(src->terms, cap * sizeof(MergeDictTerm))
-					: (MergeDictTerm *) FTS_ALLOC_MAYBE_HUGE(cap * sizeof(MergeDictTerm));
-			}
-			mt = &src->terms[src->nterms++];
-			mt->termlen = de->termlen;
-			mt->df = de->df;
-			mt->firstposting = de->firstposting;
-			mt->firstoffset = de->firstoffset;
-			mt->term = (char *) palloc(de->termlen);
-			memcpy(mt->term, de->term, de->termlen);
-			ptr += esize;
-		}
-		UnlockReleaseBuffer(buffer);
-		blk = next;
-	}
+	merge_source_load_page(src);	/* position on the first term */
 	MemoryContextSwitchTo(old);
+
 }
 
 /* Order two term keys the same way cmp_buildterm orders BuildTerms. */
@@ -1698,6 +1898,96 @@ merge_cmp_term(const char *a, uint32 alen, const char *b, uint32 blen)
 }
 
 /*
+ * Dictionary-metadata spill for the streaming merge.  As the k-way merge
+ * produces each output term (in sorted order) we append its dict record --
+ * term bytes + df/max_tf/firstposting/firstoffset -- to a temp BufFile instead
+ * of an in-memory array.  The whole merged VOCABULARY is thus never resident;
+ * only one record at a time is, both when writing the spill and when streaming
+ * it back into bm25_write_dictionary_iter and the trigram writer.  This is what
+ * bounds the merge's memory on a huge, high-vocabulary corpus.
+ *
+ * Record layout: [int termlen][uint32 df][uint32 max_tf][BlockNumber fp]
+ *                [uint32 fo][termlen term bytes].
+ */
+typedef struct DictSpill
+{
+	BufFile    *bf;
+	char	   *tbuf;			/* reusable read buffer for term bytes */
+	int			tcap;
+	DictRec		cur;			/* last record read back (term points into tbuf) */
+	int			ordinal;		/* ordinal of cur among all spilled records */
+} DictSpill;
+
+static void
+dict_spill_begin(DictSpill *sp)
+{
+	sp->bf = BufFileCreateTemp(false);
+	sp->tbuf = NULL;
+	sp->tcap = 0;
+	sp->ordinal = -1;
+}
+
+static void
+dict_spill_write(DictSpill *sp, const DictRec *r)
+{
+	BufFileWrite(sp->bf, (void *) &r->len, sizeof(int));
+	BufFileWrite(sp->bf, (void *) &r->df, sizeof(uint32));
+	BufFileWrite(sp->bf, (void *) &r->max_tf, sizeof(uint32));
+	BufFileWrite(sp->bf, (void *) &r->firstposting, sizeof(BlockNumber));
+	BufFileWrite(sp->bf, (void *) &r->firstoffset, sizeof(uint32));
+	if (r->len > 0)
+		BufFileWrite(sp->bf, (void *) r->term, r->len);
+}
+
+/* Rewind to the start for a (re)read pass. */
+static void
+dict_spill_rewind(DictSpill *sp)
+{
+	if (BufFileSeek(sp->bf, 0, 0, SEEK_SET) != 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_INTERNAL_ERROR),
+				 errmsg("could not rewind pg_fts merge dictionary spill file")));
+	sp->ordinal = -1;
+}
+
+/* DictNextFn over the spill: reads the next record into sp->cur. */
+static bool
+dict_spill_next(void *st, DictRec *out)
+{
+	DictSpill  *sp = (DictSpill *) st;
+	size_t		n;
+
+	n = BufFileReadMaybeEOF(sp->bf, &sp->cur.len, sizeof(int), true);
+	if (n == 0)
+		return false;			/* clean EOF */
+	BufFileReadExact(sp->bf, &sp->cur.df, sizeof(uint32));
+	BufFileReadExact(sp->bf, &sp->cur.max_tf, sizeof(uint32));
+	BufFileReadExact(sp->bf, &sp->cur.firstposting, sizeof(BlockNumber));
+	BufFileReadExact(sp->bf, &sp->cur.firstoffset, sizeof(uint32));
+	if (sp->cur.len > sp->tcap)
+	{
+		sp->tcap = Max(sp->cur.len, sp->tcap ? sp->tcap * 2 : 256);
+		sp->tbuf = sp->tbuf ? repalloc(sp->tbuf, sp->tcap) : palloc(sp->tcap);
+	}
+	if (sp->cur.len > 0)
+		BufFileReadExact(sp->bf, sp->tbuf, sp->cur.len);
+	sp->cur.term = sp->tbuf;
+	sp->ordinal++;
+	if (out != &sp->cur)
+		*out = sp->cur;
+	return true;
+}
+
+static void
+dict_spill_end(DictSpill *sp)
+{
+	BufFileClose(sp->bf);
+	if (sp->tbuf)
+		pfree(sp->tbuf);
+}
+
+
+/*
  * Streaming k-way merge of the `chosen` segments into ONE new segment, bounded
  * to one term's postings at a time.  Writes the new segment's pages and fills
  * *seg (dictstart/dictindexstart) plus the corpus totals in bs (ndocs,
@@ -1709,10 +1999,7 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 {
 	MergeSource *srcv;
 	BM25PostWriter pw;
-	MergeOutTerm *out;			/* per output term: dict metadata (small) */
-	BlockNumber *dpost;
-	uint32	   *doff;
-	uint32		ocap;
+	DictSpill	spill;			/* per-output-term dict metadata, spilled to disk */
 	uint32		nout = 0;
 	uint32		i;
 	MemoryContext old = MemoryContextSwitchTo(bs->ctx);
@@ -1725,8 +2012,7 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 		merge_source_open(index, &chosen[i], &srcv[i], bs->ctx);
 	}
 
-	ocap = 256;
-	out = (MergeOutTerm *) FTS_ALLOC_MAYBE_HUGE(ocap * sizeof(MergeOutTerm));
+	dict_spill_begin(&spill);
 
 	pw_begin(&pw, index);
 
@@ -1748,14 +2034,14 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 		{
 			MergeSource *s = &srcv[i];
 
-			if (s->cur >= s->nterms)
+			if (!s->valid)
 				continue;
 			if (smterm == NULL ||
-				merge_cmp_term(s->terms[s->cur].term, s->terms[s->cur].termlen,
+				merge_cmp_term(s->cur.term, s->cur.termlen,
 							   smterm, smlen) < 0)
 			{
-				smterm = s->terms[s->cur].term;
-				smlen = s->terms[s->cur].termlen;
+				smterm = s->cur.term;
+				smlen = s->cur.termlen;
 			}
 		}
 		if (smterm == NULL)
@@ -1766,6 +2052,20 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 		termctx = AllocSetContextCreate(bs->ctx, "bm25 merge term",
 										ALLOCSET_DEFAULT_SIZES);
 		told = MemoryContextSwitchTo(termctx);
+
+		/*
+		 * Copy the smallest term into termctx-owned memory: smterm points into
+		 * one source's page, which merge_source_advance() below overwrites as
+		 * cursors advance, so we must not alias it during the gather loop.  Sized
+		 * to the real term length (no fixed cap), freed with termctx each pass.
+		 */
+		{
+			char	   *smcopy = (char *) palloc(Max(smlen, 1u));
+
+			memcpy(smcopy, smterm, smlen);
+			smterm = smcopy;
+		}
+
 		tbs.ctx = termctx;
 		tbs.want_positions = bs->want_positions;
 		tbs.terms = NULL;
@@ -1784,9 +2084,9 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 			int			np,
 						k;
 
-			if (s->cur >= s->nterms)
+			if (!s->valid)
 				continue;
-			mt = &s->terms[s->cur];
+			mt = &s->cur;
 			if (merge_cmp_term(mt->term, mt->termlen, smterm, smlen) != 0)
 				continue;		/* this segment lacks the smallest term */
 
@@ -1807,7 +2107,7 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 			pfree(post);
 			if (posarena)
 				pfree(posarena);
-			s->cur++;			/* advance the cursors that matched this term */
+			merge_source_advance(s);	/* advance the cursors that matched this term */
 		}
 		MemoryContextSwitchTo(told);
 
@@ -1820,22 +2120,21 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 		Assert(tbs.nterms == 1);
 		bt = &tbs.terms[0];
 
-		/* write this term's postings now (sets bt->max_tf), then keep only its
-		 * small dictionary metadata and free the postings arena */
+		/* write this term's postings now (sets bt->max_tf), then spill only its
+		 * small dictionary metadata to disk and free the postings arena */
 		bm25_write_postings(&pw, bt, &fb, &fo);
 
-		if (nout >= ocap)
 		{
-			ocap *= 2;
-			out = (MergeOutTerm *) FTS_REALLOC_MAYBE_HUGE(out, ocap * sizeof(MergeOutTerm));
+			DictRec		rec;
+
+			rec.term = bt->term;
+			rec.len = bt->len;
+			rec.df = bt->nposts;
+			rec.max_tf = bt->max_tf;
+			rec.firstposting = fb;
+			rec.firstoffset = fo;
+			dict_spill_write(&spill, &rec);
 		}
-		out[nout].termlen = bt->len;
-		out[nout].df = bt->nposts;
-		out[nout].max_tf = bt->max_tf;
-		out[nout].firstposting = fb;
-		out[nout].firstoffset = fo;
-		out[nout].term = (char *) palloc(bt->len);	/* alloc-ok: one term's bytes (in bs->ctx) */
-		memcpy(out[nout].term, bt->term, bt->len);
 		nout++;
 
 		MemoryContextDelete(termctx);	/* frees this term's postings */
@@ -1843,28 +2142,25 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 
 	pw_finish(&pw);
 
-	/* Emit the dictionary from the streamed metadata.  bm25_write_dictionary
-	 * reads term/len/df/max_tf plus the firstposting/firstoffset arrays; build
-	 * a minimal BuildTerm array carrying exactly those. */
-	bs->terms = (BuildTerm *) FTS_ALLOC_MAYBE_HUGE(Max(nout, 1) * sizeof(BuildTerm));
-	dpost = (BlockNumber *) FTS_ALLOC_MAYBE_HUGE(Max(nout, 1) * sizeof(BlockNumber));
-	doff = (uint32 *) FTS_ALLOC_MAYBE_HUGE(Max(nout, 1) * sizeof(uint32));
-	for (i = 0; i < nout; i++)
-	{
-		MemSet(&bs->terms[i], 0, sizeof(BuildTerm));
-		bs->terms[i].term = out[i].term;
-		bs->terms[i].len = out[i].termlen;
-		bs->terms[i].nposts = out[i].df;
-		bs->terms[i].max_tf = out[i].max_tf;
-		dpost[i] = out[i].firstposting;
-		doff[i] = out[i].firstoffset;
-	}
+	/*
+	 * Emit the dictionary and trigram index by streaming the spilled per-term
+	 * metadata back from disk -- one record resident at a time, so neither the
+	 * merged vocabulary's dict metadata nor the term bytes are ever fully in
+	 * memory.  bm25_write_trigrams_iter still accumulates its trigram->ordinal
+	 * map (bounded by the vocabulary's trigram content, huge-safe), but no
+	 * longer needs a resident bs->terms[] array.
+	 */
 	bs->nterms = (int) nout;
 
 	MemSet(seg, 0, sizeof(BM25SegMeta));
-	seg->dictstart = bm25_write_dictionary(index, bs, dpost, doff,
-										   &seg->dictindexstart);
-	seg->trgmstart = bm25_write_trigrams(index, bs);
+	dict_spill_rewind(&spill);
+	seg->dictstart = bm25_write_dictionary_iter(index, dict_spill_next, &spill,
+												&seg->dictindexstart);
+	dict_spill_rewind(&spill);
+	seg->trgmstart = bm25_write_trigrams_iter(index, dict_spill_next, &spill);
+	/* both passes must consume exactly the nout spilled records; a mismatch would
+	 * mean the trigram->term-ordinal mapping diverged from the dict write order */
+	Assert(spill.ordinal + 1 == (int) nout);
 	seg->livedocs = InvalidBlockNumber;
 	seg->ndocs = bs->ndocs;
 	seg->sumdoclen = bs->sumdoclen;
@@ -1872,8 +2168,7 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 	seg->ndeleted = 0;
 	seg->livedocslen = 0;
 
-	pfree(dpost);
-	pfree(doff);
+	dict_spill_end(&spill);
 	MemoryContextSwitchTo(old);
 }
 

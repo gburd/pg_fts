@@ -139,7 +139,7 @@ bm25_read_blob(Relation index, BlockNumber blk, Size len)
  * firstdata) on directory pages.  Returns the first directory block.
  */
 static BlockNumber
-bm25_write_trigrams(Relation index, BM25BuildState *bs)
+bm25_write_trigrams_iter(Relation index, DictNextFn next, void *nstate)
 {
 	HTAB	   *ht;
 	TrgmAccum  *accs;
@@ -150,6 +150,7 @@ bm25_write_trigrams(Relation index, BM25BuildState *bs)
 	Buffer		dbuf = InvalidBuffer;
 	GenericXLogState *dstate = NULL;
 	Page		dpage = NULL;
+	DictRec		r;
 
 	{
 		typedef struct
@@ -166,11 +167,10 @@ bm25_write_trigrams(Relation index, BM25BuildState *bs)
 						 HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
 		accs = (TrgmAccum *) FTS_ALLOC_MAYBE_HUGE(maxaccs * sizeof(TrgmAccum));
 
-		for (i = 0; i < bs->nterms; i++)
+		for (i = 0; next(nstate, &r); i++)
 		{
-			BuildTerm  *bt = &bs->terms[i];
 			uint32		trg[FTS_MAX_TRIGRAMS];
-			int			ntrg = fts_trigrams(bt->term, bt->len, trg, FTS_MAX_TRIGRAMS);
+			int			ntrg = fts_trigrams(r.term, r.len, trg, FTS_MAX_TRIGRAMS);
 			int			g;
 
 			for (g = 0; g < ntrg; g++)
@@ -299,6 +299,17 @@ bm25_write_trigrams(Relation index, BM25BuildState *bs)
 	}
 	hash_destroy(ht);
 	return first;
+}
+
+/* Thin wrapper: write trigrams from an in-memory bs->terms[] array. */
+static BlockNumber
+bm25_write_trigrams(Relation index, BM25BuildState *bs)
+{
+	DictTermArrayIter it;
+
+	it.bs = bs;
+	it.i = 0;
+	return bm25_write_trigrams_iter(index, dict_term_array_next, &it);
 }
 
 /*
