@@ -379,6 +379,22 @@ _PG_init(void)
 	bm25_init_reloptions();
 	RegisterCustomScanMethods(&fts_count_scan_methods);
 
+	/*
+	 * Cap (in MB) on the total index size for which an index BUILD finalizes to
+	 * a single optimal segment.  Above this, the build stops at a bounded,
+	 * size-tiered set of segments (LSM-style) so it always converges instead of
+	 * doing one giant single-backend collapse that can run for hours on a huge,
+	 * high-vocabulary corpus.  Ranked scans then traverse a bounded handful of
+	 * segments (a small, fixed cost); run fts_merge() in a maintenance window to
+	 * collapse to one when desired.  0 = always collapse (the historical behavior).
+	 */
+	DefineCustomIntVariable("pg_fts.build_collapse_max_mb",
+							"Max total index size (MB) for which a build finalizes to a single segment; larger builds stop at a bounded tiered set.",
+							"Above this, an index build leaves a bounded, size-tiered set of segments so it always converges; run fts_merge() to collapse to one. 0 = always collapse.",
+							&pg_fts_build_collapse_max_mb,
+							4096, 0, INT_MAX,
+							PGC_USERSET, GUC_UNIT_MB, NULL, NULL, NULL);
+
 #ifdef PG_FTS_TEST_HOOKS
 	DefineCustomIntVariable("pg_fts.test_pause_advisory_key",
 							"TEST-ONLY: advisory key a scan waits on mid-collect (0=off).",

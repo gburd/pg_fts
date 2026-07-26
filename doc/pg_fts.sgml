@@ -376,6 +376,69 @@ CREATE INDEX docs_bm25 ON docs USING fts (to_ftsdoc('english', body))
   </para>
  </sect2>
 
+ <sect2 id="pgfts-large-builds">
+  <title>Building indexes on large or high-vocabulary corpora</title>
+
+  <para>
+   Building an index over a large corpus of long, high-vocabulary documents
+   (for example full email bodies or source code &mdash; many distinct,
+   low-frequency terms per document) has two cost drivers: build <emphasis>memory</emphasis>
+   and merge <emphasis>time</emphasis>.
+  </para>
+
+  <para>
+   <emphasis role="bold">Memory.</emphasis> Peak build memory is bounded by
+   roughly <literal>shared_buffers + (max_parallel_maintenance_workers + 1) &times; 2 &times; maintenance_work_mem</literal>.
+   Size <varname>maintenance_work_mem</varname> and
+   <varname>max_parallel_maintenance_workers</varname> so that figure fits your
+   host (and any cgroup <literal>MemoryMax</literal>).  A larger
+   <varname>maintenance_work_mem</varname> also flushes fewer, larger segments
+   during the scan, which reduces the amount of merging afterwards &mdash; a
+   good trade when you have RAM to spare.
+  </para>
+
+  <para>
+   <emphasis role="bold">Merge / finalization.</emphasis> After the scan the
+   build compacts the many per-worker segments.  Rather than always collapsing
+   to a single segment (a single-backend pass over the whole index that can run
+   for a long time on a very large corpus), a build whose total index size
+   exceeds <varname>pg_fts.build_collapse_max_mb</varname> (default
+   <literal>4096</literal> MB) stops at a bounded, size-tiered set of segments.
+   The index is valid and fully queryable; ranked scans traverse a bounded
+   handful of segments (a small, fixed cost).  Run
+   <function>fts_merge(<replaceable>index</replaceable>)</function> in a
+   maintenance window to collapse to one segment when you want the smallest
+   index and the lowest ranked-scan latency.  Set
+   <varname>pg_fts.build_collapse_max_mb</varname> to <literal>0</literal> to
+   always collapse (regardless of size), or raise it if you have the time and
+   memory to collapse a large index during the build itself.
+  </para>
+
+  <para>
+   <emphasis role="bold">Monitoring a build.</emphasis> The merge phase is not
+   covered by <structname>pg_stat_progress_create_index</structname> (its
+   <structfield>blocks_done</structfield> freezes once the scan finishes).  Poll
+   <function>fts_index_nsegments(<replaceable>index</replaceable>)</function>
+   (which works on an in-progress <literal>indisvalid = f</literal> index) to
+   watch the segment count fall as merges complete, and set
+   <literal>client_min_messages = debug1</literal> (or
+   <literal>log_min_messages = debug1</literal>) to see per-merge progress
+   lines (<quote>merging N of M segments &hellip; wrote merged segment (T terms,
+   D docs) in S s</quote>).
+  </para>
+
+  <para>
+   <emphasis role="bold">Partitioning.</emphasis> For a very large corpus you
+   can partition the table and build a per-partition <literal>fts</literal>
+   index; each partition's build and merge are correspondingly smaller.  A query
+   with a partitionwise plan fans out across the per-partition indexes and each
+   is scored against its own partition's corpus statistics.  BM25 scores are
+   therefore comparable <emphasis>within</emphasis> a partition; if you need a
+   single global ranking across partitions, prefer one whole-corpus index and
+   the tiered-build behavior above.
+  </para>
+ </sect2>
+
  <sect2 id="pgfts-limitations">
   <title>Limitations</title>
 
