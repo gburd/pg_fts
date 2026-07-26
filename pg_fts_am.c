@@ -2771,13 +2771,13 @@ bm25_merge_all(Relation index, bool try_parallel)
  * single-backend merge writes the entire multi-GB index in one shot and can run
  * for hours with no incremental progress -- the field-reported non-convergence.
  *
- * So finalize adaptively, LSM-style:
- *   1. One parallel merge pass (fast; uses workers) to knock the many
- *      per-participant segments down to ~(workers+1).
- *   2. Size-tiered merge (bm25_merge_segments) to a bounded, geometrically
+ * So finalize adaptively, LSM-style, and SERIALLY (no parallel merge context --
+ * see the extension-lock hazard note in the body):
+ *   1. Size-tiered merge (bm25_merge_segments) to a bounded, geometrically
  *      spread set -- always a bounded amount of work per merge, always
- *      converges.
- *   3. Collapse to a single segment ONLY when the whole index is small enough
+ *      converges.  The 1.1.1 O(N) trigram build made this tractable even on a
+ *      huge, high-vocabulary corpus.
+ *   2. Collapse to a single segment ONLY when the whole index is small enough
  *      (<= pg_fts.build_collapse_max_mb) that the single-backend collapse is
  *      quick.  Above that, stop at the bounded tiered set: the index is valid
  *      and queryable (ranked scans traverse a bounded handful of segments, a
@@ -2796,21 +2796,23 @@ bm25_build_finalize(Relation index)
 	int			nseg;
 	BM25MetaPageData meta;
 
-	/* 1. one parallel pass (only outside parallel mode, with workers) */
-	if (!IsInParallelMode() && max_parallel_maintenance_workers > 0)
-	{
-		int			request = Min(max_parallel_maintenance_workers,
-								 max_parallel_workers);
-
-		if (request > 0)
-			(void) bm25_merge_all_parallel(index, request);
-	}
-
-	/* 2. bounded size-tiered merge (LSM): leaves <= BM25_MERGE_THRESHOLD segs */
+	/*
+	 * Bounded size-tiered merge (LSM), serial.  We do NOT start a parallel
+	 * merge context here: this runs inside ambuild, after the build-scan's own
+	 * parallel context was torn down (bm25_end_parallel), and re-entering
+	 * parallel mode to merge a very large index inside ambuild -- especially
+	 * under CREATE INDEX CONCURRENTLY on a busy, memory-pressured host -- risks
+	 * wedging the leader in WaitForParallelWorkersToFinish while participants
+	 * contend on / hold the relation-extension lock (a field-reported hang:
+	 * leader parked in poll(), a sibling blocked on Lock:extend, indisvalid=f
+	 * for hours).  The 1.1.1 O(N) trigram fix made the serial merge tractable,
+	 * so the parallel pass is no longer needed for convergence; an explicit
+	 * fts_merge() (run outside ambuild) still parallelizes on demand.
+	 */
 	bm25_merge_segments(index);
 
 	/*
-	 * 3. collapse to one only if the whole index is small enough that the
+	 * Collapse to one only if the whole index is small enough that the
 	 * single-backend collapse is quick.  pg_fts.build_collapse_max_mb == 0 forces
 	 * the historical always-collapse behavior for callers who want it.
 	 */
@@ -2832,7 +2834,7 @@ bm25_build_finalize(Relation index)
 			elog(DEBUG1, "pg_fts build: index \"%s\": collapsing %d segments to one (%lu MB <= collapse cap %d MB)",
 				 RelationGetRelationName(index), nseg, (unsigned long) sizemb,
 				 pg_fts_build_collapse_max_mb);
-		bm25_merge_all(index, false);	/* step 1 already ran the parallel pass */
+		bm25_merge_all(index, false);	/* serial: no parallel re-entry inside ambuild */
 	}
 	else
 		elog(LOG, "pg_fts build: index \"%s\": leaving %d size-tiered segments (%lu MB > collapse cap %d MB); run fts_merge('%s') to collapse to one",
@@ -3546,10 +3548,11 @@ bm25_build(Relation heap, Relation index, IndexInfo *indexInfo)
 		 * Finalize the participants' segments.  Rather than always collapsing to
 		 * a single segment (a single-backend O(index) merge that does not converge
 		 * in bounded time on a huge, high-vocabulary corpus), bm25_build_finalize
-		 * runs one parallel pass, a bounded size-tiered merge, and collapses to one
-		 * only when the index is small enough (pg_fts.build_collapse_max_mb).
-		 * A large build thus always terminates, leaving a bounded tiered set;
-		 * fts_merge() collapses to one on demand.
+		 * runs a serial bounded size-tiered merge and collapses to one only when the
+		 * index is small enough (pg_fts.build_collapse_max_mb).  A large build thus
+		 * always terminates, leaving a bounded tiered set; fts_merge() collapses to
+		 * one on demand.  It does NOT start a parallel merge context inside ambuild
+		 * (that risked wedging CONCURRENTLY builds on large/pressured hosts).
 		 */
 		bm25_build_finalize(index);
 	}
