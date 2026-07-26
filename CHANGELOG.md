@@ -2,6 +2,37 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.1.0
+
+Build-convergence and operability release.  **No on-disk format change** from
+1.0.8; no **REINDEX** required (`ALTER EXTENSION pg_fts UPDATE TO '1.1.0'`).
+
+- **Fixed a non-converging index build on large, high-vocabulary corpora.**
+  Building an index over many long, high-vocabulary documents (full email
+  bodies, source code, patches -- many distinct low-frequency terms per doc)
+  could enter a merge phase that ran for hours with no forward progress and
+  never completed, even though memory stayed bounded.  The cause was a
+  quadratic (O(N^2)) construction of each trigram's term-set during the merge;
+  it is now built with a bulk O(N) path.  A build that previously did not finish
+  in 8.5 hours completes in minutes.
+- **Large builds now always converge, in bounded steps.**  Instead of always
+  collapsing to a single segment at the end of a build (a single-backend pass
+  over the whole index), a build whose total size exceeds the new
+  `pg_fts.build_collapse_max_mb` GUC (default 4096 MB) stops at a bounded,
+  size-tiered set of segments.  The index is valid and fully queryable; ranked
+  scans traverse a bounded handful of segments (a small fixed cost).  Run
+  `fts_merge(index)` to collapse to a single optimal segment in a maintenance
+  window.  Set the GUC to 0 to always collapse (the historical behavior), or
+  raise it to collapse larger indexes during the build.
+- **Build monitoring.**  Per-merge progress is logged at `DEBUG1` (segments in,
+  terms/docs written, elapsed), and a `LOG` line reports when a build stops at a
+  tiered set.  `fts_index_nsegments()` now works on an in-progress
+  (`indisvalid = f`) index, so a build can be polled to watch its segment count
+  fall as merges complete.
+- **Docs:** a new "Building indexes on large or high-vocabulary corpora" section
+  covers the build-memory formula (including `shared_buffers`), the collapse
+  GUC, monitoring, and partitioning.
+
 ## 1.0.8
 
 Bug-fix release. **No on-disk format change** from 1.0.7; no **REINDEX**
