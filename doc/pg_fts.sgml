@@ -388,7 +388,7 @@ CREATE INDEX docs_bm25 ON docs USING fts (to_ftsdoc('english', body))
 
   <para>
    <emphasis role="bold">Memory.</emphasis> Peak build memory is bounded by
-   roughly <literal>shared_buffers + (max_parallel_maintenance_workers + 1) &times; 2 &times; maintenance_work_mem</literal>.
+   roughly <literal>shared_buffers + (max_parallel_maintenance_workers + 1) x 2 x maintenance_work_mem</literal>.
    Size <varname>maintenance_work_mem</varname> and
    <varname>max_parallel_maintenance_workers</varname> so that figure fits your
    host (and any cgroup <literal>MemoryMax</literal>).  A larger
@@ -421,7 +421,7 @@ CREATE INDEX docs_bm25 ON docs USING fts (to_ftsdoc('english', body))
    or an explicit <function>fts_merge</function>) is a single-backend pass that
    reads and rewrites the whole index once, so its cost is roughly linear in the
    index size.  As an order-of-magnitude planning figure, that collapse writes
-   on the order of tens of MB of index per second per core (measured ~40&ndash;60
+   on the order of tens of MB of index per second per core (measured ~40-60
    MB/s on a commodity NVMe box; your hardware and vocabulary will vary), so a
    multi-GB index takes minutes, not hours &mdash; but budget for it in a
    maintenance window and watch the progress (below).  If a build must be
@@ -442,7 +442,7 @@ CREATE INDEX docs_bm25 ON docs USING fts (to_ftsdoc('english', body))
    watch the segment count fall and the doc/term counts grow as merges complete,
    and set <literal>client_min_messages = debug1</literal> (or
    <literal>log_min_messages = debug1</literal>) to see per-merge progress
-   lines (<quote>merging N of M segments &hellip; wrote merged segment (T terms,
+   lines (<quote>merging N of M segments ... wrote merged segment (T terms,
    D docs) in S s</quote>).
   </para>
 
