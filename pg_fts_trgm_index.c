@@ -251,8 +251,19 @@ bm25_write_trigrams_iter(Relation index, DictNextFn next, void *nstate)
 			ereport(ERROR,
 					(errcode(ERRCODE_OUT_OF_MEMORY),
 					 errmsg("out of memory building bm25 trigram map")));
-		for (d = 0; d < acc->ndocids; d++)
-			sm_add_grow(&sm, acc->docids[d]);
+		/*
+		 * Build with the BULK cursor-threaded API: inserting members one at a
+		 * time with sm_add_grow re-walks from the map head on every insert, which
+		 * is O(N^2) in a trigram's term-set size and dominated total merge time on
+		 * a huge-vocabulary corpus (a hot trigram can carry millions of ordinals).
+		 * docids is already sorted+deduped above, so sm_add_many_grow's internal
+		 * sort is cheap and it threads a cursor for amortized O(N).
+		 */
+		if (acc->ndocids > 0 &&
+			!sm_add_many_grow(&sm, acc->docids, acc->ndocids))
+			ereport(ERROR,
+					(errcode(ERRCODE_OUT_OF_MEMORY),
+					 errmsg("out of memory building bm25 trigram map")));
 		smlen = sm_get_size(sm);
 
 		/* store this trigram's term-ordinal set as a data-page blob */

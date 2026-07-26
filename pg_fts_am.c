@@ -65,6 +65,7 @@
 #include "pgstat.h"
 #include "storage/bufmgr.h"
 #include "storage/buffile.h"
+#include "portability/instr_time.h"
 #include "catalog/storage.h"
 #include "storage/condition_variable.h"
 #include "storage/freespace.h"
@@ -895,6 +896,11 @@ static int	bm25_lowfree_i = 0;
  * the following "pack" phase to relocate the segment to the front and truncate.
  */
 static bool bm25_alloc_extend_only = false;
+
+/* GUC: build finalizes to one segment only when total index <= this many MB;
+ * above it the build stops at a bounded tiered set so it always converges.
+ * Defined here, registered in _PG_init (pg_fts_customscan.c). */
+int			pg_fts_build_collapse_max_mb = 4096;
 
 static int
 cmp_blocknumber(const void *a, const void *b)
@@ -2342,6 +2348,10 @@ bm25_merge_selected(Relation index, const uint32 *sel, uint32 nsel)
 	BM25SegMeta newseg;
 	BM25SegMeta chosen[BM25_MAX_SEGMENTS];
 	uint32		i;
+	double		indocs = 0;
+	instr_time	t0;
+
+	INSTR_TIME_SET_CURRENT(t0);
 
 	{
 		Buffer		mb = ReadBuffer(index, BM25_METAPAGE_BLKNO);
@@ -2355,7 +2365,11 @@ bm25_merge_selected(Relation index, const uint32 *sel, uint32 nsel)
 		if (sel[i] >= meta.nsegments)
 			return false;		/* directory changed under us */
 		chosen[i] = meta.segs[sel[i]];
+		indocs += chosen[i].ndocs - chosen[i].ndeleted;
 	}
+
+	elog(DEBUG1, "pg_fts merge: index \"%s\": merging %u of %u segments (%.0f live docs) into one",
+		 RelationGetRelationName(index), nsel, meta.nsegments, indocs);
 
 	bs.ctx = AllocSetContextCreate(CurrentMemoryContext, "bm25 merge segs",
 								   ALLOCSET_DEFAULT_SIZES);
@@ -2372,6 +2386,16 @@ bm25_merge_selected(Relation index, const uint32 *sel, uint32 nsel)
 	bm25_merge_segments_streaming(index, chosen, nsel, &bs, &newseg);
 	newseg.ndocs = bs.ndocs;
 	newseg.sumdoclen = bs.sumdoclen;
+
+	{
+		instr_time	t1;
+
+		INSTR_TIME_SET_CURRENT(t1);
+		INSTR_TIME_SUBTRACT(t1, t0);
+		elog(DEBUG1, "pg_fts merge: index \"%s\": wrote merged segment (%d terms, %.0f docs) in %.1f s",
+			 RelationGetRelationName(index), bs.nterms, bs.ndocs,
+			 INSTR_TIME_GET_DOUBLE(t1));
+	}
 
 	{
 		Buffer		mb = ReadBuffer(index, BM25_METAPAGE_BLKNO);
@@ -2480,6 +2504,7 @@ typedef struct BM25MergeShared
 }			BM25MergeShared;
 
 static void bm25_merge_one_group(Relation index, BM25MergeShared *ms, int g);
+static void bm25_merge_segments(Relation index);	/* size-tiered LSM merge (defined below) */
 
 PGDLLEXPORT void bm25_parallel_merge_main(dsm_segment *seg, shm_toc *toc);
 
@@ -2679,7 +2704,7 @@ bm25_merge_all_parallel(Relation index, int request)
 }
 
 static bool
-bm25_merge_all(Relation index)
+bm25_merge_all(Relation index, bool try_parallel)
 {
 	bool		didwork = false;
 	int			guard;
@@ -2697,7 +2722,7 @@ bm25_merge_all(Relation index)
 	 * merge tail is a single-output-write cost, not a parallelism-partition
 	 * one -- see ROADMAP.md (codec / streamed-write direction).
 	 */
-	if (!IsInParallelMode() && max_parallel_maintenance_workers > 0)
+	if (try_parallel && !IsInParallelMode() && max_parallel_maintenance_workers > 0)
 	{
 		int			request = Min(max_parallel_maintenance_workers,
 								 max_parallel_workers);
@@ -2735,6 +2760,84 @@ bm25_merge_all(Relation index)
 		didwork = true;
 	}
 	return didwork;
+}
+
+/*
+ * Finalize an index BUILD's segment layout.
+ *
+ * The scan phase leaves many segments (each parallel participant flushes
+ * several, budget-triggered).  Collapsing them all into ONE segment is optimal
+ * for ranked-scan latency, but on a huge, high-vocabulary corpus that final
+ * single-backend merge writes the entire multi-GB index in one shot and can run
+ * for hours with no incremental progress -- the field-reported non-convergence.
+ *
+ * So finalize adaptively, LSM-style:
+ *   1. One parallel merge pass (fast; uses workers) to knock the many
+ *      per-participant segments down to ~(workers+1).
+ *   2. Size-tiered merge (bm25_merge_segments) to a bounded, geometrically
+ *      spread set -- always a bounded amount of work per merge, always
+ *      converges.
+ *   3. Collapse to a single segment ONLY when the whole index is small enough
+ *      (<= pg_fts.build_collapse_max_mb) that the single-backend collapse is
+ *      quick.  Above that, stop at the bounded tiered set: the index is valid
+ *      and queryable (ranked scans traverse a bounded handful of segments, a
+ *      small fixed cost), and fts_merge() collapses to one on demand in a
+ *      maintenance window.
+ *
+ * This makes a large build ALWAYS terminate in bounded, observable steps
+ * (each bm25_merge_selected logs a DEBUG1 progress line) instead of a single
+ * open-ended collapse.
+ */
+static void
+bm25_build_finalize(Relation index)
+{
+	BlockNumber nblocks;
+	uint64		sizemb;
+	int			nseg;
+	BM25MetaPageData meta;
+
+	/* 1. one parallel pass (only outside parallel mode, with workers) */
+	if (!IsInParallelMode() && max_parallel_maintenance_workers > 0)
+	{
+		int			request = Min(max_parallel_maintenance_workers,
+								 max_parallel_workers);
+
+		if (request > 0)
+			(void) bm25_merge_all_parallel(index, request);
+	}
+
+	/* 2. bounded size-tiered merge (LSM): leaves <= BM25_MERGE_THRESHOLD segs */
+	bm25_merge_segments(index);
+
+	/*
+	 * 3. collapse to one only if the whole index is small enough that the
+	 * single-backend collapse is quick.  pg_fts.build_collapse_max_mb == 0 forces
+	 * the historical always-collapse behavior for callers who want it.
+	 */
+	nblocks = RelationGetNumberOfBlocks(index);
+	sizemb = ((uint64) nblocks * BLCKSZ) / (1024 * 1024);
+	{
+		Buffer		mb = ReadBuffer(index, BM25_METAPAGE_BLKNO);
+
+		LockBuffer(mb, BUFFER_LOCK_SHARE);
+		memcpy(&meta, BM25PageGetMeta(BufferGetPage(mb)), sizeof(meta));
+		UnlockReleaseBuffer(mb);
+	}
+	nseg = (int) meta.nsegments;
+
+	if (pg_fts_build_collapse_max_mb == 0 ||
+		sizemb <= (uint64) pg_fts_build_collapse_max_mb)
+	{
+		if (nseg > 1)
+			elog(DEBUG1, "pg_fts build: index \"%s\": collapsing %d segments to one (%lu MB <= collapse cap %d MB)",
+				 RelationGetRelationName(index), nseg, (unsigned long) sizemb,
+				 pg_fts_build_collapse_max_mb);
+		bm25_merge_all(index, false);	/* step 1 already ran the parallel pass */
+	}
+	else
+		elog(LOG, "pg_fts build: index \"%s\": leaving %d size-tiered segments (%lu MB > collapse cap %d MB); run fts_merge('%s') to collapse to one",
+			 RelationGetRelationName(index), nseg, (unsigned long) sizemb,
+			 pg_fts_build_collapse_max_mb, RelationGetRelationName(index));
 }
 
 /*
@@ -3440,16 +3543,15 @@ bm25_build(Relation heap, Relation index, IndexInfo *indexInfo)
 		reltuples += bm25_end_parallel(bm25leader);
 
 		/*
-		 * Compact the participants' segments into an optimal single segment.
-		 * bm25_end_parallel() has exited parallel mode, so bm25_merge_all() can
-		 * itself run the PARALLEL merge (workers merge disjoint segment groups),
-		 * making the compaction fast rather than the single-threaded O(index)
-		 * tail that a naive build-time merge would be.  This keeps a freshly
-		 * built (or REINDEXed) index optimal at first query -- a multi-segment
-		 * index makes ranked scans traverse every segment's postings, which
-		 * regresses common-term ranked latency.
+		 * Finalize the participants' segments.  Rather than always collapsing to
+		 * a single segment (a single-backend O(index) merge that does not converge
+		 * in bounded time on a huge, high-vocabulary corpus), bm25_build_finalize
+		 * runs one parallel pass, a bounded size-tiered merge, and collapses to one
+		 * only when the index is small enough (pg_fts.build_collapse_max_mb).
+		 * A large build thus always terminates, leaving a bounded tiered set;
+		 * fts_merge() collapses to one on demand.
 		 */
-		bm25_merge_all(index);
+		bm25_build_finalize(index);
 	}
 	else
 	{
@@ -3458,14 +3560,11 @@ bm25_build(Relation heap, Relation index, IndexInfo *indexInfo)
 		bm25_build_flush_segment(index, &bs);
 
 		/*
-		 * Compact to a single optimal segment.  A serial build makes few
-		 * segments (budget-triggered flushes + the residual), and the tiered
-		 * bm25_merge_segments deliberately leaves same-size tiers -- which would
-		 * leave a multi-segment index and regress ranked scans.  bm25_merge_all
-		 * finishes to one segment (and uses the parallel merge if workers are
-		 * available, since we are not in parallel mode here).
+		 * Same adaptive finalization as the parallel path (a serial build makes
+		 * fewer segments, so this usually collapses to one; a very large serial
+		 * build stays tiered rather than spinning on an open-ended collapse).
 		 */
-		bm25_merge_all(index);
+		bm25_build_finalize(index);
 	}
 
 	/*
@@ -4141,7 +4240,7 @@ fts_merge(PG_FUNCTION_ARGS)
 	 * yields a one-segment index.  The tiered auto-merge deliberately leaves
 	 * several same-size segments, so it is not enough on its own here.
 	 */
-	if (bm25_merge_all(index))
+	if (bm25_merge_all(index, true))
 		done = true;
 	index_close(index, ShareUpdateExclusiveLock);
 

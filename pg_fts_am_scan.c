@@ -2283,17 +2283,35 @@ bm25_lookup_df(Relation index, const BM25SegMeta *seg,
 
 PG_FUNCTION_INFO_V1(fts_index_nsegments);
 
-/* fts_index_nsegments(regclass) -> int : number of live segments */
+/* fts_index_nsegments(regclass) -> int : number of live segments.
+ * Works on an in-progress (indisvalid=f) index so a build can be polled; returns
+ * NULL if the metapage is not yet a valid pg_fts metapage (very early in a build
+ * or a non-fts relation) rather than erroring, so a monitoring query is safe. */
 Datum
 fts_index_nsegments(PG_FUNCTION_ARGS)
 {
 	Oid			indexoid = PG_GETARG_OID(0);
 	Relation	index;
 	BM25MetaPageData meta;
+	bool		ok = false;
 
 	index = index_open(indexoid, AccessShareLock);
-	bm25_read_meta(index, &meta);
+	if (index->rd_rel->relam == get_index_am_oid("fts", true) &&
+		RelationGetNumberOfBlocks(index) > BM25_METAPAGE_BLKNO)
+	{
+		Buffer		buf = ReadBuffer(index, BM25_METAPAGE_BLKNO);
+
+		LockBuffer(buf, BUFFER_LOCK_SHARE);
+		if (BM25PageGetMeta(BufferGetPage(buf))->magic == BM25_MAGIC)
+		{
+			memcpy(&meta, BM25PageGetMeta(BufferGetPage(buf)), sizeof(meta));
+			ok = true;
+		}
+		UnlockReleaseBuffer(buf);
+	}
 	index_close(index, AccessShareLock);
+	if (!ok)
+		PG_RETURN_NULL();
 	PG_RETURN_INT32((int32) meta.nsegments);
 }
 

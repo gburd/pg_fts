@@ -702,6 +702,29 @@ SELECT fts_index_nsegments('tier_bm25') <= 8 AS segments_bounded;        -- t (c
 RESET enable_seqscan;
 DROP TABLE tier;
 
+-- High-vocabulary build + trigram-through-merge: a corpus of many DISTINCT
+-- low-frequency terms (like patches/quoted code) that flushes into several
+-- segments then merges.  The trigram index for each merged segment is rebuilt
+-- from the merged vocabulary; this exercises the bulk O(N) sparsemap build
+-- (sm_add_many_grow) that replaced an O(N^2) per-member insert -- the fix for
+-- the field-reported non-converging merge.  Assert exact prefix/fuzzy/regex
+-- parity so the bulk build cannot silently drop trigram members.
+SET maintenance_work_mem = '1MB';
+CREATE TABLE hivocab (id serial, body text);
+INSERT INTO hivocab(body)
+  SELECT array_to_string(ARRAY(SELECT 'id'||g||'x'||s FROM generate_series(1,40) s),' ')
+  FROM generate_series(1,3000) g;   -- ~120k distinct terms across several segments
+CREATE INDEX hivocab_bm25 ON hivocab USING fts (to_ftsdoc('simple', body));
+SELECT fts_merge('hivocab_bm25') IS NOT NULL AS hivocab_merged;
+SET enable_seqscan = off;
+SELECT count(*) AS exact FROM hivocab WHERE to_ftsdoc('simple',body) @@@ 'id5x1'::ftsquery;      -- 1
+SELECT count(*) AS prefix FROM hivocab WHERE to_ftsdoc('simple',body) @@@ 'id5x1*'::ftsquery;    -- id5x1, id5x10..id5x19 in doc 5
+SELECT count(*) >= 1 AS fuzzy_hit FROM hivocab WHERE to_ftsdoc('simple',body) @@@ 'id5x1~1'::ftsquery;
+SELECT count(*) >= 1 AS regex_hit FROM hivocab WHERE to_ftsdoc('simple',body) @@@ '/id5x1./'::ftsquery;
+RESET enable_seqscan;
+RESET maintenance_work_mem;
+DROP TABLE hivocab;
+
 -- Streaming merge (memory-bounded k-way merge): a low maintenance_work_mem
 -- forces many segment flushes during build; a full merge then coalesces them
 -- to one segment via the streaming path (one term's postings at a time, not
