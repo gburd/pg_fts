@@ -241,10 +241,11 @@ bm25_write_trigrams_iter(Relation index, DictNextFn next, void *nstate)
 		 * that trigram.  Because the sets are over the VOCABULARY (small), even a
 		 * common trigram's term-set is bounded and cheap.
 		 *
-		 * Use a library-owned, auto-growing sparsemap (sm_create + sm_add_grow):
-		 * a fixed wrap buffer with plain sm_add silently drops members on ENOSPC,
-		 * which lost candidates for high-cardinality trigrams (the 112-vs-424
-		 * bug).  sm_free releases the malloc'd buffer (not palloc).
+		 * Use a library-owned, auto-growing sparsemap (sm_create + the bulk
+		 * sm_add_many_grow below): a fixed wrap buffer with plain sm_add silently
+		 * drops members on ENOSPC, which lost candidates for high-cardinality
+		 * trigrams (the 112-vs-424 bug).  sm_free releases the malloc'd buffer
+		 * (not palloc).
 		 */
 		sm = sm_create(256);
 		if (sm == NULL)
