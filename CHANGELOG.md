@@ -2,6 +2,23 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.1.2
+
+Bug-fix release. **No on-disk format change** from 1.1.1; no **REINDEX**
+required (`ALTER EXTENSION pg_fts UPDATE TO '1.1.2'`).
+
+- **Fixed a hang in the final phase of a large `CREATE INDEX CONCURRENTLY`.**
+  On a large, high-vocabulary corpus, a build could get all the way through the
+  merge (the 1.1.1 fix) and then wedge in finalization -- the build leader
+  parked waiting on parallel workers while another backend blocked on the
+  relation-extension lock, with the index never becoming valid. The build
+  finalization started a second parallel worker set to merge the segments; on a
+  large index under `CONCURRENTLY` on a busy host, the participants could
+  contend on the relation-extension lock and stall indefinitely. Finalization is
+  now serial (the 1.1.1 O(N) merge made the parallel pass unnecessary for
+  convergence), so no relation-extension contention arises and the build
+  completes. `fts_merge()` still merges in parallel when run on its own.
+
 ## 1.1.1
 
 Bug-fix release. **No on-disk format change** from 1.1.0; no **REINDEX**
