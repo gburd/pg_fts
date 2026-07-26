@@ -2,6 +2,26 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.1.1
+
+Bug-fix release. **No on-disk format change** from 1.1.0; no **REINDEX**
+required (`ALTER EXTENSION pg_fts UPDATE TO '1.1.1'`).
+
+- **Fixed quadratic (O(N^2)) time in `VACUUM` / bulk-delete on a large index.**
+  1.1.0 fixed the same pattern in the build's trigram writer; three more
+  instances remained on the delete/vacuum path (building a segment's live-docid
+  set and the tombstone sets one member at a time re-walked the sparsemap from
+  the start on every insert).  Harmless on a small index, but on a large index
+  a `VACUUM` or a large `DELETE` could spend a very long time in tombstone
+  construction &mdash; the same "time explodes at scale" behavior the build had.
+  All corpus-scale sparsemap builds now use the bulk O(N) path.  Tombstone
+  results are unchanged (verified against a delete + `VACUUM` cycle).
+- **Docs:** added a build time model and serial/low-parallelism recommendation
+  (the final single-segment collapse is a single-backend pass over the whole
+  index, so budget it in a maintenance window or leave the index tiered), and
+  noted that `fts_index_stats()` (like `fts_index_nsegments()`) can be polled on
+  an in-progress index.
+
 ## 1.1.0
 
 Build-convergence and operability release.  **No on-disk format change** from
