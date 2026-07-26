@@ -4005,8 +4005,21 @@ bm25_segment_docids(Relation index, const BM25SegMeta *seg)
 
 			np = bm25_decode_term(index, de->firstposting, de->firstoffset,
 								  de->df, &post, NULL, false, NULL);
-			for (k = 0; k < np; k++)
-				sm_add_grow(&seen, bm25_tid_to_docid(&post[k].tid));
+			if (np > 0)
+			{
+				uint64	   *ids = (uint64 *) palloc(np * sizeof(uint64));
+
+				for (k = 0; k < np; k++)
+					ids[k] = bm25_tid_to_docid(&post[k].tid);
+				/* bulk O(N) add (cursor-threaded); adding one at a time with
+				 * sm_add_grow re-walks the map head per insert -> O(N^2) on a
+				 * large segment's docid set. */
+				if (!sm_add_many_grow(&seen, ids, np))
+					ereport(ERROR,
+							(errcode(ERRCODE_OUT_OF_MEMORY),
+							 errmsg("out of memory building bm25 livedocs set")));
+				pfree(ids);
+			}
 			pfree(post);
 			ptr += esize;
 		}
@@ -4076,36 +4089,74 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 			sm_t		old;
 			sm_cursor_t oc = SM_CURSOR_INIT;
 			uint64		dv;
+			uint64	   *carry = NULL;
+			int			ncarry = 0,
+						carrycap = 0;
 
 			sm_open(&old, (uint8_t *) buf, sg->livedocslen);
 			for (dv = sm_next_member(&old, (uint64_t) -1, &oc);
 				 dv != SM_IDX_MAX;
 				 dv = sm_next_member(&old, dv, &oc))
 			{
-				sm_add_grow(&dead, dv);
-				ndead++;
+				if (ncarry >= carrycap)
+				{
+					carrycap = carrycap ? carrycap * 2 : 1024;
+					carry = carry ? repalloc(carry, carrycap * sizeof(uint64))
+						: palloc(carrycap * sizeof(uint64));
+				}
+				carry[ncarry++] = dv;
 			}
+			/* bulk O(N) add; one-at-a-time sm_add_grow is O(N^2) at scale */
+			if (ncarry > 0 && !sm_add_many_grow(&dead, carry, ncarry))
+				ereport(ERROR,
+						(errcode(ERRCODE_OUT_OF_MEMORY),
+						 errmsg("out of memory building bm25 tombstone set")));
+			ndead += ncarry;
+			if (carry)
+				pfree(carry);
 			pfree(buf);
 		}
 
-		/* ask the callback about each live (not-yet-tombstoned) docid */
-		for (v = sm_next_member(seen, (uint64_t) -1, &cur);
-			 v != SM_IDX_MAX;
-			 v = sm_next_member(seen, v, &cur))
+		/* ask the callback about each live (not-yet-tombstoned) docid.  Collect
+		 * the newly-dead docids and bulk-add them to `dead` once at the end:
+		 * each docid in `seen` is visited exactly once, so the in-loop
+		 * sm_contains() check only needs to see the carried-forward tombstones,
+		 * and adding one at a time with sm_add_grow would be O(N^2). */
 		{
-			ItemPointerData tid;
-			sm_cursor_t ccur = SM_CURSOR_INIT;
+			uint64	   *newdead = NULL;
+			int			nnew = 0,
+						newcap = 0;
 
-			num_index_tuples++;
-			if (sm_contains(dead, v, &ccur))
-				continue;		/* already tombstoned */
-			bm25_docid_to_tid(v, &tid);
-			if (callback(&tid, callback_state))
+			for (v = sm_next_member(seen, (uint64_t) -1, &cur);
+				 v != SM_IDX_MAX;
+				 v = sm_next_member(seen, v, &cur))
 			{
-				sm_add_grow(&dead, v);
-				ndead++;
-				tuples_removed++;
+				ItemPointerData tid;
+				sm_cursor_t ccur = SM_CURSOR_INIT;
+
+				num_index_tuples++;
+				if (sm_contains(dead, v, &ccur))
+					continue;		/* already tombstoned (carried forward) */
+				bm25_docid_to_tid(v, &tid);
+				if (callback(&tid, callback_state))
+				{
+					if (nnew >= newcap)
+					{
+						newcap = newcap ? newcap * 2 : 1024;
+						newdead = newdead ? repalloc(newdead, newcap * sizeof(uint64))
+							: palloc(newcap * sizeof(uint64));
+					}
+					newdead[nnew++] = v;
+					tuples_removed++;
+				}
 			}
+			if (nnew > 0 && !sm_add_many_grow(&dead, newdead, nnew))
+				ereport(ERROR,
+						(errcode(ERRCODE_OUT_OF_MEMORY),
+						 errmsg("out of memory building bm25 tombstone set")));
+			ndead += nnew;
+			if (newdead)
+				pfree(newdead);
 		}
 		sm_free(seen);
 

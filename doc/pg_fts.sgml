@@ -415,13 +415,32 @@ CREATE INDEX docs_bm25 ON docs USING fts (to_ftsdoc('english', body))
   </para>
 
   <para>
+   <emphasis role="bold">Time, and planning a window.</emphasis> The scan phase
+   parallelizes across <varname>max_parallel_maintenance_workers</varname>; the
+   final single-segment collapse (whether at the end of a build under the cap,
+   or an explicit <function>fts_merge</function>) is a single-backend pass that
+   reads and rewrites the whole index once, so its cost is roughly linear in the
+   index size.  As an order-of-magnitude planning figure, that collapse writes
+   on the order of tens of MB of index per second per core (measured ~40&ndash;60
+   MB/s on a commodity NVMe box; your hardware and vocabulary will vary), so a
+   multi-GB index takes minutes, not hours &mdash; but budget for it in a
+   maintenance window and watch the progress (below).  If a build must be
+   predictable on a modest box, a serial or low-parallelism build
+   (<literal>max_parallel_maintenance_workers = 0</literal> or a small value)
+   trades throughput for a smaller, more predictable peak memory and segment
+   count; combined with leaving the index tiered (the default above the cap) it
+   completes in a bounded, observable time rather than one open-ended collapse.
+  </para>
+
+  <para>
    <emphasis role="bold">Monitoring a build.</emphasis> The merge phase is not
    covered by <structname>pg_stat_progress_create_index</structname> (its
    <structfield>blocks_done</structfield> freezes once the scan finishes).  Poll
    <function>fts_index_nsegments(<replaceable>index</replaceable>)</function>
-   (which works on an in-progress <literal>indisvalid = f</literal> index) to
-   watch the segment count fall as merges complete, and set
-   <literal>client_min_messages = debug1</literal> (or
+   and <function>fts_index_stats(<replaceable>index</replaceable>)</function>
+   (both work on an in-progress <literal>indisvalid = f</literal> index) to
+   watch the segment count fall and the doc/term counts grow as merges complete,
+   and set <literal>client_min_messages = debug1</literal> (or
    <literal>log_min_messages = debug1</literal>) to see per-merge progress
    lines (<quote>merging N of M segments &hellip; wrote merged segment (T terms,
    D docs) in S s</quote>).
