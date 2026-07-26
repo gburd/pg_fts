@@ -725,6 +725,32 @@ RESET enable_seqscan;
 RESET maintenance_work_mem;
 DROP TABLE hivocab;
 
+-- Parallel fts_merge: with >2 live segments and parallel maintenance workers
+-- available, fts_merge() compacts them via the parallel merge (workers each
+-- merge a disjoint segment group; the leader installs the result atomically).
+-- Build a segment, then two more via VACUUM-flushed batches of the same size
+-- (a run of 3 is below the tiered auto-merge threshold, so all 3 persist), then
+-- fts_merge to one.  Result parity is asserted; whether workers actually launch
+-- is environment-dependent and not asserted (the merged output is identical
+-- either way).
+SET max_parallel_maintenance_workers = 2;
+CREATE TABLE pmrg (id serial, d ftsdoc);
+INSERT INTO pmrg(d) SELECT to_ftsdoc('t'||(g%30)||' w'||g) FROM generate_series(1,300) g;
+CREATE INDEX pmrg_bm25 ON pmrg USING fts (d);
+INSERT INTO pmrg(d) SELECT to_ftsdoc('t'||(g%30)||' a'||g) FROM generate_series(1,300) g;
+VACUUM pmrg;
+INSERT INTO pmrg(d) SELECT to_ftsdoc('t'||(g%30)||' b'||g) FROM generate_series(1,300) g;
+VACUUM pmrg;
+SELECT fts_index_nsegments('pmrg_bm25') AS segs_before;   -- 3 (run of 3 < tier-min 4)
+SET enable_seqscan = off;
+SELECT count(*) AS t1_before FROM pmrg WHERE d @@@ 't1'::ftsquery;
+SELECT fts_merge('pmrg_bm25') AS merged;
+SELECT fts_index_nsegments('pmrg_bm25') AS segs_after;    -- 1
+SELECT count(*) AS t1_after FROM pmrg WHERE d @@@ 't1'::ftsquery;   -- == t1_before
+RESET enable_seqscan;
+RESET max_parallel_maintenance_workers;
+DROP TABLE pmrg;
+
 -- Streaming merge (memory-bounded k-way merge): a low maintenance_work_mem
 -- forces many segment flushes during build; a full merge then coalesces them
 -- to one segment via the streaming path (one term's postings at a time, not
