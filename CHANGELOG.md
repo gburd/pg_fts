@@ -2,6 +2,26 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.1.3
+
+Bug-fix release. **No on-disk format change** from 1.1.2; no **REINDEX**
+required (`ALTER EXTENSION pg_fts UPDATE TO '1.1.3'`).
+
+- **Fixed non-converging merges on a large, high-vocabulary index.** On a
+  multi-tens-of-GB index with many similarly-sized segments (e.g. a ~1.9M-doc /
+  ~45GB email-body corpus), `fts_merge` and the build's compaction could run for
+  hours without finishing: the segment merge was size-tiered with *unbounded
+  fan-in*, so it tried to merge essentially all segments into one in a single
+  pass over the whole index. The merge is now **leveled (LSM/HanoiDB-style) with
+  bounded fan-in**: a segment's level is derived from its size and no single
+  merge combines more than a bounded number of segments, so compaction proceeds
+  in small, discrete, observable steps (each merge logs `merging N of M
+  segments` at `DEBUG1`) with bounded write amplification and always converges.
+  Validated on a 1.9M-doc / 26GB corpus: build to a bounded tiered set in ~17
+  minutes; `fts_merge` collapse to a single segment in ~8 minutes; previously it
+  did not complete. The segment level is computed from size, not stored, so the
+  on-disk format is unchanged and no REINDEX is needed.
+
 ## 1.1.2
 
 Bug-fix release. **No on-disk format change** from 1.1.1; no **REINDEX**
