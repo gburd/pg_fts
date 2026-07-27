@@ -5,20 +5,23 @@ they are not rediscovered. Ordered roughly by value.
 
 ## Performance
 
-0. **Leveled (Hanoi/LSM) merge with bounded fan-in.**
-   As of 1.1.0 the index is a size-tiered set of segments and a large build
-   stops at a bounded tiered set (converges) instead of one all-at-once collapse
-   (see `pg_fts.build_collapse_max_mb`).  The tier selector
-   (`bm25_merge_segments`) still merges an entire same-size tier in one pass,
-   which can be a large single merge when a uniform build produces many equal
-   segments.  A true leveled scheme (each level holds a bounded number of runs;
-   over-capacity merges that level and promotes) would cap the fan-in per merge
-   and give O(N log N) total work with bounded write amplification and fully
-   incremental, observable progress -- the HanoiDB / RocksDB model.  The O(N)
-   trigram build (1.1.0) removed the pathology that made this urgent (merges are
-   now tractable); this is the clean long-term structure.  Reference
-   implementation to mirror: aether `src/lsm/hanoi.rs` (level capacity
-   2^(level-1), `levels_needing_compaction`, work-budget stepping).
+0. **Parallel-build in-scan compaction (rate-limited) to stay under the segment cap.**
+   The leveled bounded-fan-in merge landed in 1.1.3 and was hardened in 1.1.4
+   (content-based commit guard so a merge commits alongside concurrent flushes;
+   extend-only merge output so a merge never recycles a just-freed page it is
+   still reading -- the SIGBUS fix).  Remaining gap: a PARALLEL build's workers
+   only flush (they do not merge in-scan), so on a corpus that flushes very many
+   segments the directory can climb toward `BM25_MAX_SEGMENTS` (128) before the
+   end-of-build merge runs, and `bm25_meta_add_segment` errors out.  A naive
+   in-scan merge triggered per-flush and serialized on the relation-extension
+   lock (tried, reverted) bounds the count but collapses scan throughput (all
+   workers block while one merges).  The right fix is a rate-limited / budgeted
+   in-scan compaction: merge a bounded amount per trigger without holding a lock
+   that stalls the scanners, or raise the effective flush size under segment
+   pressure so fewer segments are created.  The field's mwm=1GB config stays
+   well under the cap, so this is a robustness backstop, not a live blocker.
+   Reference: aether `src/lsm/hanoi.rs` work-budget stepping
+   (`compute_work_budget`) for the rate-limited-compaction shape.
 
 1. **Verify parallel merge at scale.**
    Parallel merge (`bm25_merge_all_parallel`) is implemented and verified

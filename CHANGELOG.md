@@ -2,6 +2,26 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.1.4
+
+Bug-fix release. **No on-disk format change** from 1.1.3; no **REINDEX**
+required (`ALTER EXTENSION pg_fts UPDATE TO '1.1.4'`).
+
+- **Fixed segment merges that could fail to converge, or crash, on a large,
+  high-vocabulary index.** Two issues in the merge path, both exposed only at
+  scale (validated on a ~1.9M-doc / 40GB+ index):
+  - A merge discarded its finished output and retried if the segment directory
+    changed at all while it ran (for example a concurrent flush appending a
+    segment). On a big index each merge takes minutes, so it could read a great
+    deal and never commit -- the reported "reads hundreds of GB, segment count
+    never drops" non-convergence. A merge now re-locates its inputs by content
+    and commits alongside concurrent flushes.
+  - A committed merge freed its input pages, which the next merge could recycle
+    for its output while still reading the previous chain -- leading to a rare
+    crash (SIGBUS) on very large merges. Merges now write to freshly extended
+    pages during the merge loop and reclaim the freed space afterward.
+  These are memory/scale-path fixes only; the on-disk format is unchanged.
+
 ## 1.1.3
 
 Bug-fix release. **No on-disk format change** from 1.1.2; no **REINDEX**
