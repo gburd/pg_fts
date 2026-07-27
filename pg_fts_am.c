@@ -2280,8 +2280,38 @@ bm25_free_segment(Relation index, const BM25SegMeta *seg)
  * from VACUUM.
  */
 #define BM25_MERGE_THRESHOLD 8		/* keep the live segment count at or below this */
-#define BM25_MERGE_TIER_MIN 4		/* merge when >= this many same-tier segments */
-#define BM25_MERGE_SIZE_FACTOR 3.0	/* "same tier" = within this size ratio */
+
+/*
+ * Leveled (HanoiDB/LSM-style) merge parameters.  A segment's LEVEL is derived
+ * from its live size: level = floor(log_FANOUT(size)) (size in live docs).  Each
+ * level holds up to BM25_MERGE_FANOUT runs; when a level fills, its runs are
+ * merged into one that lands in the next level.  This bounds the fan-in of any
+ * single merge to ~FANOUT segments -- unlike the old size-tiered selector, which
+ * merged an entire same-size run at once (all ~N segments when a build produced
+ * many near-equal segments), i.e. one giant single-backend pass over the whole
+ * index.  Bounded fan-in gives O(N log N) total merge work with bounded write
+ * amplification and small, discrete, observable merges.  Level is COMPUTED from
+ * size (not stored), so there is no on-disk format change.
+ */
+#define BM25_MERGE_FANOUT 8			/* runs per level before it compacts + promotes */
+#define BM25_MAX_LEVELS 24			/* FANOUT^24 = 8^24 docs -- far beyond any real corpus */
+
+/* Derive a segment's level from its live doc count (level 0 = smallest). */
+static int
+bm25_seg_level(double livesize)
+{
+	double		s = livesize < 1.0 ? 1.0 : livesize;
+	int			level = 0;
+	double		cap = (double) BM25_MERGE_FANOUT;
+
+	/* level L covers sizes [FANOUT^L, FANOUT^(L+1)); clamp to BM25_MAX_LEVELS-1 */
+	while (s >= cap && level < BM25_MAX_LEVELS - 1)
+	{
+		cap *= (double) BM25_MERGE_FANOUT;
+		level++;
+	}
+	return level;
+}
 
 /* segment (index,size) pair for sorting merge candidates by size */
 typedef struct MergeCand
@@ -2734,8 +2764,10 @@ bm25_merge_all(Relation index, bool try_parallel)
 	for (guard = 0; guard < BM25_MAX_SEGMENTS; guard++)
 	{
 		BM25MetaPageData meta;
+		MergeCand	cand[BM25_MAX_SEGMENTS];
 		uint32		sel[BM25_MAX_SEGMENTS];
 		uint32		nsel = 0;
+		uint32		ncand = 0;
 		uint32		i;
 
 		{
@@ -2748,13 +2780,33 @@ bm25_merge_all(Relation index, bool try_parallel)
 		if (meta.nsegments <= 1)
 			break;				/* already optimal */
 
-		/* select every populated segment */
+		/*
+		 * Collapse toward one segment in BOUNDED FAN-IN batches: sort populated
+		 * segments by live size and merge the smallest <= BM25_MERGE_FANOUT of
+		 * them each pass.  Merging all N at once (the old behavior) was a single
+		 * multi-GB single-backend pass over the whole index -- on a large,
+		 * high-vocabulary corpus that terminal merge is the field-reported
+		 * non-converging "one segment rewritten forever".  Smallest-first bounded
+		 * batches keep each pass cheap and observable (nsegments falls a bounded
+		 * step per pass) and still reach a single segment.
+		 */
 		for (i = 0; i < meta.nsegments; i++)
 			if (meta.segs[i].dictstart != InvalidBlockNumber)
-				sel[nsel++] = i;
-		if (nsel <= 1)
+			{
+				cand[ncand].idx = i;
+				cand[ncand].size = meta.segs[i].ndocs - meta.segs[i].ndeleted;
+				if (cand[ncand].size < 1)
+					cand[ncand].size = 1;
+				ncand++;
+			}
+		if (ncand <= 1)
 			break;
+		qsort(cand, ncand, sizeof(MergeCand), cmp_mergecand);
+		for (i = 0; i < ncand && nsel < BM25_MERGE_FANOUT; i++)
+			sel[nsel++] = cand[i].idx;
 
+		if (nsel < 2)
+			break;
 		if (!bm25_merge_selected(index, sel, nsel))
 			break;				/* directory changed underneath; stop */
 		didwork = true;
@@ -3151,16 +3203,23 @@ bm25_merge_segments(Relation index)
 	int			guard;
 
 	/*
-	 * Repeatedly merge one qualifying size-tier until no tier has enough
-	 * segments and the total count is within budget.  The guard bounds the loop
-	 * (each successful merge reduces nsegments).
+	 * Leveled (HanoiDB/LSM) compaction: each pass, assign every live segment a
+	 * level from its size, and if any level holds >= BM25_MERGE_FANOUT runs,
+	 * merge JUST that level's runs into one (which lands in the next level).
+	 * Merging only one level at a time bounds the fan-in of any single merge to
+	 * ~FANOUT segments, so no pass is ever the giant "merge all N segments at
+	 * once" that the old size-tiered selector produced on a build of many
+	 * near-equal segments.  The loop compacts the lowest over-capacity level
+	 * first (cheapest), converging in O(log) passes; the guard bounds it (each
+	 * successful merge strictly reduces nsegments).
 	 */
 	for (guard = 0; guard < BM25_MAX_SEGMENTS; guard++)
 	{
 		BM25MetaPageData meta;
-		MergeCand	cand[BM25_MAX_SEGMENTS];
 		uint32		sel[BM25_MAX_SEGMENTS];
 		uint32		nsel = 0;
+		int			lvlcount[BM25_MAX_LEVELS];
+		int			target = -1;
 		uint32		i;
 
 		{
@@ -3173,41 +3232,67 @@ bm25_merge_segments(Relation index)
 		if (meta.nsegments <= 1)
 			return;
 
-		/* candidates sorted by live size (ndocs - ndeleted) */
+		/* count runs per level */
+		memset(lvlcount, 0, sizeof(lvlcount));
 		for (i = 0; i < meta.nsegments; i++)
 		{
-			cand[i].idx = i;
-			cand[i].size = meta.segs[i].ndocs - meta.segs[i].ndeleted;
-			if (cand[i].size < 1)
-				cand[i].size = 1;
+			if (meta.segs[i].dictstart == InvalidBlockNumber)
+				continue;
+			lvlcount[bm25_seg_level(meta.segs[i].ndocs - meta.segs[i].ndeleted)]++;
 		}
-		qsort(cand, meta.nsegments, sizeof(MergeCand), cmp_mergecand);
 
-		/* longest run of same-tier segments from the smallest: each within
-		 * BM25_MERGE_SIZE_FACTOR of the run's smallest member */
+		/* lowest level that is over capacity (>= FANOUT runs) is compacted first */
+		for (i = 0; i < BM25_MAX_LEVELS; i++)
+			if (lvlcount[i] >= BM25_MERGE_FANOUT)
+			{
+				target = (int) i;
+				break;
+			}
+
+		/*
+		 * If no level is over capacity but the total count still exceeds the
+		 * budget, compact the lowest level that has >= 2 runs -- this bounds the
+		 * live segment count (query cost) without ever selecting more than one
+		 * level's worth (bounded fan-in).
+		 */
+		if (target < 0 && meta.nsegments > BM25_MERGE_THRESHOLD)
+			for (i = 0; i < BM25_MAX_LEVELS; i++)
+				if (lvlcount[i] >= 2)
+				{
+					target = (int) i;
+					break;
+				}
+
+		if (target < 0)
+			return;				/* every level within capacity + count OK */
+
+		/* select up to BM25_MERGE_FANOUT smallest segments in the target level
+		 * (bounded fan-in: never merge a whole over-full level at once, which for
+		 * pg_fts's near-equal flushed segments would be an all-at-once pass) */
 		{
-			double		base = cand[0].size;
-			uint32		run = 0;
+			MergeCand	lc[BM25_MAX_SEGMENTS];
+			uint32		nlc = 0;
 
 			for (i = 0; i < meta.nsegments; i++)
 			{
-				if (cand[i].size <= base * BM25_MERGE_SIZE_FACTOR)
-					run++;
-				else
-					break;
+				double		sz;
+
+				if (meta.segs[i].dictstart == InvalidBlockNumber)
+					continue;
+				sz = meta.segs[i].ndocs - meta.segs[i].ndeleted;
+				if (bm25_seg_level(sz) != target)
+					continue;
+				lc[nlc].idx = i;
+				lc[nlc].size = sz < 1 ? 1 : sz;
+				nlc++;
 			}
-			/* merge this tier if large enough, or if we simply have too many
-			 * segments overall (force progress toward the budget) */
-			if (run >= BM25_MERGE_TIER_MIN ||
-				(meta.nsegments > BM25_MERGE_THRESHOLD && run >= 2))
-			{
-				for (i = 0; i < run; i++)
-					sel[nsel++] = cand[i].idx;
-			}
+			qsort(lc, nlc, sizeof(MergeCand), cmp_mergecand);
+			for (i = 0; i < nlc && nsel < BM25_MERGE_FANOUT; i++)
+				sel[nsel++] = lc[i].idx;
 		}
 
 		if (nsel < 2)
-			return;				/* no tier worth merging */
+			return;				/* nothing to do (shouldn't happen: count >= 2) */
 		if (!bm25_merge_selected(index, sel, nsel))
 			return;				/* directory changed underneath */
 	}
