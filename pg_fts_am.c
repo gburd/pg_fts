@@ -435,6 +435,7 @@ bm25_build_mem_budget(void)
  * flush (we only flush between tuples), so no document is split across
  * segments and each segment's ndocs/sumdoclen are self-consistent.
  */
+
 static void
 bm25_build_flush_segment(Relation index, BM25BuildState *bs)
 {
@@ -2432,41 +2433,63 @@ bm25_merge_selected(Relation index, const uint32 *sel, uint32 nsel)
 		GenericXLogState *state;
 		Page		mp;
 		BM25MetaPageData *m;
-		bool		same = true;
+		bool		allfound = true;
+		bool		consumed[BM25_MAX_SEGMENTS];
 
 		LockBuffer(mb, BUFFER_LOCK_EXCLUSIVE);
 		state = GenericXLogStart(index);
 		mp = GenericXLogRegisterBuffer(state, mb, 0);
 		m = BM25PageGetMeta(mp);
 
-		/* single-writer (VACUUM/flush/build) context, but re-check the chosen
-		 * descriptors still match before committing the rewrite */
-		if (m->nsegments != meta.nsegments)
-			same = false;
-		for (i = 0; same && i < nsel; i++)
-			if (memcmp(&m->segs[sel[i]], &chosen[i], sizeof(BM25SegMeta)) != 0)
-				same = false;
+		/*
+		 * Re-locate each chosen input segment by CONTENT (not by its old
+		 * positional index) in the current directory.  A concurrent flush during
+		 * this (possibly long) merge appends new segments and changes nsegments
+		 * and shifts positions -- but our chosen inputs are immutable until we
+		 * free them, so they are still present.  Matching by content lets the
+		 * merge COMMIT alongside newly-flushed segments instead of aborting on
+		 * any directory change (which, on a large corpus where each merge takes
+		 * minutes and the scan keeps flushing, caused the merge to discard its
+		 * output and re-read forever -- never converging).  We only abort if a
+		 * chosen input is genuinely gone (another merge already consumed it).
+		 */
+		{
+			uint32		j;
 
-		if (same)
+			memset(consumed, 0, sizeof(bool) * m->nsegments);
+			for (i = 0; i < nsel; i++)
+			{
+				bool		found = false;
+
+				for (j = 0; j < m->nsegments; j++)
+				{
+					if (!consumed[j] &&
+						memcmp(&m->segs[j], &chosen[i], sizeof(BM25SegMeta)) == 0)
+					{
+						consumed[j] = true;	/* claim this slot for this input */
+						found = true;
+						break;
+					}
+				}
+				if (!found)
+				{
+					allfound = false;
+					break;
+				}
+			}
+		}
+
+		if (allfound)
 		{
 			BM25SegMeta kept[BM25_MAX_SEGMENTS];
 			uint32		nkept = 0;
 			uint32		j;
-			bool		issel;
 
-			/* keep every segment not in sel[], preserving order */
-			for (i = 0; i < m->nsegments; i++)
-			{
-				issel = false;
-				for (j = 0; j < nsel; j++)
-					if (sel[j] == i)
-					{
-						issel = true;
-						break;
-					}
-				if (!issel)
-					kept[nkept++] = m->segs[i];
-			}
+			/* keep every segment NOT consumed as an input, preserving order
+			 * (this retains any segment a concurrent flush appended) */
+			for (j = 0; j < m->nsegments; j++)
+				if (!consumed[j])
+					kept[nkept++] = m->segs[j];
 			kept[nkept++] = newseg;	/* append the merged segment */
 			memcpy(m->segs, kept, nkept * sizeof(BM25SegMeta));
 			m->nsegments = nkept;
@@ -2482,8 +2505,8 @@ bm25_merge_selected(Relation index, const uint32 *sel, uint32 nsel)
 		}
 		else
 		{
-			/* directory changed; abandon (new segment leaks until next merge/
-			 * REINDEX -- rare, single-writer path) */
+			/* an input was already consumed by another merge; abandon (the new
+			 * segment leaks until the next merge/REINDEX -- rare) */
 			GenericXLogAbort(state);
 			UnlockReleaseBuffer(mb);
 			MemoryContextDelete(bs.ctx);
@@ -2738,6 +2761,7 @@ bm25_merge_all(Relation index, bool try_parallel)
 {
 	bool		didwork = false;
 	int			guard;
+	bool		saved_extend_only = bm25_alloc_extend_only;
 
 	/*
 	 * Try a parallel merge first (unless already inside a parallel operation,
@@ -2761,6 +2785,12 @@ bm25_merge_all(Relation index, bool try_parallel)
 			didwork = true;
 	}
 
+	/* extend-only serial collapse (same recycle-race avoidance as
+	 * bm25_merge_segments; freed inputs are reclaimed later) */
+	bm25_alloc_extend_only = true;
+
+	PG_TRY();
+	{
 	for (guard = 0; guard < BM25_MAX_SEGMENTS; guard++)
 	{
 		BM25MetaPageData meta;
@@ -2811,6 +2841,12 @@ bm25_merge_all(Relation index, bool try_parallel)
 			break;				/* directory changed underneath; stop */
 		didwork = true;
 	}
+	}
+	PG_FINALLY();
+	{
+		bm25_alloc_extend_only = saved_extend_only;
+	}
+	PG_END_TRY();
 	return didwork;
 }
 
@@ -3201,6 +3237,7 @@ static void
 bm25_merge_segments(Relation index)
 {
 	int			guard;
+	bool		saved_extend_only = bm25_alloc_extend_only;
 
 	/*
 	 * Leveled (HanoiDB/LSM) compaction: each pass, assign every live segment a
@@ -3212,7 +3249,20 @@ bm25_merge_segments(Relation index)
 	 * near-equal segments.  The loop compacts the lowest over-capacity level
 	 * first (cheapest), converging in O(log) passes; the guard bounds it (each
 	 * successful merge strictly reduces nsegments).
+	 *
+	 * Allocate merge output EXTEND-ONLY for the whole loop: a committed merge
+	 * frees its input pages to the FSM, and without this the NEXT merge's
+	 * bm25_new_buffer would recycle those freed blocks for its output while it is
+	 * still reading input posting/dict chains -- whose on-page nextblk pointers
+	 * may thread through a just-recycled (rewritten, or past-EOF) block, giving a
+	 * wrong read or a SIGBUS.  Extending to fresh high blocks means no in-flight
+	 * read chain ever points at a block this loop hands out; freed pages are
+	 * reclaimed later (VACUUM / bm25_truncate_free_tail).
 	 */
+	bm25_alloc_extend_only = true;
+
+	PG_TRY();
+	{
 	for (guard = 0; guard < BM25_MAX_SEGMENTS; guard++)
 	{
 		BM25MetaPageData meta;
@@ -3230,7 +3280,7 @@ bm25_merge_segments(Relation index)
 			UnlockReleaseBuffer(mb);
 		}
 		if (meta.nsegments <= 1)
-			return;
+			break;
 
 		/* count runs per level */
 		memset(lvlcount, 0, sizeof(lvlcount));
@@ -3264,7 +3314,7 @@ bm25_merge_segments(Relation index)
 				}
 
 		if (target < 0)
-			return;				/* every level within capacity + count OK */
+			break;				/* every level within capacity + count OK */
 
 		/* select up to BM25_MERGE_FANOUT smallest segments in the target level
 		 * (bounded fan-in: never merge a whole over-full level at once, which for
@@ -3292,10 +3342,16 @@ bm25_merge_segments(Relation index)
 		}
 
 		if (nsel < 2)
-			return;				/* nothing to do (shouldn't happen: count >= 2) */
+			break;				/* nothing to do (shouldn't happen: count >= 2) */
 		if (!bm25_merge_selected(index, sel, nsel))
-			return;				/* directory changed underneath */
+			break;				/* directory changed underneath */
 	}
+	}
+	PG_FINALLY();
+	{
+		bm25_alloc_extend_only = saved_extend_only;
+	}
+	PG_END_TRY();
 }
 
 /* ---- parallel index build (level 1: parallel heap scan + per-worker segment
