@@ -5,23 +5,21 @@ they are not rediscovered. Ordered roughly by value.
 
 ## Performance
 
-0. **Parallel-build in-scan compaction (rate-limited) to stay under the segment cap.**
+0. **Parallel-build segment-count control (addressed via `pg_fts.build_mem_ceiling_mb`; in-scan compaction still open).**
    The leveled bounded-fan-in merge landed in 1.1.3 and was hardened in 1.1.4
-   (content-based commit guard so a merge commits alongside concurrent flushes;
-   extend-only merge output so a merge never recycles a just-freed page it is
-   still reading -- the SIGBUS fix).  Remaining gap: a PARALLEL build's workers
-   only flush (they do not merge in-scan), so on a corpus that flushes very many
-   segments the directory can climb toward `BM25_MAX_SEGMENTS` (128) before the
-   end-of-build merge runs, and `bm25_meta_add_segment` errors out.  A naive
-   in-scan merge triggered per-flush and serialized on the relation-extension
-   lock (tried, reverted) bounds the count but collapses scan throughput (all
-   workers block while one merges).  The right fix is a rate-limited / budgeted
-   in-scan compaction: merge a bounded amount per trigger without holding a lock
-   that stalls the scanners, or raise the effective flush size under segment
-   pressure so fewer segments are created.  The field's mwm=1GB config stays
-   well under the cap, so this is a robustness backstop, not a live blocker.
-   Reference: aether `src/lsm/hanoi.rs` work-budget stepping
-   (`compute_work_budget`) for the rate-limited-compaction shape.
+   (content-based commit guard; extend-only merge output -- the SIGBUS fix).  A
+   parallel build's workers only flush (they do not merge in-scan), so on a
+   corpus that flushes very many segments the directory could climb toward
+   `BM25_MAX_SEGMENTS` (128).  1.1.5 addresses this the throughput-safe way with
+   the `pg_fts.build_mem_ceiling_mb` GUC: raising it lets each participant flush
+   fewer, larger segments so the count stays well under the cap, without any
+   in-scan merge (which, tried as a per-flush merge serialized on the relation-
+   extension lock, bounded the count but collapsed scan throughput -- rejected).
+   A truly automatic rate-limited in-scan compaction (merge a bounded amount per
+   trigger without a scan-stalling lock) remains open as a nice-to-have; the GUC
+   plus the O(N) validate fix (1.1.5) mean a large CIC build now completes
+   without it.  Reference: aether `src/lsm/hanoi.rs` `compute_work_budget` for
+   the rate-limited-compaction shape.
 
 1. **Verify parallel merge at scale.**
    Parallel merge (`bm25_merge_all_parallel`) is implemented and verified
