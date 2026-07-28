@@ -398,6 +398,20 @@ CREATE INDEX docs_bm25 ON docs USING fts (to_ftsdoc('english', body))
   </para>
 
   <para>
+   <emphasis role="bold">Fewer segments on a very large build.</emphasis> A build
+   flushes a new segment each time a participant's in-memory buffer reaches its
+   budget; by default that budget grows only up to
+   <literal>2 x maintenance_work_mem</literal>, so a very large corpus can
+   produce many segments.  If you have spare RAM and want fewer, larger segments
+   (less post-scan merging, and staying comfortably under the internal
+   128-segment limit), raise <varname>pg_fts.build_mem_ceiling_mb</varname> (the
+   per-participant flush-budget ceiling, in MB; <literal>0</literal> keeps the
+   default).  Peak build memory is then about
+   <literal>shared_buffers + (max_parallel_maintenance_workers + 1) x pg_fts.build_mem_ceiling_mb</literal>
+   &mdash; size it against your host's free RAM.
+  </para>
+
+  <para>
    <emphasis role="bold">Merge / finalization.</emphasis> After the scan the
    build compacts the many per-worker segments.  Rather than always collapsing
    to a single segment (a single-backend pass over the whole index that can run
