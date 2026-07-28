@@ -398,6 +398,27 @@ bm25_build_mem_budget(void)
 }
 
 /*
+ * Ceiling the per-participant flush budget may grow to.  Default (GUC == 0) is
+ * 2 * maintenance_work_mem -- the memory-safe cap from 1.0.6 that prevents a
+ * geometrically-doubling budget from driving a parallel build into swap death.
+ * When pg_fts.build_mem_ceiling_mb > 0 the operator raises the ceiling to trade
+ * RAM for fewer, larger segments (so a huge build stays under the segment cap);
+ * peak build memory is ~(workers+1) * ceiling.  Never below 2*mwm so setting a
+ * small value can't make the build flush more often than the default.
+ */
+static Size
+bm25_build_mem_ceiling(void)
+{
+	Size		default_ceiling = (Size) 2 *bm25_build_mem_budget();
+	Size		guc_ceiling;
+
+	if (pg_fts_build_mem_ceiling_mb <= 0)
+		return default_ceiling;
+	guc_ceiling = (Size) pg_fts_build_mem_ceiling_mb * 1024 * 1024;
+	return guc_ceiling > default_ceiling ? guc_ceiling : default_ceiling;
+}
+
+/*
  * Bound a build participant's flush-segment count without merging mid-build.
  *
  * Each participant (the serial builder, or the leader + each parallel worker)
@@ -487,7 +508,7 @@ bm25_build_flush_segment(Relation index, BM25BuildState *bs)
 		bs->flush_budget = bm25_build_mem_budget();
 	bs->nflushes++;
 	if (bs->nflushes % BM25_BUILD_FLUSHES_PER_TIER == 0 &&
-		bs->flush_budget < (Size) 2 * bm25_build_mem_budget())
+		bs->flush_budget < bm25_build_mem_ceiling())
 		bs->flush_budget *= 2;
 
 	/* reset: free everything in the build context and start a fresh segment */
@@ -902,6 +923,16 @@ static bool bm25_alloc_extend_only = false;
  * above it the build stops at a bounded tiered set so it always converges.
  * Defined here, registered in _PG_init (pg_fts_customscan.c). */
 int			pg_fts_build_collapse_max_mb = 4096;
+
+/* GUC: per-participant flush-budget growth ceiling, in MB.  0 = keep the safe
+ * default ceiling of 2 * maintenance_work_mem (unchanged behavior).  When set
+ * larger, a build lets each participant's flush budget grow up to this, so a
+ * large corpus flushes FEWER, LARGER segments and the live segment count stays
+ * well under BM25_MAX_SEGMENTS (which would otherwise abort a very large
+ * parallel build).  Peak build memory is about (max_parallel_maintenance_workers
+ * + 1) * this ceiling -- size it against available RAM.  Defined here,
+ * registered in _PG_init (pg_fts_customscan.c). */
+int			pg_fts_build_mem_ceiling_mb = 0;
 
 static int
 cmp_blocknumber(const void *a, const void *b)
@@ -4120,12 +4151,25 @@ bm25_segment_docids(Relation index, const BM25SegMeta *seg)
 {
 	sm_t	   *seen = sm_create(256);
 	BlockNumber blk = seg->dictstart;
+	uint64	   *ids = NULL;
+	int			nids = 0;
+	int			capids = 0;
 
 	if (seen == NULL)
 		ereport(ERROR,
 				(errcode(ERRCODE_OUT_OF_MEMORY),
 				 errmsg("out of memory building bm25 tombstone map")));
 
+	/*
+	 * Collect EVERY posting's docid across all terms into one array, then do a
+	 * SINGLE bulk add.  A high-vocabulary segment has millions of low-frequency
+	 * (often single-doc) terms; adding each term's postings with its own
+	 * sm_add_many_grow call restarts the sparsemap cursor per call, so the adds
+	 * are effectively unsorted and each re-walks the chunk chain -> O(N^2) (the
+	 * CIC-validate / VACUUM spin observed at scale).  One bulk add over the full
+	 * array sorts once and threads the cursor across the whole ascending run =
+	 * true O(N).
+	 */
 	while (blk != InvalidBlockNumber)
 	{
 		Buffer		buffer = ReadBuffer(index, blk);
@@ -4151,18 +4195,14 @@ bm25_segment_docids(Relation index, const BM25SegMeta *seg)
 								  de->df, &post, NULL, false, NULL);
 			if (np > 0)
 			{
-				uint64	   *ids = (uint64 *) palloc(np * sizeof(uint64));
-
+				if (nids + np > capids)
+				{
+					capids = Max(nids + np, capids ? capids * 2 : 4096);
+					ids = ids ? FTS_REALLOC_MAYBE_HUGE(ids, (Size) capids * sizeof(uint64))
+						: (uint64 *) FTS_ALLOC_MAYBE_HUGE((Size) capids * sizeof(uint64));
+				}
 				for (k = 0; k < np; k++)
-					ids[k] = bm25_tid_to_docid(&post[k].tid);
-				/* bulk O(N) add (cursor-threaded); adding one at a time with
-				 * sm_add_grow re-walks the map head per insert -> O(N^2) on a
-				 * large segment's docid set. */
-				if (!sm_add_many_grow(&seen, ids, np))
-					ereport(ERROR,
-							(errcode(ERRCODE_OUT_OF_MEMORY),
-							 errmsg("out of memory building bm25 livedocs set")));
-				pfree(ids);
+					ids[nids++] = bm25_tid_to_docid(&post[k].tid);
 			}
 			pfree(post);
 			ptr += esize;
@@ -4170,6 +4210,13 @@ bm25_segment_docids(Relation index, const BM25SegMeta *seg)
 		UnlockReleaseBuffer(buffer);
 		blk = next;
 	}
+
+	if (nids > 0 && !sm_add_many_grow(&seen, ids, nids))
+		ereport(ERROR,
+				(errcode(ERRCODE_OUT_OF_MEMORY),
+				 errmsg("out of memory building bm25 livedocs set")));
+	if (ids)
+		pfree(ids);
 	return seen;
 }
 
