@@ -2,6 +2,23 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.1.6
+
+Bug-fix release. **No on-disk format change** from 1.1.5; no **REINDEX**
+required (`ALTER EXTENSION pg_fts UPDATE TO '1.1.6'`).
+
+- **Fixed `ORDER BY doc <=> query` (ranked) index scans silently returning
+  fewer rows than match.** A ranked query retrieved through the KNN/ordered
+  index scan capped at ~4096 rows regardless of how many documents actually
+  matched (e.g. 6057 or 19347 matches both returned ~4096), independent of
+  `LIMIT` -- so ranked search dropped and mis-ordered results. The ordered scan
+  had an internal top-k ceiling meant to bound worst-case latency, but a KNN
+  index scan must return every matching row in score order (the query's `LIMIT`
+  is the only bound). The ceiling is removed: the scan now returns the complete
+  match set in order. A small `LIMIT` (a page of results) is still served
+  cheaply; only an explicit large/unbounded ranked scan does the deeper work.
+  The plain `@@@` match path was always complete and is unaffected.
+
 ## 1.1.5
 
 Bug-fix and usability release. **No on-disk format change** from 1.1.4; no
