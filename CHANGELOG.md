@@ -2,6 +2,25 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.1.5
+
+Bug-fix and usability release. **No on-disk format change** from 1.1.4; no
+**REINDEX** required (`ALTER EXTENSION pg_fts UPDATE TO '1.1.5'`).
+
+- **Fixed a very slow `CREATE INDEX CONCURRENTLY` finalization on a large,
+  high-vocabulary index.** After the merge converged, the CONCURRENTLY
+  validation phase could run for a very long time at 100% CPU without
+  completing. It built a per-segment live-document set one dictionary term at a
+  time, which was quadratic on a segment with millions of low-frequency terms.
+  It now builds that set in one linear pass. On a ~1.9M-document body corpus the
+  validation phase drops from over an hour (not completing) to a few minutes.
+- **New GUC `pg_fts.build_mem_ceiling_mb`** (default `0` = previous behavior):
+  the per-participant flush-budget ceiling, in MB. Raising it lets a large build
+  flush fewer, larger segments so the segment count stays well under the
+  internal limit -- useful when you have spare RAM and want less post-scan
+  merging. Peak build memory is about
+  `shared_buffers + (max_parallel_maintenance_workers + 1) * pg_fts.build_mem_ceiling_mb`.
+
 ## 1.1.4
 
 Bug-fix release. **No on-disk format change** from 1.1.3; no **REINDEX**
