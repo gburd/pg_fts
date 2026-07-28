@@ -485,6 +485,18 @@ bm25_build_flush_segment(Relation index, BM25BuildState *bs)
 	bm25_meta_add_segment(index, &seg);
 
 	/*
+	 * Progress signal for a large build.  A high-vocabulary, heavy-tailed corpus
+	 * (long email bodies, quoted chains, code/patches) makes the per-document
+	 * text analysis (parse + stem) the dominant cost, so a serial build can run
+	 * for many minutes between flushes while it accumulates a budget's worth of
+	 * documents -- with nothing written and the segment count unchanged, which
+	 * looks indistinguishable from a hang.  Emit a LOG line at each flush so an
+	 * operator can see the build advancing (documents indexed, segments so far).
+	 */
+	elog(LOG, "pg_fts build: index \"%s\": flushed segment (%d terms, %.0f docs); %d segments so far",
+		 RelationGetRelationName(index), bs->nterms, bs->ndocs, bs->nflushes + 1);
+
+	/*
 	 * Grow the flush budget geometrically so this participant's flush count
 	 * stays far under BM25_MAX_SEGMENTS on a huge build, but CAP it at
 	 * 2 * maintenance_work_mem so peak build memory stays bounded.  The cap is
@@ -577,6 +589,21 @@ bm25_build_callback(Relation index, ItemPointer tid, Datum *values,
 
 	bs->ndocs += 1.0;
 	bs->sumdoclen += doc->doclen;
+
+	/*
+	 * Coarse progress heartbeat.  On a heavy corpus the per-document analysis
+	 * dominates and a whole budget of documents accumulates between segment
+	 * flushes (minutes of apparent silence); a periodic LOG line shows the scan
+	 * is advancing rather than wedged.  A process-local counter is sufficient
+	 * (serial build = one process; a parallel worker logs its own share).
+	 */
+	{
+		static long	built = 0;
+
+		if ((++built % 250000) == 0)
+			elog(LOG, "pg_fts build: index \"%s\": ~%ld documents analyzed",
+				 RelationGetRelationName(index), built);
+	}
 
 	MemoryContextSwitchTo(old);
 }

@@ -2,6 +2,28 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.1.7
+
+Bug-fix / observability release. **No on-disk format change** from 1.1.6; no
+**REINDEX** required (`ALTER EXTENSION pg_fts UPDATE TO '1.1.7'`).
+
+- **Build progress logging.** A build over a large corpus of long documents
+  (full email bodies, source code) is dominated by per-document text analysis
+  (tokenize + stem). A serial build (`max_parallel_maintenance_workers = 0`) on
+  a multi-gigabyte corpus can legitimately run for many minutes before the first
+  segment is flushed -- the in-memory buffer fills only after a whole budget's
+  worth of large documents, during which the segment count does not change and
+  nothing is written yet, which is hard to tell apart from a hang. The build now
+  emits a `LOG`-level line as documents are analyzed and at each segment flush
+  (set `log_min_messages = log` to see them), so a long build is distinguishable
+  from a stuck one. Verified end to end on a 1.97M-document / 54 GB-of-text
+  high-vocabulary corpus: a serial `english`-configuration build completes,
+  collapses to a single segment, and is valid and queryable; the wall-clock cost
+  is the inherent analysis cost, which parallel workers reduce proportionally.
+- Documentation: expanded the large-build guidance with a build-time/throughput
+  section (analysis is the dominant cost and is embarrassingly parallel; how to
+  read the new progress logs).
+
 ## 1.1.6
 
 Bug-fix release. **No on-disk format change** from 1.1.5; no **REINDEX**
