@@ -382,8 +382,34 @@ CREATE INDEX docs_bm25 ON docs USING fts (to_ftsdoc('english', body))
   <para>
    Building an index over a large corpus of long, high-vocabulary documents
    (for example full email bodies or source code &mdash; many distinct,
-   low-frequency terms per document) has two cost drivers: build <emphasis>memory</emphasis>
-   and merge <emphasis>time</emphasis>.
+   low-frequency terms per document) has three cost drivers: build
+   <emphasis>memory</emphasis>, build <emphasis>time</emphasis> (dominated by
+   per-document text analysis), and merge <emphasis>time</emphasis>.
+  </para>
+
+  <para>
+   <emphasis role="bold">Build time and throughput.</emphasis> The largest cost
+   on a long-document corpus is usually the per-document text analysis itself
+   (tokenizing and, for a language configuration such as
+   <literal>english</literal>, stemming every token).  This work is inherent to
+   the text-search configuration, is proportional to the total token count, and
+   for very long documents dominates everything the index does.  It is also
+   <emphasis>embarrassingly parallel</emphasis>: set
+   <varname>max_parallel_maintenance_workers</varname> (and enough
+   <varname>max_parallel_workers</varname> /
+   <varname>max_worker_processes</varname>) so the analysis runs across cores
+   &mdash; on a many-core host this is the single biggest reduction in wall-clock
+   build time.  Keep the memory formula above in mind when choosing the worker
+   count (each participant holds its own budget).  A serial build
+   (<literal>max_parallel_maintenance_workers = 0</literal>) analyzes documents
+   one at a time and, on a multi-gigabyte corpus, can legitimately run for a long
+   time before the first segment is flushed &mdash; the buffer fills only after a
+   whole budget's worth of (large) documents.  During that window the segment
+   count does not change and nothing is written yet; the build emits a
+   <literal>LOG</literal>-level progress line as documents are analyzed and at
+   each segment flush (set <varname>log_min_messages</varname> to
+   <literal>log</literal> or lower to see them), so a long build can be
+   distinguished from a stuck one.
   </para>
 
   <para>
