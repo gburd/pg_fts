@@ -38,14 +38,6 @@ static double bm25_query_maxhits(Relation index, FtsQuery q, double N);
 /* forward decl: blob reader (pg_fts_trgm_index.c, included after this file) */
 static uint8 *bm25_read_blob(Relation index, BlockNumber blk, Size len);
 
-/*
- * Ceiling on the adaptive-k ordering scan's top-k.  A large k makes WAND's
- * threshold stay near zero (little pruning), degrading toward O(result * df),
- * so we refuse to grow k past this for deep pagination -- bounding worst-case
- * latency.  (Deep top-N over a broad query is inherently costly.)
- */
-#define BM25_MAX_ORDERK 4096
-
 /* Max terms in a phrase chain we evaluate positionally, and the per-docid
  * position scratch bound.  A phrase with more terms, or a per-(term,doc) tf
  * beyond BM25_PHRASE_POSBUF, falls back to the (correct) recheck path.  16383
@@ -1308,22 +1300,23 @@ bm25_gettuple(IndexScanDesc scan, ScanDirection dir)
 		int			prev = so->ordpos;
 
 		/*
-		 * Grow k for deeper scrolling, but cap it: (a) never past the query's
-		 * provable max hits (no more results exist), and (b) never past an
-		 * absolute ceiling -- a very large k defeats WAND pruning (threshold
-		 * stays ~0) and degrades to O(result * df), so beyond the ceiling we
-		 * stop growing and return what we have.  Deep top-N over a broad query
-		 * is inherently expensive; the ceiling bounds worst-case latency.
+		 * Grow k for deeper scrolling.  The ONLY correct stop is the query's
+		 * provable max hits: an ORDER BY <=> index scan is an amcanorderbyop
+		 * (KNN) scan and MUST be able to return EVERY matching tuple in score
+		 * order -- the executor's LIMIT bounds how many are actually pulled, so
+		 * the access method must not impose its own ceiling (doing so silently
+		 * truncated a query matching more than the ceiling to that ceiling; see
+		 * the "orderby distance scan undercounts" report).  Grow x4 until every
+		 * possible match is materialized.  A broad query with a large (or no)
+		 * LIMIT is inherently expensive here, but correctness wins: a small-LIMIT
+		 * page is still served cheaply from the first pass (WAND prunes hard for
+		 * small k); only an explicit deep/unbounded scan pays for the deep pass.
 		 */
 		if ((double) so->curk >= so->maxhits)
 			return false;		/* already have every possible match */
-		if (so->curk >= BM25_MAX_ORDERK)
-			return false;		/* refuse pathological deep pagination */
 		so->curk *= 4;
 		if ((double) so->curk > so->maxhits)
 			so->curk = Max((int) so->maxhits, 1);
-		if (so->curk > BM25_MAX_ORDERK)
-			so->curk = BM25_MAX_ORDERK;
 		so->nordered = bm25_topk_visible(scan->indexRelation, so->query,
 										 so->curk, true, &so->ordered);
 		so->ordpos = prev;		/* resume after the rows already emitted */

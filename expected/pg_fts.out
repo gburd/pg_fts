@@ -1391,6 +1391,36 @@ FROM (SELECT r.score AS s, lead(r.score) OVER (ORDER BY r.score DESC) AS lead_s
 
 RESET enable_seqscan;
 DROP TABLE bigord;
+-- Ordering-scan completeness past the adaptive-k growth ceiling.  An ORDER BY
+-- <=> index scan is a KNN (amcanorderbyop) scan and must return EVERY matching
+-- tuple in score order -- it must not impose its own row ceiling (a prior fixed
+-- cap silently truncated a query matching more than the cap to that cap; the
+-- executor's LIMIT is the only bound).  5000 docs all match 'wide'; a large
+-- LIMIT over the index ordering scan must yield all 5000, matching @@@.
+CREATE TABLE bigord2 (id serial, d ftsdoc);
+INSERT INTO bigord2 (d) SELECT to_ftsdoc('wide filler' || (g % 40)) FROM generate_series(1, 5000) g;
+CREATE INDEX bigord2_bm25 ON bigord2 USING fts (d);
+SET enable_seqscan = off;
+SELECT count(*) AS match_truth FROM bigord2 WHERE d @@@ 'wide'::ftsquery;   -- 5000
+ match_truth 
+-------------
+        5000
+(1 row)
+
+-- ordered index scan (bitmap disabled so the KNN Index Scan path is used) with
+-- a LIMIT well past the old 4096 ceiling must still return all 5000
+SET enable_bitmapscan = off;
+SELECT count(*) AS ordered_scan_rows FROM
+  (SELECT id FROM bigord2 WHERE d @@@ 'wide'::ftsquery
+   ORDER BY d <=> 'wide'::ftsquery LIMIT 1000000) s;   -- 5000 (was capped ~4096)
+ ordered_scan_rows 
+-------------------
+              5000
+(1 row)
+
+RESET enable_bitmapscan;
+RESET enable_seqscan;
+DROP TABLE bigord2;
 -- the fts index access method.
 CREATE TABLE idxdocs (id serial, d ftsdoc);
 INSERT INTO idxdocs (d) VALUES
