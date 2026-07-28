@@ -395,6 +395,13 @@ _PG_init(void)
 							4096, 0, INT_MAX,
 							PGC_USERSET, GUC_UNIT_MB, NULL, NULL, NULL);
 
+	DefineCustomIntVariable("pg_fts.build_mem_ceiling_mb",
+							"Per-participant build flush-budget growth ceiling (MB); 0 = 2*maintenance_work_mem.",
+							"Raise to trade RAM for fewer, larger segments on a very large build so its segment count stays under the cap. Peak build memory is about (max_parallel_maintenance_workers + 1) * this. 0 keeps the memory-safe default ceiling.",
+							&pg_fts_build_mem_ceiling_mb,
+							0, 0, INT_MAX,
+							PGC_USERSET, GUC_UNIT_MB, NULL, NULL, NULL);
+
 #ifdef PG_FTS_TEST_HOOKS
 	DefineCustomIntVariable("pg_fts.test_pause_advisory_key",
 							"TEST-ONLY: advisory key a scan waits on mid-collect (0=off).",
