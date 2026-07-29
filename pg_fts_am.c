@@ -2440,6 +2440,18 @@ bm25_page_recyclable(Relation index, Page page)
 
 	if (PageIsNew(page))
 		return true;
+	/*
+	 * During single-writer compaction (fts_vacuum / CIC), bm25_alloc_begin has
+	 * gathered the low free list and we hold a lock that excludes concurrent
+	 * scans -- so a just-freed page is safe to reuse IMMEDIATELY, and we MUST,
+	 * or the vacate+pack phase cannot repack into the low region it just freed
+	 * (it would extend instead, growing the file every pass and leaving no
+	 * truncatable tail -- observed as fts_vacuum making the index bigger).  The
+	 * recycle gate exists only to protect concurrent readers on the normal
+	 * INSERT/merge path; it does not apply here.
+	 */
+	if (bm25_lowfree != NULL || bm25_alloc_extend_only)
+		return true;
 	op = BM25PageGetOpaque(page);
 	if (!(op->flags & BM25_FREED))
 		return true;			/* not gated (older free, or in-use race) */

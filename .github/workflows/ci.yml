@@ -78,7 +78,7 @@ jobs:
           PGBIN=/usr/lib/postgresql/${{ matrix.pg }}/bin
           pg_virtualenv -v ${{ matrix.pg }} \
             make installcheck REGRESS= ISOLATION= \
-              PROVE_TESTS='t/003_corruption.pl t/004_encodings.pl t/005_concurrency.pl t/006_concurrent_extend.pl t/007_segment_cap.pl' \
+              PROVE_TESTS='t/003_corruption.pl t/004_encodings.pl t/005_concurrency.pl t/006_concurrent_extend.pl t/007_segment_cap.pl t/008_vacuum_reclaim.pl' \
               PG_CONFIG=$PGBIN/pg_config || {
               echo '=== TAP logs ==='
               cat tmp_check/log/*.log tmp_check/log/regress_log_* 2>/dev/null | tail -120 || true
