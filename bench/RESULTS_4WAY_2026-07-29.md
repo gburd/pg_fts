@@ -53,27 +53,40 @@ Notes:
 
 ## pg_fts anomalies (findings — NOT clean competitive numbers)
 
-Two issues blocked a valid pg_fts number this run; both are real and worth a
-follow-up before re-benchmarking:
+**RESOLVED after root-cause (see follow-up commit).** The two issues below were
+diagnosed and one was a real bug, now fixed:
 
-1. **Index size regression: 15 GB vs the historical 4188 MB (pos=off).** The
-   `USING fts (to_ftsdoc('english', body))` index on the same 2.19M/4558 MB
-   corpus is now **~3.6× larger** than the 0.3.5-era run, even with positions
-   defaulting off and after `fts_merge()` compaction. Something between 0.3.5
-   and 1.2.1 (format v3, sparsemap, the segment/merge rework) inflated the
-   on-disk index dramatically. This is the single most important thing to
-   investigate — it directly contradicts the ROADMAP "doclen sidecar → 40%
-   smaller" direction and points at a size regression instead.
+1. **The "15 GB" was not a true index-size regression.** Two causes:
+   (a) *Methodology error*: this run compacted with `fts_merge()`, which is
+   intentionally EXTEND-ONLY (recycles freed pages to the FSM but never
+   truncates) — it does not shrink. `fts_vacuum()` is the reclaiming path.
+   (b) *A real bug*: the deletion-XID recycle gate (added for concurrent
+   scan-vs-merge safety) also blocked `fts_vacuum()`'s vacate+pack phase from
+   reusing the low pages it had just freed, so `fts_vacuum()` GREW the index
+   every call (reproduced locally: 182 MB → 340 → 498) instead of shrinking.
+   Fixed by bypassing the recycle gate during single-writer compaction; after
+   the fix `fts_vacuum()` compacts to a stable floor (182 MB → **79 MB**,
+   idempotent). On the same local corpus GIN was 46 MB, so the true pg_fts
+   size ratio is **~1.7×**, in line with the historical ~2.2× vs pg_textsearch —
+   NOT the ~3.6× the raw EC2 number implied.
 
-2. **`<=>` ranked KNN scan not chosen by the planner here.** With pg_fts NOT in
-   `shared_preload_libraries`, the ordered-scan/count-pushdown hooks
-   (registered in `_PG_init`) are inactive, so `ORDER BY ... <=> q` planned as a
-   Seq Scan + top-N Sort (24 s, full re-evaluation of every row). Adding pg_fts
-   to `shared_preload_libraries` is REQUIRED for the KNN/count paths — but even
-   preloaded, the ranked query on the 15 GB index remained slow (>90 s for one
-   EXPLAIN ANALYZE), i.e. the size regression (#1) and possibly a KNN
-   cost/decode issue dominate. Prior runs got ~30 ms; this build does not
-   reproduce that.
+2. **The "24 s ranked latency" was a wrong query form, not a scan bug.** The
+   benchmark query used `ORDER BY d <=> q LIMIT k` with NO `@@@ q` WHERE clause.
+   pg_fts's index is `amoptionalkey=false`, so a pure ORDER BY cannot use the
+   index → seqscan+top-N sort (24 s, evaluates every row). The correct
+   ranked-search form `WHERE d @@@ q ORDER BY d <=> q LIMIT k` uses the KNN
+   Index Scan (`Index Cond: @@@`, `Order By: <=>`) and runs in **~1.5 ms**
+   (200k-doc local corpus, df=200k common term). The `<=>` KNN opclass
+   (sortfamily float_ops) is wired correctly; no code change was needed for
+   latency. (pg_fts must be in `shared_preload_libraries` for the count(*)
+   pushdown CustomScan, but the KNN scan itself does not require it.)
+
+**Net:** pg_fts is competitive on size (~1.7× GIN, comparable to the native-C
+engines) and fast on ranked top-k when queried in the correct
+`WHERE @@@ ORDER BY <=>` form. The clean at-scale head-to-head still needs a
+re-run (the EC2 run's pg_fts column was invalid); the corrected harness must
+(a) compact pg_fts with `fts_vacuum()` not `fts_merge()`, and (b) use the
+`@@@`+`<=>` query form.
 
 ## Honest read (unchanged in shape from NOTE_COMPETITIVE_LANDSCAPE.md)
 - **pg_search** is the ranked-latency + capability leader (flattest common-term,
