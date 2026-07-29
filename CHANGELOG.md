@@ -2,6 +2,41 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.2.1
+
+Bug-fix release. **No on-disk format change** from 1.2.0; no **REINDEX**
+required (`ALTER EXTENSION pg_fts UPDATE TO '1.2.1'`). Fixes three production
+failures on a continuously-written index and hardens the scan-vs-merge path.
+
+- **Fixed the 128-segment cap becoming an unrecoverable outage.** On an index
+  whose rows mostly exceed one page, every insert creates a segment; the live
+  count could reach the internal 128-segment maximum and then reject all further
+  writes -- and neither `VACUUM` nor `fts_merge()` could recover (merging needs a
+  free slot to flush pending into, a chicken-and-egg deadlock; only `REINDEX`
+  escaped). Adding a segment now merges to free a slot and retries instead of
+  erroring, so a write is never refused because compaction fell behind. In
+  addition, the index now compacts continuously on the write path (leveled LSM
+  merge after each segment-creating flush), keeping the segment count bounded
+  (O(log N) tiers) automatically -- no periodic `VACUUM`/`fts_merge()` needed to
+  stay healthy under continuous ingestion.
+- **Fixed `ERROR: unexpected data beyond EOF` when `fts_merge()`/`VACUUM` ran
+  concurrently with ingestion.** Relation extension was only locked during a
+  parallel build, so two ordinary backends extending the index at once (an
+  insert flush and a merge/vacuum) could race. The extension is now always
+  locked around the single page add, as heap and the core index AMs do;
+  concurrent writers still proceed in parallel. `fts_merge()` is now safe to run
+  while writes continue.
+- **Fixed a crash / wrong count from `count(*)` on an `@@@` query under plan
+  caching or concurrency.** The count-pushdown plan stored the query as a bare
+  internal pointer, which dangled once its planning memory was freed (e.g. a
+  `count(*)` in a PL/pgSQL loop, or concurrent re-execution), corrupting the
+  query and crashing the backend. The query is now deep-copied into the plan.
+- **Hardened concurrent scan vs. merge/vacuum** with a deletion-XID page-recycle
+  gate (a freed page is not reused until no in-progress scan could still
+  reference it) plus bounds checks on all page-derived lengths, so a scan that
+  races page recycling degrades to a retry rather than a crash. Format-
+  preserving (no `REINDEX`).
+
 ## 1.2.0
 
 Minor release, re-numbered from the 1.1.6 and 1.1.7 patch releases. It contains
