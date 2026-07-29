@@ -42,6 +42,7 @@
 #include <math.h>
 #include "access/genam.h"
 #include "access/generic_xlog.h"
+#include "access/transam.h"		/* ReadNextTransactionId (recycle gate) */
 #include "access/parallel.h"
 #include "access/reloptions.h"
 #include "access/relscan.h"
@@ -376,7 +377,10 @@ add_posting(BM25BuildState *bs, const char *term, int len,
 
 /* forward decls: segment writers are defined later; the build flush uses them */
 static void bm25_write_segment(Relation index, BM25BuildState *bs, BM25SegMeta *seg);
-static void bm25_meta_add_segment(Relation index, const BM25SegMeta *seg);
+static bool bm25_meta_add_segment(Relation index, const BM25SegMeta *seg);
+static void bm25_add_segment_with_room(Relation index, const BM25SegMeta *seg);
+static void bm25_free_page(Relation index, BlockNumber blk);
+static bool bm25_page_recyclable(Relation index, Page page);
 
 /*
  * Memory budget for the in-memory build state before it is flushed to a
@@ -482,7 +486,28 @@ bm25_build_flush_segment(Relation index, BM25BuildState *bs)
 	 * extension lock is taken at all.
 	 */
 	bm25_write_segment(index, bs, &seg);
-	bm25_meta_add_segment(index, &seg);
+
+	/*
+	 * Install the descriptor without ever failing on a full directory.  In a
+	 * PARALLEL build several participants flush concurrently and re-entering the
+	 * merge machinery here risks the finalize wedge that 1.1.2 fixed, so a
+	 * parallel participant uses the plain add and leaves compaction to the
+	 * serial finalize; the build's flush-budget ceiling keeps its own segment
+	 * count well under the cap.  Every other path (serial build, and especially
+	 * live INSERT/pending-flush on a visible index) uses the room-ensuring add
+	 * so a write is never refused because merging fell behind.
+	 */
+	if (IsInParallelMode())
+	{
+		if (!bm25_meta_add_segment(index, &seg))
+			ereport(ERROR,
+					(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+					 errmsg("bm25 index \"%s\" reached the maximum of %d segments during a parallel build",
+							RelationGetRelationName(index), BM25_MAX_SEGMENTS),
+					 errhint("Raise pg_fts.build_mem_ceiling_mb (fewer, larger segments) or lower max_parallel_maintenance_workers.")));
+	}
+	else
+		bm25_add_segment_with_room(index, &seg);
 
 	/*
 	 * Progress signal for a large build.  A high-vocabulary, heavy-tailed corpus
@@ -671,6 +696,48 @@ bm25_decode_term(Relation index, BlockNumber firstblk, uint32 firstoff,
 	int			n = 0;
 	BlockNumber blk = firstblk;
 	uint32		off = firstoff;
+
+	/*
+	 * Clamp df to a sane ceiling before sizing the allocation.  df is read from
+	 * a dictionary entry on a page pinned only BUFFER_LOCK_SHARE; a concurrent
+	 * merge/vacuum can free this segment's pages while a concurrent insert
+	 * recycles and overwrites them (pg_fts recycles freed pages with no
+	 * deletion-xid gate), so a scan that snapshotted the directory before that
+	 * can read a recycled dict page whose "df" is arbitrary -- which turned
+	 * the posting allocation below into an "invalid memory alloc request size"
+	 * (a multi-gigabyte request) and aborted a live query.
+	 *
+	 * The ceiling must be a bound no LEGITIMATE df can exceed, or we truncate
+	 * real postings.  A term's df counts documents at index time, so it can
+	 * exceed the current LIVE corpus size once rows are tombstoned -- the live
+	 * metapage ndocs is therefore the WRONG bound (it under-counts and drops
+	 * postings for a term whose docs were partly deleted).  The correct bound is
+	 * the total documents ever recorded across all segments INCLUDING tombstoned
+	 * ones (BM25SegMeta.ndocs is defined as docs incl. tombstones), i.e. the sum
+	 * of seg.ndocs; no term appears in more documents than exist.  A garbage df
+	 * is clamped to that; the block loop then decodes only the real posting
+	 * chain (delimited by nextblk), and the scan's generation re-check detects
+	 * the stale read and restarts.  The metapage is effectively always resident.
+	 */
+	{
+		BM25MetaPageData cmeta;
+		double		total = 0;
+		uint32		maxdf;
+		uint32		s;
+		Buffer		mb = ReadBuffer(index, BM25_METAPAGE_BLKNO);
+
+		LockBuffer(mb, BUFFER_LOCK_SHARE);
+		memcpy(&cmeta, BM25PageGetMeta(BufferGetPage(mb)), sizeof(cmeta));
+		UnlockReleaseBuffer(mb);
+		for (s = 0; s < cmeta.nsegments && s < BM25_MAX_SEGMENTS; s++)
+			total += cmeta.segs[s].ndocs;	/* incl. tombstoned */
+		total += cmeta.npending;		/* unmerged docs can match too */
+		maxdf = (total >= (double) UINT32_MAX) ? UINT32_MAX : (uint32) total;
+		if (maxdf < 1)
+			maxdf = 1;
+		if (df > maxdf)
+			df = maxdf;
+	}
 
 	posts = (BM25Posting *) ((Size) df * sizeof(BM25Posting) > MaxAllocSize
 							 ? MemoryContextAllocHuge(CurrentMemoryContext,
@@ -1020,6 +1087,15 @@ bm25_new_buffer(Relation index)
 		buffer = ReadBuffer(index, blk);
 		if (ConditionalLockBuffer(buffer))
 		{
+			if (!bm25_page_recyclable(index, BufferGetPage(buffer)))
+			{
+				/* a scan may still reference this just-freed page; leave it in
+				 * the FSM for a later allocation once its horizon passes */
+				LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
+				ReleaseBuffer(buffer);
+				RecordFreeIndexPage(index, blk);
+				continue;
+			}
 			RecordUsedIndexPage(index, blk);
 			return buffer;
 		}
@@ -1035,26 +1111,45 @@ bm25_new_buffer(Relation index)
 			break;				/* no free page; extend below */
 		buffer = ReadBuffer(index, blk);
 		if (ConditionalLockBuffer(buffer))
+		{
+			if (!bm25_page_recyclable(index, BufferGetPage(buffer)))
+			{
+				/* not yet safe to reuse (a concurrent scan could still be
+				 * reading it); re-record so it is handed out later, and try the
+				 * next free page.  Terminates: extension is the backstop when no
+				 * currently-recyclable free page exists. */
+				LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
+				ReleaseBuffer(buffer);
+				RecordFreeIndexPage(index, blk);
+				break;
+			}
 			return buffer;		/* got it */
+		}
 		/* someone else is using it; try the next free page */
 		ReleaseBuffer(buffer);
 	}
 
 	/*
-	 * Extend the relation.  Concurrent appenders (parallel build/merge
-	 * participants) would otherwise race on P_NEW and trip "unexpected data
-	 * beyond EOF", so the extension itself is serialized with the relation
-	 * extension lock -- but ONLY around the single P_NEW call, not around the
-	 * whole segment write.  Holding it for the entire (multi-GB) write would
-	 * serialize the participants' writes and defeat the parallel merge; a
-	 * per-page extension lock lets them write concurrently.
+	 * Extend the relation.  The relation extension lock MUST be held around the
+	 * P_NEW extension whenever ANY other backend might extend the same index
+	 * concurrently -- not just parallel-build participants.  A live index is
+	 * extended by several unrelated, non-parallel backends at once: an INSERT
+	 * flushing its pending buffer into a new segment, fts_merge() writing merged
+	 * output, and VACUUM/bulkdelete rewriting.  Without the lock, two such
+	 * backends race on ReadBuffer(P_NEW) and one trips "unexpected data beyond
+	 * EOF in block N" (a reader/extender hitting a block past its cached EOF
+	 * while another backend extends).  A field report hit exactly this running
+	 * fts_merge() concurrently with live ingestion.  (This used to be gated on
+	 * IsInParallelMode(), which covered only the parallel-build case and left
+	 * concurrent serial extenders racing.)  The lock is held ONLY around the
+	 * single P_NEW call, not the whole segment write, so concurrent writers
+	 * still write their pages in parallel -- only the one-block extend
+	 * serializes, which is how heap and every core index AM extend.
 	 */
-	if (IsInParallelMode())
-		LockRelationForExtension(index, ExclusiveLock);
+	LockRelationForExtension(index, ExclusiveLock);
 	buffer = ReadBuffer(index, P_NEW);
 	LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
-	if (IsInParallelMode())
-		UnlockRelationForExtension(index, ExclusiveLock);
+	UnlockRelationForExtension(index, ExclusiveLock);
 	return buffer;
 }
 
@@ -1708,13 +1803,16 @@ bm25_write_segment(Relation index, BM25BuildState *bs, BM25SegMeta *seg)
 
 /*
  * Append a segment descriptor to the metapage directory and fold its doc stats
- * into the corpus totals.  The directory is a fixed array in the metapage; the
- * size-tiered merge keeps the live segment count far below BM25_MAX_SEGMENTS,
- * so hitting the cap means merging is not keeping up -- we raise a clear error
- * (data is intact) rather than chain overflow directory pages, which would add
- * complexity to every reader for a case the merge policy makes unreachable.
+ * into the corpus totals.  Returns true on success, false if the fixed-size
+ * directory is already full (BM25_MAX_SEGMENTS).  The caller must react to a
+ * false return by merging to free a slot and retrying -- see
+ * bm25_add_segment_with_room().  A full directory must NEVER become a failed
+ * write: this is an index access method, and refusing an INSERT because merging
+ * fell behind under load is an outage, not an acceptable limit.  (A field
+ * deployment had to disable the index when live ingestion outran merging and
+ * hit the old hard error here.)
  */
-static void
+static bool
 bm25_meta_add_segment(Relation index, const BM25SegMeta *seg)
 {
 	Buffer		buf = ReadBuffer(index, BM25_METAPAGE_BLKNO);
@@ -1730,11 +1828,7 @@ bm25_meta_add_segment(Relation index, const BM25SegMeta *seg)
 	{
 		GenericXLogAbort(state);
 		UnlockReleaseBuffer(buf);
-		ereport(ERROR,
-				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-				 errmsg("bm25 index \"%s\" reached the maximum of %d segments",
-						RelationGetRelationName(index), BM25_MAX_SEGMENTS),
-				 errhint("Run VACUUM to merge segments, or REINDEX to rebuild.")));
+		return false;			/* directory full: caller merges + retries */
 	}
 	m->segs[m->nsegments] = *seg;
 	m->nsegments++;
@@ -1743,6 +1837,62 @@ bm25_meta_add_segment(Relation index, const BM25SegMeta *seg)
 	m->sumdoclen += seg->sumdoclen;
 	GenericXLogFinish(state);
 	UnlockReleaseBuffer(buf);
+	return true;
+}
+
+/* forward decl: bounded merge that reduces the live segment count */
+static void bm25_merge_segments(Relation index);
+static bool bm25_merge_all(Relation index, bool try_parallel);
+
+/*
+ * Add a segment, guaranteeing the write cannot fail because the directory is
+ * full.  If bm25_meta_add_segment reports no room, merge to free slots and
+ * retry.  Merging k>=2 segments into one strictly reduces the count, and a full
+ * directory always has >=2 mergeable segments, so a bounded number of merge
+ * passes always makes room.  We escalate: the cheap bounded-fan-in
+ * bm25_merge_segments first, then the more aggressive collapse if a concurrent
+ * flurry of flushes keeps the directory full.  This runs OUTSIDE the metapage
+ * lock (merging takes that lock itself), so concurrent inserters serialize
+ * naturally on the actual add.
+ */
+static void
+bm25_add_segment_with_room(Relation index, const BM25SegMeta *seg)
+{
+	int			try;
+
+	if (bm25_meta_add_segment(index, seg))
+		return;
+
+	for (try = 0; try < BM25_MAX_SEGMENTS; try++)
+	{
+		/*
+		 * Bounded-fan-in leveled merge first (cheapest); if that did not free a
+		 * slot in time (a concurrent flush refilled it, or every level was at
+		 * capacity so the leveled selector picked a small batch), fall back to
+		 * the smallest-first collapse, which always reduces the count while any
+		 * two segments remain.
+		 */
+		if ((try & 1) == 0)
+			bm25_merge_segments(index);
+		else
+			bm25_merge_all(index, false);
+		if (bm25_meta_add_segment(index, seg))
+			return;
+	}
+
+	/*
+	 * Unreachable in practice: a full directory always has >=2 segments to
+	 * merge, and each successful merge frees a slot, so one of the retries above
+	 * makes room unless another backend is adding segments faster than this one
+	 * can merge for BM25_MAX_SEGMENTS passes.  If we somehow get here the data
+	 * is intact (this segment simply is not yet in the directory); surface a
+	 * clear error rather than silently drop it.
+	 */
+	ereport(ERROR,
+			(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+			 errmsg("bm25 index \"%s\": could not free a segment-directory slot after %d merge passes",
+					RelationGetRelationName(index), BM25_MAX_SEGMENTS),
+			 errhint("Reduce write concurrency briefly or run fts_merge(), then retry.")));
 }
 
 
@@ -2237,6 +2387,65 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 	MemoryContextSwitchTo(old);
 }
 
+/*
+ * Recycle gate (format-preserving deletion-xid stamp).
+ *
+ * pg_fts frees a segment's pages to the FSM as soon as a merge/vacuum commits
+ * the new directory.  But a concurrent scan (AccessShareLock does NOT conflict
+ * with merge/vacuum's ShareUpdateExclusiveLock) may still be walking those
+ * pages from a directory snapshot it took before the commit.  If the allocator
+ * hands a just-freed page back to a concurrent inserter that overwrites it, the
+ * scan reads garbage -> wrong result / "invalid memory alloc" / SIGSEGV (a
+ * field-reported crash under concurrent read+insert+merge).
+ *
+ * Fix, mirroring nbtree's btpo.xact recycle gate: when a page is freed, stamp
+ * it with the current next-XID and mark it BM25_FREED, then hand it to the FSM.
+ * Before REUSING a free page, require that stamp to be "old enough" that no
+ * snapshot which could still reference it remains (GlobalVisCheckRemovableXid);
+ * otherwise skip the page and leave it in the FSM for later.  The XID lives in
+ * the freed page's nextblk field (dead once the page is off every chain), so
+ * the on-disk page layout is unchanged and existing indexes need no REINDEX; a
+ * page freed by an older build lacks BM25_FREED and is recyclable at once.
+ */
+static void
+bm25_free_page(Relation index, BlockNumber blk)
+{
+	Buffer		buf = ReadBuffer(index, blk);
+	GenericXLogState *state;
+	Page		page;
+	BM25PageOpaque op;
+
+	LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
+	state = GenericXLogStart(index);
+	page = GenericXLogRegisterBuffer(state, buf, 0);
+	op = BM25PageGetOpaque(page);
+	op->flags |= BM25_FREED;
+	/* reuse nextblk as the free-time XID horizon (page is now off all chains) */
+	op->nextblk = (BlockNumber) ReadNextTransactionId();
+	GenericXLogFinish(state);
+	UnlockReleaseBuffer(buf);
+	RecordFreeIndexPage(index, blk);
+}
+
+/*
+ * May a page fetched from the free list be reused now?  True if it was not
+ * gated by this mechanism (old-format free page, or a brand-new page), or if
+ * its free-XID stamp is old enough that no in-progress scan can still hold a
+ * directory snapshot referencing it.  `page` must be pinned + locked.
+ */
+static bool
+bm25_page_recyclable(Relation index, Page page)
+{
+	BM25PageOpaque op;
+
+	if (PageIsNew(page))
+		return true;
+	op = BM25PageGetOpaque(page);
+	if (!(op->flags & BM25_FREED))
+		return true;			/* not gated (older free, or in-use race) */
+	return GlobalVisCheckRemovableXid(index, (TransactionId) op->nextblk);
+}
+
 /* Recycle a chained page list (dict/trigram/posting/data) to the FSM. */
 static void
 bm25_free_chain(Relation index, BlockNumber blk)
@@ -2249,7 +2458,7 @@ bm25_free_chain(Relation index, BlockNumber blk)
 		LockBuffer(buf, BUFFER_LOCK_SHARE);
 		next = BM25PageGetOpaque(BufferGetPage(buf))->nextblk;
 		UnlockReleaseBuffer(buf);
-		RecordFreeIndexPage(index, blk);
+		bm25_free_page(index, blk);
 		blk = next;
 	}
 }
@@ -2286,7 +2495,7 @@ bm25_free_segment(Relation index, const BM25SegMeta *seg)
 			ptr += esize;
 		}
 		UnlockReleaseBuffer(buf);
-		RecordFreeIndexPage(index, blk);
+		bm25_free_page(index, blk);
 		blk = next;
 	}
 	if (postchain != InvalidBlockNumber)
@@ -2315,7 +2524,7 @@ bm25_free_segment(Relation index, const BM25SegMeta *seg)
 			ptr += MAXALIGN(sizeof(BM25TrgmEntry));
 		}
 		UnlockReleaseBuffer(buf);
-		RecordFreeIndexPage(index, blk);
+		bm25_free_page(index, blk);
 		blk = next;
 	}
 
@@ -3822,6 +4031,8 @@ bm25_insert_oversized_as_segment(Relation index, FtsDoc doc, ItemPointer tid)
 	bs.maxterms = 0;
 	bs.ndocs = 0;
 	bs.sumdoclen = 0;
+	bs.nflushes = 0;
+	bs.flush_budget = 0;
 	bm25_build_ht_init(&bs);
 
 	{
@@ -3846,21 +4057,21 @@ bm25_insert_oversized_as_segment(Relation index, FtsDoc doc, ItemPointer tid)
 	MemoryContextDelete(bs.ctx);
 
 	/*
-	 * A bulk INSERT/UPDATE of many oversized documents would create one
-	 * segment each and could approach BM25_MAX_SEGMENTS before the next VACUUM
-	 * gets a chance to merge.  Coalesce eagerly once the count climbs, so the
-	 * segment directory never overflows on a write-heavy oversized workload.
+	 * Keep the tiered segment set compacted as documents arrive.  On a
+	 * continuously-written table whose rows are mostly larger than one pending
+	 * page (long email bodies, articles, code -- the common case for a body
+	 * index), EVERY insert lands here and mints a segment, so without ongoing
+	 * compaction the directory climbs to the hard cap within the hour (a field
+	 * deployment did exactly this: 8 -> 128 segments in ~1h of ingestion, then
+	 * could neither merge nor VACUUM).  bm25_merge_segments() is the leveled LSM
+	 * compactor: it merges only a level that is over its fan-in capacity and is
+	 * a cheap metapage read when every level is within capacity, so calling it
+	 * after each flush keeps nsegments bounded (O(log N) tiers) instead of
+	 * letting it grow unbounded toward the cap.  This IS the background
+	 * auto-compaction: no VACUUM or manual fts_merge() is required to stay
+	 * healthy under continuous writes.
 	 */
-	{
-		BM25MetaPageData meta;
-		Buffer		mb = ReadBuffer(index, BM25_METAPAGE_BLKNO);
-
-		LockBuffer(mb, BUFFER_LOCK_SHARE);
-		memcpy(&meta, BM25PageGetMeta(BufferGetPage(mb)), sizeof(meta));
-		UnlockReleaseBuffer(mb);
-		if (meta.nsegments >= BM25_MAX_SEGMENTS - 16)
-			bm25_merge_segments(index);
-	}
+	bm25_merge_segments(index);
 }
 
 /*
@@ -4049,6 +4260,8 @@ bm25_flush_pending(Relation index)
 	bs.maxterms = 0;
 	bs.ndocs = 0;
 	bs.sumdoclen = 0;
+	bs.nflushes = 0;
+	bs.flush_budget = 0;
 	{
 		HASHCTL		ctl;
 
@@ -4078,9 +4291,17 @@ bm25_flush_pending(Relation index)
 		while (ptr < end)
 		{
 			BM25PendingItem *pi = (BM25PendingItem *) ptr;
-			FtsDoc		pdoc = (FtsDoc) ((char *) pi + sizeof(BM25PendingItem));
+			FtsDoc		pdoc;
 			FtsTermEntry *entries;
 			uint32		j;
+
+			/* Stop if the item header or its doclen-sized body runs past the page
+			 * (a torn/recycled page with a garbage doclen would otherwise advance
+			 * ptr off the page and read out of bounds). */
+			if ((char *) pi + sizeof(BM25PendingItem) > end ||
+				(char *) pi + MAXALIGN(sizeof(BM25PendingItem) + (Size) pi->doclen) > end)
+				break;
+			pdoc = (FtsDoc) ((char *) pi + sizeof(BM25PendingItem));
 
 			/* Never trust raw pending-page bytes: a torn page or any producing
 			 * bug could give a bad nterms/len/posoff that turns into a wild
@@ -4120,7 +4341,7 @@ bm25_flush_pending(Relation index)
 		qsort(bs.terms, bs.nterms, sizeof(BuildTerm), cmp_buildterm);
 
 	bm25_write_segment(index, &bs, &seg);
-	bm25_meta_add_segment(index, &seg);
+	bm25_add_segment_with_room(index, &seg);
 
 	/*
 	 * Clear the pending list.  Pending docs were already counted into the
@@ -4156,7 +4377,7 @@ bm25_flush_pending(Relation index)
 		LockBuffer(buf, BUFFER_LOCK_SHARE);
 		next = BM25PageGetOpaque(BufferGetPage(buf))->nextblk;
 		UnlockReleaseBuffer(buf);
-		RecordFreeIndexPage(index, blk);
+		bm25_free_page(index, blk);
 		blk = next;
 	}
 	IndexFreeSpaceMapVacuum(index);

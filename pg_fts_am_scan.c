@@ -46,6 +46,29 @@ static uint8 *bm25_read_blob(Relation index, BlockNumber blk, Size len);
 #define FTS_QUERY_MAX_PHRASE_TERMS 32
 #define BM25_PHRASE_POSBUF 16384
 
+/*
+ * Does a dictionary entry starting at `de` fit within a page ending at `end`?
+ *
+ * Dictionary pages are read under only BUFFER_LOCK_SHARE.  A concurrent
+ * merge/vacuum can free a segment's pages while a concurrent insert recycles
+ * and overwrites them (pg_fts recycles freed pages with no deletion-xid gate),
+ * so a scan that snapshotted the segment directory before that change can read
+ * a recycled page mid-walk.  If de->termlen is then garbage, the entry stride
+ * and the term-compare run past the page (out-of-bounds read -> SIGSEGV) and a
+ * decoded df can be a multi-gigabyte "invalid memory alloc request size".  Every
+ * reader dict walk must confirm the entry header AND its term bytes fit before
+ * trusting de->termlen; on a miss it stops the page walk (a bounded wrong /
+ * incomplete result), and the scan's generation re-check then detects the stale
+ * read and restarts.  Same contract as the block-decode guards.
+ */
+static inline bool
+bm25_dict_entry_fits(const BM25DictEntry *de, const char *end)
+{
+	const char *t = (const char *) de + offsetof(BM25DictEntry, term);
+
+	return t <= end && t + de->termlen <= end;
+}
+
 /* A scored heap tuple (score, or distance in an ordering scan). */
 typedef struct ScoredTid
 {
@@ -94,6 +117,15 @@ tidset_sort_uniq(TidSet *s)
 	int			i,
 				j;
 
+	/* A garbage .n (from a stale/recycled read under concurrent merge) would
+	 * qsort/scan s->tids out of bounds; treat an implausible count as empty and
+	 * let the scan's generation re-check restart.  See tidset_sane(). */
+	if (s->n < 0 || (Size) s->n > MaxAllocSize / sizeof(ItemPointerData))
+	{
+		s->tids = NULL;
+		s->n = 0;
+		return;
+	}
 	if (s->n <= 1)
 		return;
 	qsort(s->tids, s->n, sizeof(ItemPointerData), cmp_tid);
@@ -197,6 +229,14 @@ bm25_filter_tombstoned_seg(BM25Tombstones *t, uint32 segidx, TidSet *s)
 
 	if (!t->hasany || s->n == 0 || segidx >= t->nseg || !t->present[segidx])
 		return;
+	if (s->n < 0 || (Size) s->n > MaxAllocSize / sizeof(ItemPointerData))
+	{
+		/* garbage count from a stale/recycled read: treat as empty (the scan's
+		 * generation re-check restarts).  Guards the s->tids[] sweep below. */
+		s->tids = NULL;
+		s->n = 0;
+		return;
+	}
 
 	/*
 	 * Batched membership: extract this set's docids (already ascending, since
@@ -359,7 +399,11 @@ bm25_lookup_term(Relation index, const BM25SegMeta *seg,
 		while (ptr < end)
 		{
 			BM25DictEntry *de = (BM25DictEntry *) ptr;
-			Size		esize = MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
+			Size		esize;
+
+			if (!bm25_dict_entry_fits(de, end))
+				break;		/* recycled/corrupt page: stop (see bm25_dict_entry_fits) */
+			esize = MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
 
 			if ((int) de->termlen == termlen &&
 				memcmp(de->term, term, termlen) == 0)
@@ -437,6 +481,30 @@ tidset_gallop(const ItemPointerData *t, int n, int lo, const ItemPointerData *ke
 	return lo;
 }
 
+/*
+ * A TidSet's .n must be a plausible element count.  Under concurrent merge a
+ * scan can read a segment whose pages were freed and recycled (pg_fts recycles
+ * freed pages with no deletion-xid gate), yielding a decoded set whose .n is
+ * garbage (e.g. leftover pointer bytes -> ~1.4 billion).  Feeding that to the
+ * set-algebra primitives below made them palloc a multi-gigabyte result
+ * ("invalid memory alloc request size") and walk a.tids[]/b.tids[] out of
+ * bounds (SIGSEGV) -- the field-reported crash under read+insert+merge.  The
+ * primitives treat an implausible operand as EMPTY: a bounded wrong (under-
+ * count) result, never a crash, and the scan's generation re-check then detects
+ * the stale read and restarts with a fresh directory snapshot.
+ */
+#define TIDSET_MAX_N ((int) (MaxAllocSize / sizeof(ItemPointerData)))
+static inline TidSet
+tidset_sane(TidSet s)
+{
+	if (s.n < 0 || s.n > TIDSET_MAX_N)
+	{
+		s.tids = NULL;
+		s.n = 0;
+	}
+	return s;
+}
+
 static TidSet
 tidset_and(TidSet a, TidSet b)
 {
@@ -445,6 +513,8 @@ tidset_and(TidSet a, TidSet b)
 				j = 0,
 				k = 0;
 
+	a = tidset_sane(a);
+	b = tidset_sane(b);
 	r.tids = palloc(Min(a.n, b.n) * sizeof(ItemPointerData) + 1);
 
 	/*
@@ -500,6 +570,8 @@ tidset_or(TidSet a, TidSet b)
 				j = 0,
 				k = 0;
 
+	a = tidset_sane(a);
+	b = tidset_sane(b);
 	r.tids = palloc((a.n + b.n) * sizeof(ItemPointerData) + 1);
 	while (i < a.n && j < b.n)
 	{
@@ -533,6 +605,8 @@ tidset_andnot(TidSet a, TidSet b)
 				j = 0,
 				k = 0;
 
+	a = tidset_sane(a);
+	b = tidset_sane(b);
 	r.tids = palloc(a.n * sizeof(ItemPointerData) + 1);
 	while (i < a.n)
 	{
@@ -594,9 +668,15 @@ bm25_lookup_prefix(Relation index, const BM25SegMeta *seg,
 		while (ptr < end)
 		{
 			BM25DictEntry *de = (BM25DictEntry *) ptr;
-			Size		esize = MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
-			int			cmplen = Min((int) de->termlen, prefixlen);
-			int			c = memcmp(de->term, prefix, cmplen);
+			Size		esize;
+			int			cmplen;
+			int			c;
+
+			if (!bm25_dict_entry_fits(de, end))
+				break;		/* recycled/corrupt page: stop (see bm25_dict_entry_fits) */
+			esize = MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
+			cmplen = Min((int) de->termlen, prefixlen);
+			c = memcmp(de->term, prefix, cmplen);
 
 			if (c < 0 || (c == 0 && (int) de->termlen < prefixlen))
 			{
@@ -684,9 +764,22 @@ bm25_eval_query(Relation index, const BM25SegMeta *seg, FtsQuery q,
 			if (it->flags & FTS_QF_PREFIX)
 				bm25_lookup_prefix(index, seg,
 								   FTS_QUERY_ITEMTEXT(q, it), it->termlen, &s);
-			else
-				bm25_lookup_term(index, seg,
-								 FTS_QUERY_ITEMTEXT(q, it), it->termlen, &s);
+			else if (!bm25_lookup_term(index, seg,
+									   FTS_QUERY_ITEMTEXT(q, it), it->termlen, &s))
+			{
+				/*
+				 * bm25_lookup_term writes *out ONLY when the term is present in
+				 * this segment; on a miss it returns false and leaves `s`
+				 * UNINITIALIZED.  Pushing that uninitialized TidSet left stale
+				 * stack bytes in .tids/.n (e.g. .n picking up a leftover
+				 * pointer's low word), which a later tidset_or/tidset_and read as
+				 * a multi-billion-element set -> "invalid memory alloc request
+				 * size" / SIGSEGV.  A term absent from a segment is the empty set.
+				 * (bm25_lookup_prefix always writes *out, so it needs no guard.)
+				 */
+				s.tids = NULL;
+				s.n = 0;
+			}
 			stack[top].set = s;
 			stack[top].negated = false;
 			top++;
@@ -823,9 +916,13 @@ bm25_fuzzy_terms(Relation index, const BM25SegMeta *seg,
 		while (ptr < end)
 		{
 			BM25DictEntry *de = (BM25DictEntry *) ptr;
-			Size		esize = MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
+			Size		esize;
 			int			deadlen;
 			bool		match;
+
+			if (!bm25_dict_entry_fits(de, end))
+				break;		/* recycled/corrupt page: stop (see bm25_dict_entry_fits) */
+			esize = MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
 
 			if (abs((int) de->termlen - termlen) <= k)
 				match = fts_lev_match_prefix(&aut,
@@ -1062,12 +1159,17 @@ bm25_universe(Relation index, BlockNumber dictstart)
 		while (ptr < end)
 		{
 			BM25DictEntry *de = (BM25DictEntry *) ptr;
-			Size		esize = MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
+			Size		esize;
 			BM25Posting *post;
-			int			np = bm25_decode_term(index, de->firstposting,
-											  de->firstoffset, de->df,
-											  &post, NULL, false, NULL);
+			int			np;
 			int			k;
+
+			if (!bm25_dict_entry_fits(de, end))
+				break;		/* recycled/corrupt page: stop (see bm25_dict_entry_fits) */
+			esize = MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
+			np = bm25_decode_term(index, de->firstposting,
+								  de->firstoffset, de->df,
+								  &post, NULL, false, NULL);
 
 			for (k = 0; k < np; k++)
 			{
@@ -1492,7 +1594,11 @@ bm25_lookup_term_pos(Relation index, const BM25SegMeta *seg,
 		while (ptr < end)
 		{
 			BM25DictEntry *de = (BM25DictEntry *) ptr;
-			Size		esize = MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
+			Size		esize;
+
+			if (!bm25_dict_entry_fits(de, end))
+				break;		/* recycled/corrupt page: stop (see bm25_dict_entry_fits) */
+			esize = MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
 
 			if ((int) de->termlen == termlen &&
 				memcmp(de->term, term, termlen) == 0)
@@ -1990,7 +2096,28 @@ collect_retry:
 			while (ptr < end)
 			{
 				BM25PendingItem *pi = (BM25PendingItem *) ptr;
-				FtsDoc		pdoc = (FtsDoc) ((char *) pi + sizeof(BM25PendingItem));
+				FtsDoc		pdoc;
+
+				/*
+				 * Bounds-guard the pending item before trusting pi->doclen.
+				 * The pending list is read under only BUFFER_LOCK_SHARE, and a
+				 * concurrent flush (INSERT pending-buffer -> segment, VACUUM,
+				 * fts_merge) clears the list and frees these pages, which a
+				 * concurrent insert can recycle and overwrite (pg_fts recycles
+				 * freed pages with no deletion-xid gate).  A scan that snapshotted
+				 * pendinghead before that then walks a recycled page whose
+				 * pi->doclen is arbitrary; without this guard fts_doc_is_valid /
+				 * fts_doc_matches read out of bounds and the ptr advance runs off
+				 * the page (observed as a wild multi-gigabyte allocation / crash
+				 * under concurrent merge + ingestion).  If the header or the
+				 * doclen-sized body does not fit the page, stop the page walk; the
+				 * scan's generation re-check then detects the stale read and
+				 * restarts.
+				 */
+				if ((char *) pi + sizeof(BM25PendingItem) > end ||
+					(char *) pi + MAXALIGN(sizeof(BM25PendingItem) + (Size) pi->doclen) > end)
+					break;
+				pdoc = (FtsDoc) ((char *) pi + sizeof(BM25PendingItem));
 
 				/* A pending doc is raw page bytes; validate before the matcher
 				 * walks its offsets, so a torn/corrupt page cannot segfault a
@@ -2007,8 +2134,7 @@ collect_retry:
 
 					one.tids = &pi->tid;
 					one.n = 1;
-					pending_acc = tidset_or(pending_acc, one);	/* exact per-doc match */
-				}
+					pending_acc = tidset_or(pending_acc, one);	/* exact per-doc match */				}
 				ptr += MAXALIGN(sizeof(BM25PendingItem) + pi->doclen);
 			}
 			UnlockReleaseBuffer(buffer);
@@ -2196,7 +2322,11 @@ bm25_lookup_dict(Relation index, const BM25SegMeta *seg,
 		while (ptr < end)
 		{
 			BM25DictEntry *de = (BM25DictEntry *) ptr;
-			Size		esize = MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
+			Size		esize;
+
+			if (!bm25_dict_entry_fits(de, end))
+				break;			/* recycled/corrupt page: stop (see bm25_dict_entry_fits) */
+			esize = MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
 
 			if ((int) de->termlen == termlen &&
 				memcmp(de->term, term, termlen) == 0)
@@ -2253,7 +2383,11 @@ bm25_lookup_df(Relation index, const BM25SegMeta *seg,
 		while (ptr < end)
 		{
 			BM25DictEntry *de = (BM25DictEntry *) ptr;
-			Size		esize = MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
+			Size		esize;
+
+			if (!bm25_dict_entry_fits(de, end))
+				break;		/* recycled/corrupt page: stop (see bm25_dict_entry_fits) */
+			esize = MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
 
 			if ((int) de->termlen == termlen &&
 				memcmp(de->term, term, termlen) == 0)
@@ -2568,6 +2702,31 @@ wand_load_block(WandCursor *c)
 	cnt = (int) bh->count;
 	if (bh->count == 0 || bh->count > (uint32) BM25_BLOCK_SIZE)
 		cnt = BM25_BLOCK_SIZE;	/* defensive: uint32 count, guard both ends */
+
+	/*
+	 * Validate the block payload fits within the page BEFORE trusting bytelen.
+	 * This page is pinned only BUFFER_LOCK_SHARE; a scan can run concurrently
+	 * with a merge/vacuum that frees this segment's pages and a concurrent
+	 * insert/flush that recycles and OVERWRITES the freed block (pg_fts recycles
+	 * freed pages with no deletion-xid gate).  If that happened between the
+	 * segment-directory snapshot and this read, bh->bytelen/posbytelen are
+	 * whatever bytes now occupy the page -- e.g. a multi-gigabyte length, which
+	 * turned palloc(bh->bytelen) into "invalid memory alloc request size" and
+	 * the following memcpy/decode into an out-of-bounds read (SIGSEGV) under
+	 * concurrent merge + ingestion.  A genuine block's payload always fits the
+	 * page; if it does not, treat it as end-of-chain for this cursor (the
+	 * scan's generation re-check catches the stale read and restarts).  Same
+	 * bounded-wrong-result-not-a-crash contract as the other decode guards.
+	 */
+	if (stream + (Size) bh->bytelen + (Size) bh->posbytelen > (const unsigned char *) pend)
+	{
+		UnlockReleaseBuffer(buf);
+		c->curblk = InvalidBlockNumber;
+		c->blkcount = 0;
+		c->cur = 0;
+		c->docid = UINT64_MAX;
+		return;
+	}
 
 	/* copy the block's FOR payload so tf/dl bytes stay valid after we unlock */
 	c->blkbuf = (unsigned char *) palloc(bh->bytelen);
