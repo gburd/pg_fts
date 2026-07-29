@@ -176,9 +176,9 @@
               # harness), not here.  This is what makes `nix flake check`
               # actually exercise TAP instead of silently skipping it.
               make installcheck REGRESS= ISOLATION= \
-                PROVE_TESTS='t/003_corruption.pl t/004_encodings.pl' \
+                PROVE_TESTS='t/005_concurrency.pl' \
                 PG_CONFIG=${pgConfigWrapped}/bin/pg_config \
-                || { echo '--- TAP logs ---'; cat tmp_check/log/*.log tmp_check/log/regress_log_* 2>/dev/null | tail -120; exit 1; }
+                || { echo '--- TAP logs ---'; cat tmp_check/log/*.log tmp_check/log/regress_log_* 2>/dev/null; exit 1; }
               touch $out
             '';
           };

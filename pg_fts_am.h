@@ -33,6 +33,15 @@
 #define BM25_TRGM_DATA		(1 << 5)	/* trigram sparsemap blob page */
 #define BM25_LIVEDOCS		(1 << 6)	/* per-segment tombstone bitmap page */
 #define BM25_DICTINDEX		(1 << 7)	/* sparse block index over dict pages */
+#define BM25_FREED			(1 << 8)	/* page freed & pending recycle: nextblk
+										 * holds the free-time TransactionId (see
+										 * bm25_free_page / the recycle gate in
+										 * bm25_new_buffer).  Reusing nextblk (dead on
+										 * an off-chain freed page) keeps the page
+										 * opaque layout unchanged -- no format change,
+										 * so existing indexes need no REINDEX.  A page
+										 * freed by an older version lacks this flag and
+										 * is treated as immediately recyclable. */
 
 typedef struct BM25PageOpaqueData
 {

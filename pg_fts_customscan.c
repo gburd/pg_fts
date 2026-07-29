@@ -43,6 +43,7 @@
 #include "parser/parsetree.h"
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
+#include "utils/datum.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
@@ -281,11 +282,28 @@ fts_create_upper_paths(PlannerInfo *root, UpperRelationKind stage,
 	}
 	cpath->flags = 0;
 	cpath->custom_paths = NIL;
-	cpath->custom_private = list_make2(makeInteger((int) indexoid),
-									   makeConst(INTERNALOID, -1, InvalidOid,
-												 sizeof(void *),
-												 PointerGetDatum(query),
-												 false, false));
+	{
+		/*
+		 * Carry the query into the plan as a proper VARLENA Const, not a bare
+		 * INTERNALOID pointer.  FtsQuery is a varlena blob; an INTERNALOID Const
+		 * (pass-by-value, typlen 8) makes copyObject/the plan cache copy only the
+		 * 8-byte POINTER, so a cached or re-executed plan (e.g. a count(*) inside
+		 * a plpgsql loop) dereferences the query after its planning context is
+		 * freed -- reading garbage (a bogus nitems), underflowing the RPN eval
+		 * stack, and crashing (SIGSEGV) or returning wrong counts.  Storing it as
+		 * a varlena Const (typlen -1, byval false) of the ftsquery type makes
+		 * datumCopy() deep-copy the whole blob with the plan, so it lives exactly
+		 * as long as the plan that references it.  Copy into the current (planner)
+		 * context up front so the Const owns its own copy.
+		 */
+		Oid			ftsqueryoid = TypenameGetTypid("ftsquery");
+		Datum		qcopy = datumCopy(PointerGetDatum(query), false, -1);
+
+		cpath->custom_private =
+			list_make2(makeInteger((int) indexoid),
+					   makeConst(OidIsValid(ftsqueryoid) ? ftsqueryoid : BYTEAOID,
+								 -1, InvalidOid, -1, qcopy, false, false));
+	}
 	cpath->methods = &fts_count_path_methods;
 	add_path(output_rel, (Path *) cpath);
 }
