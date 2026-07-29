@@ -4327,6 +4327,30 @@ sm_add_grow(sm_t **mapp, uint64_t idx)
 	return (sm_add(grown, idx));
 }
 
+uint64_t
+sm_add_grow_cursor(sm_t **mapp, uint64_t idx, sm_cursor_t *cur)
+{
+	if (mapp == NULL || *mapp == NULL)
+		return (SM_IDX_MAX);
+	sm_t *m = *mapp;
+	uint64_t rc = __sm_add_c(m, idx, cur);
+	if (rc != SM_IDX_MAX)
+		return (rc);
+
+	/* ENOSPC: grow geometrically with a 4 KiB floor. */
+	size_t new_cap = sm_get_capacity(m) * 2;
+	if (new_cap < 4096)
+		new_cap = 4096;
+	sm_t *grown = sm_set_data_size(m, NULL, new_cap);
+	if (grown == NULL)
+		return (SM_IDX_MAX);
+	*mapp = grown;
+	/* The grow relocated the buffer; the cursor's byte offset is stale. */
+	if (cur != NULL)
+		*cur = (sm_cursor_t)SM_CURSOR_INIT;
+	return (__sm_add_c(grown, idx, cur));
+}
+
 /**
  * @brief Sets or unsets a value in the sparse map at the specified index.
  *

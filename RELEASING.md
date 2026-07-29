@@ -13,11 +13,61 @@ Releases are **tag-triggered**. The version lives in `META.json` and
      `DATA`, `meson.build`, `flake.nix`, and the `CREATE EXTENSION ... VERSION`
      line in `sql/pg_fts.sql` + `expected/pg_fts.out`
    - add a `CHANGELOG.md` entry
-2. Tag and push (Codeberg is `origin`; it auto-mirrors to the GitHub mirror):
+2. **If the release changes the on-disk index format, provide an in-place
+   upgrade path (see "On-disk format changes" below) — do NOT ship a
+   format change that forces a REINDEX unless it is genuinely impossible to
+   migrate in place.**
+3. Tag and push (Codeberg is `origin`; it auto-mirrors to the GitHub mirror):
    ```sh
    git tag -a vX.Y.Z -m "pg_fts X.Y.Z — <summary>"
    git push origin vX.Y.Z
    ```
+
+## On-disk format changes (MANDATORY upgrade path)
+
+**Rule: any release that changes the on-disk index format MUST ship an upgrade
+path that preserves existing indexes built by the immediately-preceding minor
+version. A format change that forces users to `REINDEX` (drop + rebuild) is not
+acceptable** — for a large index (the field's is ~84 GB, ~48 min to build) a
+forced rebuild is an outage and a data-availability risk (needs a second full
+copy on disk). Treat "users must REINDEX" as a release blocker, not a footnote.
+
+What counts as a format change: anything that alters the bytes a *previously
+built* index has on disk or how they are interpreted — the metapage struct
+(`BM25MetaPageData`), the segment descriptor (`BM25SegMeta`), the block header
+(`BM25BlockHdr`), the dictionary entry (`BM25DictEntry`), the pending-item
+layout, the FOR/varint posting encoding, the sparsemap serialization
+(`vendor/sm`), or the meaning of any persisted field. A change that only adds a
+new C function, fixes a query/merge/build code path, or appends a field AFTER
+the fixed `segs[]` array (which older readers ignore) is **not** a format
+change and needs only the usual no-op `--OLD--NEW.sql`.
+
+When a format change is unavoidable, do ALL of:
+
+1. **Bump `version` in the metapage** (`BM25MetaPageData.version`, currently
+   read by `bm25_check_meta`) so the code can tell old from new on sight.
+2. **Read both formats.** Every reader/writer path must detect the metapage
+   version and handle the old layout — either by interpreting the old bytes
+   directly, or by transparently migrating a page/segment on first write. An
+   old index opened by the new code must return correct results with NO manual
+   step.
+3. **Migrate lazily and in place** where possible (upgrade a segment/page when
+   it is next merged/vacuumed), so the cost is amortized and no second full
+   copy is needed. `fts_merge()`/`VACUUM` should converge an old-format index
+   to the new format over time.
+4. **Make it a minor release** (`X.Y+1.0`), and say plainly in the CHANGELOG
+   and release notes: which format changed, that existing indexes keep working
+   without a REINDEX, and (if applicable) that running `fts_merge()`/`VACUUM`
+   completes the migration.
+5. **Test the upgrade with a real old-format index**: build an index on the
+   previous release, `ALTER EXTENSION pg_fts UPDATE`, load the new `.so`, and
+   assert queries still return correct results and that a merge/vacuum migrates
+   it cleanly. Add this as a TAP test so it is gated, not a one-off check.
+
+The extension-SQL upgrade script (`pg_fts--OLD--NEW.sql`) only migrates SQL
+objects; on-disk index bytes are migrated by the C code per the above, never by
+the SQL script. A C-only format change therefore still ships a no-op
+`--OLD--NEW.sql` PLUS the version-aware read/migrate code.
 
 ## What the tag triggers
 

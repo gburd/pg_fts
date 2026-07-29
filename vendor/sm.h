@@ -216,6 +216,7 @@ typedef SSIZE_T ssize_t;
 /* Public functions. */
 #define sm_add                      SM__P(sm_add)
 #define sm_add_grow                 SM__P(sm_add_grow)
+#define sm_add_grow_cursor          SM__P(sm_add_grow_cursor)
 #define sm_add_many                 SM__P(sm_add_many)
 #define sm_add_many_grow            SM__P(sm_add_many_grow)
 #define sm_add_range                SM__P(sm_add_range)
@@ -306,9 +307,9 @@ extern "C" {
 #endif
 
 /** Library version (kept in sync with meson.build's project(version: ...)). */
-#define SM_VERSION_STRING "5.3.0"
+#define SM_VERSION_STRING "5.4.0"
 #define SM_VERSION_MAJOR  5
-#define SM_VERSION_MINOR  3
+#define SM_VERSION_MINOR  4
 #define SM_VERSION_PATCH  0
 
 /** Handle to a sparsemap instance.
@@ -852,6 +853,29 @@ uint64_t sm_add(sm_t *map, uint64_t idx);
  * @returns idx on success, or SM_IDX_MAX on allocation failure.
  */
 uint64_t sm_add_grow(sm_t **map, uint64_t idx);
+
+/** @brief Like sm_add_grow(), but threads a caller-owned cursor.
+ *
+ * Identical growth semantics to sm_add_grow(), but the point insert is
+ * routed through the cursor-accelerated path so that an ascending
+ * (append-pattern) bulk build stays O(N) instead of O(N log N): the
+ * cursor caches the tail chunk between calls.  The cursor must be
+ * initialized to SM_CURSOR_INIT before the first call and threaded
+ * unchanged through the loop.
+ *
+ * When a grow relocates the buffer the cursor's cached byte offset is
+ * stale, so this function resets @a cur to SM_CURSOR_INIT after a
+ * successful grow before retrying; callers need not do anything.
+ *
+ * @param[in,out] map  Pointer to the map pointer.  Updated to the
+ *                     possibly-relocated map after a grow.
+ * @param[in]     idx  Bit to set.
+ * @param[in,out] cur  Caller-owned cursor (SM_CURSOR_INIT before the
+ *                     first call).  May be NULL to opt out of the
+ *                     acceleration.
+ * @returns idx on success, or SM_IDX_MAX on allocation failure.
+ */
+uint64_t sm_add_grow_cursor(sm_t **map, uint64_t idx, sm_cursor_t *cur);
 
 /** @brief Clear the bit at \a idx (set to 0).
  *
