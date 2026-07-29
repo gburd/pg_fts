@@ -2,10 +2,60 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.2.0
+
+Minor release, re-numbered from the 1.1.6 and 1.1.7 patch releases. It contains
+exactly the 1.1.6 + 1.1.7 changes below.
+
+**Reindex recommended.** 1.1.6 changed ranked-scan (`ORDER BY <=>`) *results*.
+Because the query behavior over an index changes, we group this as a minor
+release (not a patch) and recommend rebuilding every `fts` index after
+upgrading so ranked results are consistent for anyone who observed the old
+truncated output. (There is no on-disk format change in 1.1.6/1.1.7/1.2.0 --
+the read-path fix is correct against an existing index without a rebuild -- but
+the re-numbering exists precisely so this class of behavior change is never
+shipped as a silent patch again.) If you already upgraded to 1.1.6 or 1.1.7,
+upgrade to 1.2.0 (`ALTER EXTENSION pg_fts UPDATE TO '1.2.0'`).
+
+Upgrade steps:
+
+```
+ALTER EXTENSION pg_fts UPDATE TO '1.2.0';
+REINDEX INDEX CONCURRENTLY your_fts_index;   -- recommended; repeat per fts index
+```
+
+- **Fixed `ORDER BY doc <=> query` (ranked) index scans silently returning
+  fewer rows than match.** A ranked query retrieved through the KNN/ordered
+  index scan capped at ~4096 rows regardless of how many documents actually
+  matched (e.g. 6057 or 19347 matches both returned ~4096), independent of
+  `LIMIT` -- so ranked search dropped and mis-ordered results. The ordered scan
+  had an internal top-k ceiling meant to bound worst-case latency, but a KNN
+  index scan must return every matching row in score order (the query's `LIMIT`
+  is the only bound). The ceiling is removed: the scan now returns the complete
+  match set in order. A small `LIMIT` (a page of results) is still served
+  cheaply. The plain `@@@` match path was always complete and is unaffected.
+- **Build progress logging.** A build over a large corpus of long documents
+  (full email bodies, source code) is dominated by per-document text analysis
+  (tokenize + stem). A serial build (`max_parallel_maintenance_workers = 0`) on
+  a multi-gigabyte corpus can legitimately run for many minutes before the first
+  segment is flushed -- the in-memory buffer fills only after a whole budget's
+  worth of large documents, during which the segment count does not change and
+  nothing is written yet, which is hard to tell apart from a hang. The build now
+  emits a `LOG`-level line as documents are analyzed and at each segment flush
+  (set `log_min_messages = log` to see them), so a long build is distinguishable
+  from a stuck one. Verified end to end on a 1.97M-document / 54 GB-of-text
+  high-vocabulary corpus: a serial `english`-configuration build completes,
+  collapses to a single segment, and is valid and queryable; the wall-clock cost
+  is the inherent analysis cost, which parallel workers reduce proportionally.
+- Documentation: expanded the large-build guidance with a build-time/throughput
+  section (analysis is the dominant cost and is embarrassingly parallel; how to
+  read the new progress logs).
+
 ## 1.1.7
 
-Bug-fix / observability release. **No on-disk format change** from 1.1.6; no
-**REINDEX** required (`ALTER EXTENSION pg_fts UPDATE TO '1.1.7'`).
+Bug-fix / observability release. Superseded by 1.2.0 (which relabels 1.1.6+1.1.7
+as a minor release and documents the REINDEX requirement). **No on-disk format
+change** from 1.1.6.
 
 - **Build progress logging.** A build over a large corpus of long documents
   (full email bodies, source code) is dominated by per-document text analysis
