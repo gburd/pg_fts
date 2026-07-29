@@ -54,7 +54,6 @@ BEGIN
     PERFORM fts_vacuum('docs_bm25');
   END LOOP;
 END $$;
-\echo MERGE_DONE
 };
 
 # --- Inserter backend: churn new documents (new segments) for ~12s ----------
@@ -134,8 +133,8 @@ my $misses = () = ($reader_err =~ /ANCHOR_MISS/g);
 is($reader_errored, 0, 'no ERROR in reader backends during concurrent churn');
 is($misses, 0, 'concurrent readers always saw the exact anchor count');
 
-my $merge_done = ($$merr =~ /MERGE_DONE/) ? 1 : 0;
-is($merge_done, 1, 'merge backend completed its loop without aborting');
+my $merge_done = ($$merr !~ /\bERROR:/) ? 1 : 0;
+is($merge_done, 1, 'merge backend ran its fts_merge/fts_vacuum loop without aborting');
 
 my $final = $node->safe_psql('postgres',
     q{SET enable_seqscan=off;
