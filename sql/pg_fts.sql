@@ -723,6 +723,46 @@ SELECT fts_index_nsegments('tier_bm25') <= 8 AS segments_bounded;        -- t (c
 RESET enable_seqscan;
 DROP TABLE tier;
 
+-- fts_vacuum() reclaim: fts_vacuum fully compacts (merge to one segment) AND
+-- truncates the freed tail, so a churned index shrinks back toward its floor.
+-- Exercises bm25_compact_to_one (low-first pack) + bm25_truncate_free_tail and
+-- the recycle-gate bypass during single-writer compaction (a freed page must be
+-- reusable immediately here, or the pack phase would extend instead of shrink).
+CREATE TABLE vac (id serial, d ftsdoc);
+INSERT INTO vac(d) SELECT to_ftsdoc('vacterm w'||(g%40)||' filler'||g) FROM generate_series(1,4000) g;
+CREATE INDEX vac_bm25 ON vac USING fts (d);
+-- churn: delete+reinsert several times to bloat the index with freed pages
+DO $$ BEGIN FOR i IN 1..4 LOOP
+  DELETE FROM vac WHERE id % 2 = 0;
+  INSERT INTO vac(d) SELECT to_ftsdoc('vacterm w'||(g%40)||' r'||i||' filler'||g) FROM generate_series(1,2000) g;
+  PERFORM fts_merge('vac_bm25');
+END LOOP; END $$;
+SELECT fts_vacuum('vac_bm25') IS NOT NULL AS vacuumed;          -- t (ran)
+SELECT fts_vacuum('vac_bm25') IS NOT NULL AS vacuumed_again;     -- t (ran; idempotent, no error/growth)
+SELECT fts_index_nsegments('vac_bm25') AS nseg_after_vacuum;     -- 1 (compacted to one)
+SET enable_seqscan = off;
+SELECT count(*) > 0 AS still_matches FROM vac WHERE d @@@ 'vacterm'::ftsquery;  -- t (correct after compaction)
+RESET enable_seqscan;
+DROP TABLE vac;
+
+-- Oversized-document inserts: a body whose analyzed ftsdoc exceeds one pending
+-- page is indexed as its own segment; many of them exercise the write-path
+-- auto-compaction (leveled merge after each flush) and the room-ensuring add
+-- (merge-to-free-a-slot instead of erroring at the segment cap).  count(*) uses
+-- the index-native pushdown.
+CREATE TABLE big (id serial, d ftsdoc);
+CREATE INDEX big_bm25 ON big USING fts (d);
+-- each doc: a large distinct-token body (oversized) sharing one common term
+INSERT INTO big(d)
+  SELECT to_ftsdoc('bigterm ' || string_agg('t'||k||'d'||g, ' '))
+  FROM generate_series(1,60) g, generate_series(1,4000) k
+  GROUP BY g;
+SET enable_seqscan = off;
+SELECT count(*) AS big_matches FROM big WHERE d @@@ 'bigterm'::ftsquery;   -- 60 (index count pushdown)
+SELECT fts_index_nsegments('big_bm25') <= 128 AS under_cap;               -- t (never hit the hard cap)
+RESET enable_seqscan;
+DROP TABLE big;
+
 -- High-vocabulary build + trigram-through-merge: a corpus of many DISTINCT
 -- low-frequency terms (like patches/quoted code) that flushes into several
 -- segments then merges.  The trigram index for each merged segment is rebuilt
