@@ -1,4 +1,5 @@
 CREATE EXTENSION pg_fts VERSION '1.2.2';
+ALTER EXTENSION pg_fts UPDATE TO '1.3.0';   -- exercise the 1.2.2 -> 1.3.0 upgrade path
 
 -- ftsdoc: analysis, output shows terms with term frequencies
 SELECT to_ftsdoc('The quick brown fox, the QUICK fox!');
@@ -1060,6 +1061,16 @@ SELECT count(*) AS alpha_reused FROM tomb WHERE d @@@ 'alpha'::ftsquery;     -- 
 SELECT count(*) AS beta_reused FROM tomb WHERE d @@@ 'beta'::ftsquery;       -- 60
 SELECT fts_count('tomb_bm25','beta'::ftsquery) AS beta_reused_fc;            -- 60
 RESET enable_seqscan;
+-- Corpus statistics (BM25 IDF + length normalization) count only LIVE documents.
+-- After deleting rows and REINDEX, fts_index_stats.ndocs must reflect the live
+-- corpus, not the pre-delete count -- the build callback must not count a
+-- non-live document into ndocs/sumdoclen (it still indexes recently-dead
+-- postings for old snapshots, but they do not inflate the statistics).
+DELETE FROM tomb WHERE id > 30;                 -- keep 30 of the 60 beta rows
+VACUUM tomb;
+REINDEX INDEX tomb_bm25;
+SELECT ndocs::int AS ndocs_live, nterms > 0 AS has_terms
+  FROM fts_index_stats('tomb_bm25');            -- ndocs_live = 30
 DROP TABLE tomb;
 
 -- oversized document: an analyzed ftsdoc larger than one pending page must be
@@ -2021,3 +2032,29 @@ SELECT count(*) > 0 AS cyrillic_ci_match FROM corner
   WHERE to_ftsdoc(body) @@@ to_ftsquery(E'\u0451lka');   -- Ё LKA doc matched by ёlka
 RESET enable_seqscan;
 DROP TABLE corner;
+
+-- Managed-service privilege model (1.3.0): fts_search / fts_anomalous_docs emit
+-- indexed content by index OID, so they are REVOKEd from PUBLIC; the maintenance
+-- functions fts_merge / fts_vacuum enforce index ownership in C.  Verify a
+-- non-owner role is refused, and the owner is allowed.
+CREATE TABLE priv (id serial, d ftsdoc);
+INSERT INTO priv(d) SELECT to_ftsdoc('priv doc '||g) FROM generate_series(1,50) g;
+CREATE INDEX priv_idx ON priv USING fts (d);
+CREATE ROLE fts_nonowner NOLOGIN;
+-- PUBLIC (hence the non-owner) can still run the value-level API and normal
+-- @@@ / count queries (those are not revoked)...
+SET ROLE fts_nonowner;
+SELECT to_ftsdoc('x') IS NOT NULL AS nonowner_can_analyze;                 -- t
+-- ...but not the index-content introspection functions...
+SELECT has_function_privilege('fts_nonowner',
+        'fts_search(regclass,ftsquery,int)', 'EXECUTE') AS nonowner_search_priv;  -- f
+SELECT has_function_privilege('fts_nonowner',
+        'fts_anomalous_docs(regclass,int,int)', 'EXECUTE') AS nonowner_anom_priv;  -- f
+-- ...and maintenance on an index it does not own is refused by the C guard.
+SELECT fts_merge('priv_idx');   -- ERROR: must be owner of index priv_idx
+RESET ROLE;
+-- the owner CAN run maintenance
+SELECT fts_merge('priv_idx') IS NOT NULL AS owner_can_merge;               -- t
+SELECT fts_vacuum('priv_idx') IS NOT NULL AS owner_can_vacuum;             -- t
+DROP TABLE priv;
+DROP ROLE fts_nonowner;

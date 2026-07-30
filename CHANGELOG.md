@@ -2,6 +2,40 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.3.0
+
+Feature + hardening release. **No on-disk format change** from 1.2.2; no
+**REINDEX** required (`ALTER EXTENSION pg_fts UPDATE TO '1.3.0'`).
+
+- **`WITH (trigrams = on|off)` reloption (default OFF).** The per-segment
+  trigram tier accelerates only regex and long fuzzy queries; the query side
+  already falls back to a full dictionary scan when it is absent, so the default
+  now omits it -- a smaller index (~18% in a 2.19M-doc measurement) at no
+  correctness cost. Build `WITH (trigrams = on)` for regex- or long-fuzzy-heavy
+  workloads. Results are identical either way.
+- **Faster `count(*)`.** A single plain term over a tombstone-free, pending-
+  free, fully-all-visible index is now counted straight from the dictionary
+  document frequency -- no posting decode, no heap probe (measured: a common
+  term at 2.19M docs, ~756 ms -> ~2 ms). Set-membership decodes skip the tf/
+  doclen columns they never use. The `count(*)` index pushdown now also fires
+  for a plain-column `fts` index (the recommended stored-`ftsdoc`-column form),
+  not only an expression index -- previously a stored-column `count(*)` fell
+  back to a bitmap heap scan.
+- **Managed-service hardening.** `fts_merge()` and `fts_vacuum()` now refuse to
+  run during recovery (a hot standby is read-only) and require the caller to own
+  the target index (they open it by OID and take heavy locks). Two functions
+  that emit indexed content by index OID -- `fts_search()` and
+  `fts_anomalous_docs()` -- are revoked from `PUBLIC` (the index owner and
+  superusers keep access; an owner may grant explicitly). Corpus statistics
+  (BM25 IDF + length normalization) now exclude recently-dead tuples surfaced to
+  the build with `tupleIsAlive = false` -- such tuples are still indexed (an old
+  snapshot may need them) but no longer inflate the document count / total
+  length.
+- **Ranked-exactness hardening (internal).** The block-max WAND pivot skip now
+  advances every cursor at or before the pivot rather than skipping one cursor's
+  whole block, removing a provably-unsound (though not field-reachable) over-
+  skip. No behavior change on pg_fts's contiguous-docid-range segments.
+
 ## 1.2.2
 
 Bug-fix release. **No on-disk format change** from 1.2.1; no **REINDEX**

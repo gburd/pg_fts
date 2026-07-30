@@ -43,6 +43,7 @@
 #include "access/genam.h"
 #include "access/generic_xlog.h"
 #include "access/transam.h"		/* ReadNextTransactionId (recycle gate) */
+#include "access/xlog.h"			/* RecoveryInProgress (maintenance-fn guard) */
 #include "access/parallel.h"
 #include "access/reloptions.h"
 #include "access/relscan.h"
@@ -75,6 +76,8 @@
 #include "storage/spin.h"
 #include "tcop/tcopprot.h"
 #include "utils/array.h"
+#include "utils/acl.h"			/* object_ownercheck, aclcheck_error (maintenance-fn guard) */
+#include "utils/lsyscache.h"	/* get_rel_name (maintenance-fn guard) */
 #include "utils/memutils.h"
 #include "utils/rel.h"
 #include "utils/snapmgr.h"
@@ -627,8 +630,22 @@ bm25_build_callback(Relation index, ItemPointer tid, Datum *values,
 					tid, entries[i].tf, doc->doclen, pos, npos);
 	}
 
-	bs->ndocs += 1.0;
-	bs->sumdoclen += doc->doclen;
+	/*
+	 * Corpus statistics (BM25 IDF + length normalization) must count only LIVE
+	 * documents.  During CREATE INDEX/REINDEX/VACUUM FULL, PostgreSQL surfaces
+	 * recently-dead tuples (deleted but not yet past the global horizon -- routine
+	 * whenever any snapshot pins the horizon, e.g. a standby's feedback) to this
+	 * callback with tupleIsAlive = false.  Such a tuple MUST still be indexed (an
+	 * old snapshot may reach it via the index -- so the add_posting loop above
+	 * runs unconditionally) but MUST NOT contribute to ndocs/sumdoclen: counting
+	 * it biases IDF and average-document-length scoring and over-reports the
+	 * document count.  Gate only the statistics on liveness.
+	 */
+	if (tupleIsAlive)
+	{
+		bs->ndocs += 1.0;
+		bs->sumdoclen += doc->doclen;
+	}
 
 	/*
 	 * Coarse progress heartbeat.  On a heavy corpus the per-document analysis
@@ -4782,6 +4799,31 @@ bm25_vacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 
 PG_FUNCTION_INFO_V1(fts_merge);
 
+/*
+ * Guard shared by the SQL-callable maintenance functions (fts_merge,
+ * fts_vacuum).  Both take heavy locks and write WAL, and both accept an
+ * arbitrary index OID from any caller, so before doing any work:
+ *
+ *   - refuse to run during recovery: a hot standby is read-only, and the first
+ *     WAL write during recovery would fail hard (worst case a PANIC that
+ *     recycles the backend).  The AM callbacks do not need this -- core never
+ *     invokes them during recovery -- so the gap is only in these SQL functions.
+ *   - require the caller to own the index (same owner as the underlying table):
+ *     otherwise any role could trigger a costly compaction, or an
+ *     AccessExclusiveLock stall (fts_vacuum), on an index it has no rights to.
+ */
+static void
+bm25_maintenance_guard(Oid indexoid, const char *fname)
+{
+	if (RecoveryInProgress())
+		ereport(ERROR,
+				(errcode(ERRCODE_READ_ONLY_SQL_TRANSACTION),
+				 errmsg("%s() cannot run during recovery", fname)));
+	if (!object_ownercheck(RelationRelationId, indexoid, GetUserId()))
+		aclcheck_error(ACLCHECK_NOT_OWNER, OBJECT_INDEX,
+					   get_rel_name(indexoid));
+}
+
 /* fts_merge(regclass) -> bool : merge the pending list on demand */
 Datum
 fts_merge(PG_FUNCTION_ARGS)
@@ -4790,6 +4832,7 @@ fts_merge(PG_FUNCTION_ARGS)
 	Relation	index;
 	bool		done;
 
+	bm25_maintenance_guard(indexoid, "fts_merge");
 	index = index_open(indexoid, ShareUpdateExclusiveLock);
 	if (index->rd_rel->relam != get_index_am_oid("fts", true))
 		ereport(ERROR,
@@ -4835,6 +4878,7 @@ fts_vacuum(PG_FUNCTION_ARGS)
 	Relation	index;
 	bool		done;
 
+	bm25_maintenance_guard(indexoid, "fts_vacuum");
 	index = index_open(indexoid, AccessExclusiveLock);
 	if (index->rd_rel->relam != get_index_am_oid("fts", true))
 		ereport(ERROR,

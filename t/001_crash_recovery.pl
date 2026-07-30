@@ -26,7 +26,7 @@ $node->safe_psql(
 	CREATE TABLE docs (id int primary key, d ftsdoc);
 	INSERT INTO docs SELECT g, to_ftsdoc('alpha doc ' || g)
 		FROM generate_series(1, 2000) g;
-	CREATE INDEX docs_bm25 ON docs USING bm25 (d);
+	CREATE INDEX docs_bm25 ON docs USING fts (d);
 });
 
 # Add rows AFTER the build so the pending-write-buffer path is on disk too,
