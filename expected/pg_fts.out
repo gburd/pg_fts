@@ -1,5 +1,4 @@
-CREATE EXTENSION pg_fts VERSION '1.2.2';
-ALTER EXTENSION pg_fts UPDATE TO '1.3.0';   -- exercise the 1.2.2 -> 1.3.0 upgrade path
+CREATE EXTENSION pg_fts VERSION '1.3.0';
 -- ftsdoc: analysis, output shows terms with term frequencies
 SELECT to_ftsdoc('The quick brown fox, the QUICK fox!');
                      to_ftsdoc                     
