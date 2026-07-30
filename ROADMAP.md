@@ -170,3 +170,117 @@ they are not rediscovered. Ordered roughly by value.
     between create and free they leak for the duration of the statement
     (reclaimed at transaction/backend end). A `PG_TRY`/`PG_FINALLY` around the
     few error-prone spots would tidy this. Low severity — rare error paths only.
+
+## Managed-service readiness (RDS / Aurora PostgreSQL candidacy)
+
+Work to take pg_fts from "correct open-source extension" to "candidate for a
+managed PostgreSQL service" (customers with no OS/superuser access, always-on
+read replicas, possibly compute/storage-separated backends). The hard
+architectural bar is already
+cleared: 100% GenericXLog page logging, atomic metapage publish points, standby-
+safe XID-gated page recycling, cancellation in every long loop. What remains is
+privilege hygiene, two small write-path guards, one statistics fix, and
+validation under always-on-replica conditions. Keep `trusted = true`.
+
+### P0 — correctness / safety blockers (each small; all confirmed present in HEAD)
+
+13. **Guard `fts_merge` / `fts_vacuum` against running during recovery.**
+    Both (`pg_fts_am.c` ~4787 / ~4832) open the index and take heavy locks
+    (`fts_vacuum` takes `AccessExclusiveLock`) with NO recovery check, so on a
+    hot standby they start work and then fail hard at the first WAL write during
+    recovery. Reachable in normal use (replicas always present; both are plain
+    SQL functions any session can call). Fix: at the very top of each, before
+    `index_open`, `if (RecoveryInProgress()) ereport(ERROR, errcode
+    ERRCODE_READ_ONLY_SQL_TRANSACTION, "... cannot run during recovery")`. The
+    AM callbacks (`aminsert`/`ambulkdelete`/`ambuild`/`amvacuumcleanup`) do NOT
+    need it (core never invokes them during recovery). Add a TAP assertion on
+    the existing streaming-replication standby that both error on the replica.
+
+14. **Lock down the function privilege surface.** Install SQL has 0 REVOKE/GRANT
+    (`pg_fts--*.sql`); all 33 functions are `PUBLIC`-executable and none does an
+    ownership/ACL check. Two parts:
+    - *Maintenance* (`fts_merge`, `fts_vacuum`): a caller supplying any index OID
+      can trigger a costly compaction or an `AccessExclusiveLock` stall on an
+      index they do not own. Add an ownership check (e.g. `object_ownercheck` /
+      `pg_class_aclcheck` on the index or underlying table) so only the owner (or
+      an admin) can run them.
+    - *Content-exposing introspection* (`fts_search`, `fts_anomalous_docs` emit
+      indexed heap TIDs / scores / term text; `fts_index_stats` / `fts_index_df`
+      / `fts_count` to a lesser degree): exposing to `PUBLIC` widens content
+      visibility past table-level permissions. Decide the model and make it
+      explicit in install SQL with `REVOKE ... FROM PUBLIC` + deliberate grants;
+      at minimum gate the two functions that emit indexed content to the table
+      owner. NOTE: needs a design decision + a `pg_fts--1.2.2--1.3.0.sql`
+      upgrade that applies the same REVOKE/GRANT to existing installs (not a
+      no-op upgrade). Keep all install/upgrade SQL pure ASCII (`make
+      check-ascii`).
+
+15. **Do not count recently-dead tuples into corpus statistics.**
+    `bm25_build_callback` (`pg_fts_am.c` ~578) ignores `tupleIsAlive`: it always
+    does `bs->ndocs += 1.0` and `bs->sumdoclen += doc->doclen` AND indexes the
+    posting. During CREATE INDEX/REINDEX/VACUUM FULL, recently-dead tuples arrive
+    with `tupleIsAlive = false` (routine whenever any snapshot pins the horizon —
+    e.g. replica feedback). They MUST still be indexed (an old snapshot may need
+    them) but MUST NOT count toward `ndocs`/`sumdoclen` (BM25 IDF + length
+    normalization), else scoring is biased and the reported doc count over-
+    reports. Fix: keep the `add_posting` loop; gate ONLY the two stat increments
+    on `tupleIsAlive`. Verify no other build path (parallel worker callback,
+    merge stat accumulation) double-counts. Regression: build with a second
+    session holding a `REPEATABLE READ` snapshot over deleted-but-unvacuumed rows
+    and assert `fts_index_stats` doc count excludes them while a query still finds
+    them from the old snapshot.
+
+### P1 — validation under managed-service conditions
+
+16. **Horizon-pinned-by-a-reader regression scenario.** A second session holding
+    a `REPEATABLE READ` snapshot defers dead-tuple reclaim + physical shrink and
+    changes which tuples reach the build callback. Add coverage that pins the
+    horizon then exercises build, delete+VACUUM, and `fts_vacuum()`, asserting
+    *properties* (results correct, statistics eventually correct, index never
+    grows unbounded) NOT exact sizes/block numbers. Audit existing tests for any
+    hardcoded physical size / block number that would flake under a pinned
+    horizon and rewrite to assert the property (the `vac` reclaim block already
+    uses ratio assertions — extend that discipline).
+
+17. **Full validation pass on a compute/storage-separated backend.** GenericXLog-
+    everywhere should port cleanly, but validate from scratch on the target
+    platform: crash/kill recovery, replica replay equivalence, failover, and a
+    full `make installcheck` + TAP. Extend the existing crash-recovery + streaming-
+    replication TAP tests to the target and add a failover scenario. (Bench/soak
+    on EC2, never on LAN hosts.)
+
+18. **Operator documentation.** A concise operator-facing summary: what triggers
+    auto-merge vs auto-vacuum; when to call `fts_merge()` vs `fts_vacuum()`; the
+    transient extra space a compaction needs (rewrites live data before freeing
+    the old copy, like a table rewrite); replica behavior (reads work, maintenance
+    functions error — after #13); behavior under continuous ingestion (segment
+    count, write amplification). Much exists in README/design notes; distill it.
+
+### P2 — process / hardening
+
+19. **Independent review of the WAL / crash / recovery / storage paths.** Single-
+    author project; a service integrator wants a second set of eyes. Even a
+    documented per-release review checklist for the AM + recovery code de-risks
+    adoption. (Pairs with the worker->reviewer subagent discipline already used
+    for traversal/concurrency-core changes.)
+
+20. **Make the test-only hook impossible to ship.** The one test-only GUC
+    (`PG_FTS_TEST_HOOKS` / `pg_fts_test_pause_advisory_key`) is compile-gated.
+    Confirm production build recipes (Makefile, meson, flake, PGXG/PGDG packaging)
+    never define the macro, and consider a build-time assert of its absence in
+    the release build.
+
+21. **Keep the "bounded miss, never crash" contract explicit + CI-guarded.**
+    The decoder bounds-checks page-derived lengths and validates pending-page
+    documents before trusting offsets, so a torn/stale page degrades to a bounded
+    wrong-count, not a crash — the right contract for a service. Keep the
+    fuzz/property tests that guard it in CI and treat any regression as release-
+    blocking.
+
+### Suggested order
+
+#13, #14, #15 (P0; each a few focused hours) remove the only hard blockers ->
+#16 horizon-pinned regressions + test audit -> #17 target-backend validation ->
+#18 operator docs -> #19-#21 review + hardening. #13 and #15 are C-only, no-op
+upgrade SQL; #14 needs a real REVOKE/GRANT upgrade script + a privilege-model
+decision.
