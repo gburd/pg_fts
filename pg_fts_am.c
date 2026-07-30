@@ -696,11 +696,20 @@ bm25_docid_to_tid(uint64 docid, ItemPointer tid)
  * positions column is SKIPPED with a pointer add (posbytelen) and never
  * decoded -- so plain BM25/AND/count queries pay ~zero for positions existing,
  * mirroring the tf/doclen bytelen-skip.
+ *
+ * When docids_only is true the caller wants ONLY the matching TIDs (a TidSet):
+ * we still decode the gaps (docids) column and honor every corruption guard,
+ * but SKIP the tf and doclen bm25_for_unpack calls (about 2/3 of the per-block
+ * decode work) and never decode positions.  posts[].tf/.doclen/.pos are left 0/
+ * NULL, so a docids_only caller MUST NOT read them.  This is the count / set-
+ * membership fast path (bm25_collect_matches and the docid-only dict walks);
+ * the ranked scan scores via the WAND cursor (bm25_for_get), not this decoder,
+ * so it is unaffected.  docids_only forces want_positions off internally.
  */
 static int
 bm25_decode_term(Relation index, BlockNumber firstblk, uint32 firstoff,
 				 uint32 df, BM25Posting **out, uint32 **blockmax,
-				 bool want_positions, uint32 **posarena)
+				 bool want_positions, uint32 **posarena, bool docids_only)
 {
 	BM25Posting *posts;
 	uint32	   *bmax = NULL;
@@ -711,6 +720,14 @@ bm25_decode_term(Relation index, BlockNumber firstblk, uint32 firstoff,
 	int			n = 0;
 	BlockNumber blk = firstblk;
 	uint32		off = firstoff;
+
+	/*
+	 * docids_only implies positions are irrelevant: force want_positions off so
+	 * the whole positions-column decode/arena path below is skipped along with
+	 * the tf/doclen unpack.
+	 */
+	if (docids_only)
+		want_positions = false;
 
 	/*
 	 * Clamp df to a sane ceiling before sizing the allocation.  df is read from
@@ -851,8 +868,19 @@ bm25_decode_term(Relation index, BlockNumber firstblk, uint32 firstoff,
 				}
 			}
 			pos += bm25_for_unpack(stream + pos, cnt, gaps);
-			pos += bm25_for_unpack(stream + pos, cnt, tfs);
-			pos += bm25_for_unpack(stream + pos, cnt, dls);
+			if (!docids_only)
+			{
+				/*
+				 * docids_only: skip the tf and doclen columns entirely.  The
+				 * bytelen/column-overrun guards above already ran on all three
+				 * columns, and nothing downstream in docids_only mode consumes
+				 * `pos` past this point (positions use stream+bh->bytelen and the
+				 * block advance uses bh->bytelen+bh->posbytelen), so leaving the
+				 * tf/dl bytes undecoded is safe.  posts[].tf/.doclen stay 0.
+				 */
+				pos += bm25_for_unpack(stream + pos, cnt, tfs);
+				pos += bm25_for_unpack(stream + pos, cnt, dls);
+			}
 
 			if (want_positions && bh->posbytelen > 0)
 			{
@@ -963,8 +991,9 @@ bm25_decode_term(Relation index, BlockNumber firstblk, uint32 firstoff,
 			{
 				docid += gaps[i];
 				bm25_docid_to_tid(docid, &posts[n].tid);
-				posts[n].tf = (uint32) tfs[i];
-				posts[n].doclen = (uint32) dls[i];
+				/* docids_only: tfs/dls were not unpacked; leave tf/doclen 0 */
+				posts[n].tf = docids_only ? 0 : (uint32) tfs[i];
+				posts[n].doclen = docids_only ? 0 : (uint32) dls[i];
 				posts[n].pos = NULL;
 				if (bmax)
 					bmax[n] = bh->max_tf;
@@ -2324,7 +2353,7 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 
 			np = bm25_decode_term(index, mt->firstposting, mt->firstoffset,
 								  mt->df, &post, NULL, bs->want_positions,
-								  &posarena);
+								  &posarena, false);
 			for (k = 0; k < np; k++)
 			{
 				if (s->hastomb &&
@@ -4485,7 +4514,7 @@ bm25_segment_docids(Relation index, const BM25SegMeta *seg)
 						k;
 
 			np = bm25_decode_term(index, de->firstposting, de->firstoffset,
-								  de->df, &post, NULL, false, NULL);
+								  de->df, &post, NULL, false, NULL, true);
 			if (np > 0)
 			{
 				if (nids + np > capids)
