@@ -232,7 +232,7 @@ validation under always-on-replica conditions. Keep `trusted = true`.
 
 ### P1 — validation under managed-service conditions
 
-16. **Horizon-pinned-by-a-reader regression scenario.** A second session holding
+16. **[DONE: deterministic delete+VACUUM+REINDEX ndocs in the SQL suite + hardcoded-size test audit; concurrent-session TAP deferred (async-psql harness flaky on CI host)] Horizon-pinned-by-a-reader regression scenario.** A second session holding
     a `REPEATABLE READ` snapshot defers dead-tuple reclaim + physical shrink and
     changes which tuples reach the build callback. Add coverage that pins the
     horizon then exercises build, delete+VACUUM, and `fts_vacuum()`, asserting
@@ -242,14 +242,14 @@ validation under always-on-replica conditions. Keep `trusted = true`.
     horizon and rewrite to assert the property (the `vac` reclaim block already
     uses ratio assertions — extend that discipline).
 
-17. **Full validation pass on a compute/storage-separated backend.** GenericXLog-
+17. **[PARTIAL: failover TAP scenario (promote standby, index correct + writable) landed on stock PG; actual Aurora-style compute/storage-separated backend validation remains EXTERNAL] Full validation pass on a compute/storage-separated backend.** GenericXLog-
     everywhere should port cleanly, but validate from scratch on the target
     platform: crash/kill recovery, replica replay equivalence, failover, and a
     full `make installcheck` + TAP. Extend the existing crash-recovery + streaming-
     replication TAP tests to the target and add a failover scenario. (Bench/soak
     on EC2, never on LAN hosts.)
 
-18. **[PARTIAL 1.3.0: trigrams + maintenance-fn behavior documented] Operator documentation.** A concise operator-facing summary: what triggers
+18. **[DONE: consolidated "Operating pg_fts" operator runbook -- auto-maintenance, fts_merge vs fts_vacuum, transient space, replica behavior, privileges, ingestion] Operator documentation.** A concise operator-facing summary: what triggers
     auto-merge vs auto-vacuum; when to call `fts_merge()` vs `fts_vacuum()`; the
     transient extra space a compaction needs (rewrites live data before freeing
     the old copy, like a table rewrite); replica behavior (reads work, maintenance
@@ -258,13 +258,13 @@ validation under always-on-replica conditions. Keep `trusted = true`.
 
 ### P2 — process / hardening
 
-19. **Independent review of the WAL / crash / recovery / storage paths.** Single-
+19. **[PARTIAL: per-release storage/WAL/crash-recovery review checklist in RELEASING.md; an EXTERNAL human review remains a release-integrator step] Independent review of the WAL / crash / recovery / storage paths.** Single-
     author project; a service integrator wants a second set of eyes. Even a
     documented per-release review checklist for the AM + recovery code de-risks
     adoption. (Pairs with the worker->reviewer subagent discipline already used
     for traversal/concurrency-core changes.)
 
-20. **[DONE: verified PG_FTS_TEST_HOOKS is defined in NO build recipe] Make the test-only hook impossible to ship.** The one test-only GUC
+20. **[DONE: PG_FTS_TEST_HOOKS in NO build recipe + _PG_init WARNINGs loudly if a test-hook build loads] Make the test-only hook impossible to ship.** The one test-only GUC
     (`PG_FTS_TEST_HOOKS` / `pg_fts_test_pause_advisory_key`) is compile-gated.
     Confirm production build recipes (Makefile, meson, flake, PGXG/PGDG packaging)
     never define the macro, and consider a build-time assert of its absence in
