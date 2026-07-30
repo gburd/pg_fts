@@ -185,10 +185,28 @@ fts_find_pushdown_index(PlannerInfo *root, RelOptInfo *rel,
 			Oid			indexoid = lfirst_oid(ic);
 			Relation	ind = index_open(indexoid, AccessShareLock);
 
-			if (ind->rd_rel->relam == get_index_am_oid("fts", true) &&
-				ind->rd_indexprs != NIL &&
-				equal(linitial(ind->rd_indexprs), lhs))
-				found = indexoid;
+			if (ind->rd_rel->relam == get_index_am_oid("fts", true))
+			{
+				if (ind->rd_indexprs != NIL)
+				{
+					/* expression index (e.g. USING fts (to_ftsdoc(body))):
+					 * the LHS must equal the index expression. */
+					if (equal(linitial(ind->rd_indexprs), lhs))
+						found = indexoid;
+				}
+				else if (ind->rd_index->indnatts == 1 &&
+						 IsA(lhs, Var) &&
+						 ((Var *) lhs)->varno == rel->relid &&
+						 ((Var *) lhs)->varattno == ind->rd_index->indkey.values[0])
+				{
+					/* plain-column index (USING fts (d)): the LHS must be the
+					 * Var for that single indexed column.  This is the stored-
+					 * ftsdoc-column form the docs recommend; without this the
+					 * count pushdown only fired for expression indexes and a
+					 * stored-column count(*) fell back to a slow bitmap scan. */
+					found = indexoid;
+				}
+			}
 			index_close(ind, AccessShareLock);
 			if (OidIsValid(found))
 				break;

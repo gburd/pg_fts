@@ -424,7 +424,7 @@ bm25_lookup_term(Relation index, const BM25SegMeta *seg,
 			/* read exactly this term's df postings from the shared chain */
 			BM25Posting *post;
 			int			np = bm25_decode_term(index, firstposting, firstoffset,
-										  df, &post, NULL, false, NULL);
+										  df, &post, NULL, false, NULL, true);
 			ItemPointerData *tids = palloc(Max(np, 1) * sizeof(ItemPointerData));
 			int			n = 0;
 			int			i;
@@ -696,7 +696,7 @@ bm25_lookup_prefix(Relation index, const BM25SegMeta *seg,
 				BM25Posting *post;
 				int			np = bm25_decode_term(index, de->firstposting,
 												  de->firstoffset, de->df,
-												  &post, NULL, false, NULL);
+												  &post, NULL, false, NULL, true);
 				int			k;
 
 				for (k = 0; k < np; k++)
@@ -942,7 +942,7 @@ bm25_fuzzy_terms(Relation index, const BM25SegMeta *seg,
 				BM25Posting *post;
 				int			np = bm25_decode_term(index, de->firstposting,
 												  de->firstoffset, de->df,
-												  &post, NULL, false, NULL);
+												  &post, NULL, false, NULL, true);
 
 				/* keep this term's docid-sorted TIDs as a run for k-way merge */
 				if (np > 0)
@@ -1169,7 +1169,7 @@ bm25_universe(Relation index, BlockNumber dictstart)
 			esize = MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
 			np = bm25_decode_term(index, de->firstposting,
 								  de->firstoffset, de->df,
-								  &post, NULL, false, NULL);
+								  &post, NULL, false, NULL, true);
 
 			for (k = 0; k < np; k++)
 			{
@@ -1619,7 +1619,7 @@ bm25_lookup_term_pos(Relation index, const BM25SegMeta *seg,
 			BM25Posting *post;
 			uint32	   *arena = NULL;
 			int			np = bm25_decode_term(index, firstposting, firstoffset,
-											  df, &post, NULL, true, &arena);
+											  df, &post, NULL, true, &arena, false);
 			PosPosting *pp = (PosPosting *) palloc(Max(np, 1) * sizeof(PosPosting));
 			int			k;
 
@@ -3914,6 +3914,144 @@ bm25_topk_visible(Relation index, FtsQuery q, int k, bool as_distance,
 }
 
 /*
+ * bm25_count_dictdf_fastpath: answer count(*) for a SINGLE plain positive term
+ * straight from the dictionary df, with ZERO posting decode and ZERO heap
+ * probe, when it is provably exact.  Returns the count, or -1 when any gate
+ * fails (caller then takes the full bm25_collect_matches path).
+ *
+ * A term's dictionary df is the number of documents that contained the term
+ * AT INDEX TIME, summed here across all segments.  Sum(df) equals the count of
+ * documents visible to the current snapshot ONLY under all of these gates --
+ * each closes a way Sum(df) could diverge from the live/visible truth:
+ *
+ *  (1) The query is exactly one plain positive term: nitems==1, the item is a
+ *      FTS_QI_VAL, and it carries none of PREFIX/FUZZY/REGEX (a prefix matches
+ *      many dict terms, fuzzy/regex fan out via the trigram funnel -- none is a
+ *      single df).  No operators means no AND/OR/NOT/PHRASE.  So the match set
+ *      is exactly this one term's postings, i.e. exactly Sum(df) documents.
+ *      (This term also never sets recheck, so the full path would be exact too.)
+ *
+ *  (2) Every segment has ndeleted==0 AND livedocslen==0 (no tombstones).  A
+ *      tombstone marks an index posting whose heap doc was deleted; df still
+ *      counts it, so ANY tombstone makes Sum(df) an OVERCOUNT.  Requiring zero
+ *      tombstones everywhere means every counted posting is a doc that was
+ *      never deleted-then-vacuumed.
+ *
+ *  (3) npending==0.  Newly inserted docs live verbatim in the pending list
+ *      until merged; they are NOT in any segment df.  A nonzero pending list
+ *      could add matches df does not see (undercount), so bail.
+ *
+ *  (4) The heap is ENTIRELY all-visible to this snapshot: every heap page is
+ *      marked all-visible in the visibility map.  The VM all-visible bit is set
+ *      only when every tuple on the page is visible to ALL snapshots (it is the
+ *      same guarantee the full path relies on to skip a heap probe), so this is
+ *      snapshot-safe -- not a stale pg_class heuristic.  This gate is what makes
+ *      Sum(df) equal the VISIBLE count rather than the index-time count: with no
+ *      tombstones (2) the index believes every posting doc is live, and an all-
+ *      visible heap confirms every one of those docs is in fact visible now and
+ *      none was deleted-but-not-yet-vacuumed (a dead tuple would leave its page
+ *      NOT all-visible) nor inserted-after-build outside pending (also not all-
+ *      visible).  Hence each of the Sum(df) postings is one visible document,
+ *      one-to-one, and the count is exact.
+ *
+ * Any concurrent change to tombstones/pending/segments between our metapage
+ * read and returning would invalidate the arithmetic; we re-check the directory
+ * generation at the end (as the full path does) and bail to it on any change.
+ *
+ * Note: cost is one O(nblocks) VM scan + one dict lookup per segment, replacing
+ * a decode of every posting of a common term.  Falls back on any doubt -- a
+ * wrong count is worse than a slow one.
+ */
+static int64
+bm25_count_dictdf_fastpath(Relation index, FtsQuery q)
+{
+	BM25MetaPageData meta;
+	FtsQueryItem *it;
+	const char *term;
+	int			termlen;
+	uint32		gen0;
+	uint64		sumdf = 0;
+	uint32		s;
+	Relation	heap;
+	BlockNumber nblocks;
+	BlockNumber blk;
+	Buffer		vmbuf = InvalidBuffer;
+	bool		all_visible = true;
+
+	/* Gate (1): exactly one plain positive term. */
+	if (q == NULL || q->nitems != 1)
+		return -1;
+	it = &q->items[0];
+	if (it->type != FTS_QI_VAL ||
+		(it->flags & (FTS_QF_PREFIX | FTS_QF_FUZZY | FTS_QF_REGEX)) != 0)
+		return -1;
+
+	bm25_read_meta(index, &meta);
+	gen0 = meta.generation;
+
+	/* Gate (3): no unmerged pending docs. */
+	if (meta.npending != 0)
+		return -1;
+
+	/* Gate (2): no tombstones in any segment. */
+	for (s = 0; s < meta.nsegments && s < BM25_MAX_SEGMENTS; s++)
+		if (meta.segs[s].ndeleted != 0 || meta.segs[s].livedocslen != 0)
+			return -1;
+
+	/* Sum the term's df across the segments where it is present. */
+	term = FTS_QUERY_ITEMTEXT(q, it);
+	termlen = (int) it->termlen;
+	for (s = 0; s < meta.nsegments && s < BM25_MAX_SEGMENTS; s++)
+	{
+		BM25SegMeta *sg = &meta.segs[s];
+		uint32		df,
+					max_tf,
+					foff;
+		BlockNumber fpost;
+
+		if (sg->dictstart == InvalidBlockNumber)
+			continue;
+		if (bm25_lookup_dict(index, sg, term, termlen,
+							 &df, &max_tf, &fpost, &foff))
+			sumdf += df;
+	}
+
+	/*
+	 * Gate (4): the whole heap must be all-visible to this snapshot.  Scan the
+	 * VM over every heap page; any page not marked all-visible aborts the fast
+	 * path.  (RelationGetNumberOfBlocks is the current physical length; a page
+	 * appended by a concurrent inserter is not all-visible, so it fails here or
+	 * is caught by the generation re-check below.)
+	 */
+	heap = table_open(index->rd_index->indrelid, AccessShareLock);
+	nblocks = RelationGetNumberOfBlocks(heap);
+	for (blk = 0; blk < nblocks; blk++)
+	{
+		if (!VM_ALL_VISIBLE(heap, blk, &vmbuf))
+		{
+			all_visible = false;
+			break;
+		}
+	}
+	if (vmbuf != InvalidBuffer)
+		ReleaseBuffer(vmbuf);
+	table_close(heap, AccessShareLock);
+	if (!all_visible)
+		return -1;
+
+	/*
+	 * Concurrency: if the segment directory changed while we read it (a merge/
+	 * vacuum could have added tombstones or folded pending docs), our gates and
+	 * df sum may be stale.  Bail to the full path, which restarts on generation
+	 * change itself.
+	 */
+	if (bm25_read_meta_generation(index) != gen0)
+		return -1;
+
+	return (int64) sumdf;
+}
+
+/*
  * bm25_count_visible: MVCC-correct count of documents matching `q`, computed in
  * bulk from the index without the per-tuple executor round-trips of an
  * index(-only) scan.  Collect the matching TIDs (sorted), then count those
@@ -3946,6 +4084,22 @@ bm25_count_visible(Relation index, FtsQuery q)
 	 * matching index entries (like a bitmap index scan reports its bitmap size).
 	 */
 	pgstat_count_index_scan(index);
+
+	/*
+	 * Fast path: a single plain term over a fully-visible, tombstone-free,
+	 * pending-free index is counted from the dictionary df alone -- no posting
+	 * decode, no heap probe.  Returns -1 (fall through) on any doubt.
+	 */
+	{
+		int64		fast = bm25_count_dictdf_fastpath(index, q);
+
+		if (fast >= 0)
+		{
+			pgstat_count_index_tuples(index, fast);
+			return fast;
+		}
+	}
+
 	bm25_collect_matches(index, q, &matches, &recheck);
 	/*
 	 * Shrink over-generated sets (fuzzy/regex/PHRASE/NEAR) to the exact @@@
@@ -4374,7 +4528,7 @@ fts_anomalous_docs(PG_FUNCTION_ARGS)
 
 					np = bm25_decode_term(index, de->firstposting,
 										  de->firstoffset, de->df,
-										  &post, NULL, false, NULL);
+										  &post, NULL, false, NULL, true);
 					for (j = 0; j < np; j++)
 					{
 						uint64		docid = bm25_tid_to_docid(&post[j].tid);

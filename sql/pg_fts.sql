@@ -786,6 +786,24 @@ INSERT INTO big(d)
 SET enable_seqscan = off;
 SELECT count(*) AS big_matches FROM big WHERE d @@@ 'bigterm'::ftsquery;   -- 60 (index count pushdown)
 SELECT fts_index_nsegments('big_bm25') <= 128 AS under_cap;               -- t (never hit the hard cap)
+-- the count(*) pushdown fires for a PLAIN-COLUMN fts index (not just an
+-- expression index): the recommended stored-ftsdoc-column form must get the
+-- index-native count, not a bitmap-scan fallback.
+DO $$
+DECLARE ln text; hit bool := false;
+BEGIN
+  FOR ln IN EXPLAIN (COSTS off) SELECT count(*) FROM big WHERE d @@@ 'bigterm'::ftsquery
+  LOOP
+    IF ln LIKE '%FtsCount%' THEN hit := true; END IF;
+  END LOOP;
+  IF NOT hit THEN RAISE EXCEPTION 'plain-column count(*) did not use the FtsCount pushdown'; END IF;
+  RAISE NOTICE 'plaincol_pushdown ok';
+END $$;
+-- the dict-df fast path: after VACUUM (all-visible, no tombstones, no pending)
+-- a single-term count(*) is answered from the dictionary df alone; the count
+-- must still be exact (a wrong fast count would diff here).
+VACUUM big;
+SELECT count(*) AS big_fastpath FROM big WHERE d @@@ 'bigterm'::ftsquery;   -- 60
 RESET enable_seqscan;
 DROP TABLE big;
 
