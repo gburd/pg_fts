@@ -2859,19 +2859,6 @@ wand_next(WandCursor *c)
 	wand_skip_own_tombstoned(c);
 }
 
-/*
- * Skip the cursor past the rest of its current 128-block.  Because the cursor
- * now holds exactly one block, this simply loads the next block -- and the
- * block just abandoned never had its tf/doclen decoded (block-max pruning pays
- * only for docids).  Always makes forward progress.
- */
-static void
-wand_skip_block(WandCursor *c)
-{
-	wand_load_block(c);
-	wand_skip_own_tombstoned(c);
-}
-
 /* Exact BM25 contribution of the current posting.  tf and |D| are extracted
  * from the block's still-packed FOR columns ON DEMAND (bm25_for_get) -- only
  * for postings actually scored, so pruned blocks never decode tf/dl. */
@@ -3287,8 +3274,24 @@ fts_search_bmw(WandCursor *cursors, int nterms, int k, const DocidFilter *filter
 			}
 			if (blocksum <= threshold)
 			{
-				/* advance cursor[0] to the start of its next block */
-				wand_skip_block(&cursors[0]);
+				/*
+				 * No document AT OR BEFORE the pivot can beat the threshold
+				 * (blocksum bounds exactly the cursors with docid <= pivot).
+				 * The sound BMW move is therefore to advance PAST the pivot and
+				 * re-pivot -- NOT to skip cursor[0]'s entire block.  Skipping
+				 * cursor[0]'s whole block jumps it to the start of its NEXT
+				 * block, which can lie arbitrarily far beyond pivot_docid, past
+				 * docids that other segment cursors still hold and whose true
+				 * score was never bounded by blocksum -- dropping true top-k
+				 * documents (a multi-segment ranked-exactness bug).  Instead,
+				 * seek every cursor sitting at or before the pivot to the first
+				 * docid strictly greater than the pivot; blocksum proved nothing
+				 * up to and including pivot_docid can win, so this skip is exact.
+				 */
+				for (i = 0; i < nterms; i++)
+					if (cursors[i].docid != UINT64_MAX &&
+						cursors[i].docid <= pivot_docid)
+						wand_seek(&cursors[i], pivot_docid + 1);
 				continue;
 			}
 		}

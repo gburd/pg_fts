@@ -110,12 +110,22 @@ typedef struct BM25Options
 {
 	int32		vl_len_;		/* varlena header (do not touch directly!) */
 	bool		positions;		/* store token positions in postings (default off) */
+	bool		trigrams;		/* store the per-segment trigram index (default off).
+								 * The trigram index accelerates ONLY regex and
+								 * over-long fuzzy terms; plain/boolean/ranked/phrase
+								 * /prefix/short-fuzzy do not use it (fuzzy walks the
+								 * dictionary with a Levenshtein automaton directly, and
+								 * regex/long-fuzzy fall back to a full dictionary scan
+								 * when it is absent -- correct, just slower).  It is ~18%
+								 * of the index, so it is OFF by default; turn it on with
+								 * WITH (trigrams=on) for regex/long-fuzzy-heavy workloads. */
 } BM25Options;
 
 static relopt_kind bm25_relopt_kind;
 
 void		bm25_init_reloptions(void);
 static bool bm25_index_wants_positions(Relation index);
+static bool bm25_index_wants_trigrams(Relation index);
 
 void
 bm25_init_reloptions(void)
@@ -123,6 +133,9 @@ bm25_init_reloptions(void)
 	bm25_relopt_kind = add_reloption_kind();
 	add_bool_reloption(bm25_relopt_kind, "positions",
 					   "store token positions in postings for index-only phrase/NEAR",
+					   false, AccessExclusiveLock);
+	add_bool_reloption(bm25_relopt_kind, "trigrams",
+					   "store the per-segment trigram index for regex/long-fuzzy acceleration",
 					   false, AccessExclusiveLock);
 }
 
@@ -164,6 +177,8 @@ typedef struct BM25BuildState
 	int			maxterms;
 	bool		want_positions;	/* index built WITH (positions=on): carry token
 								 * positions through build/merge into the postings */
+	bool		want_trigrams;	/* index built WITH (trigrams=on): write the
+								 * per-segment trigram index (regex/long-fuzzy accel) */
 	/* build-time term list: an unsorted array collected during the heap scan,
 	 * sorted once before the dictionary is written */
 	double		ndocs;
@@ -1790,7 +1805,8 @@ bm25_write_segment(Relation index, BM25BuildState *bs, BM25SegMeta *seg)
 
 	MemSet(seg, 0, sizeof(BM25SegMeta));
 	seg->dictstart = bm25_write_dictionary(index, bs, postings, offsets, &seg->dictindexstart);
-	seg->trgmstart = bm25_write_trigrams(index, bs);
+	seg->trgmstart = bs->want_trigrams ? bm25_write_trigrams(index, bs)
+		: InvalidBlockNumber;	/* trigrams opt-in (WITH (trigrams=on)); see bm25_index_wants_trigrams */
 	seg->livedocs = InvalidBlockNumber;
 	seg->ndocs = bs->ndocs;
 	seg->sumdoclen = bs->sumdoclen;
@@ -2283,6 +2299,7 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 
 		tbs.ctx = termctx;
 		tbs.want_positions = bs->want_positions;
+		tbs.want_trigrams = bs->want_trigrams;
 		tbs.terms = NULL;
 		tbs.nterms = 0;
 		tbs.maxterms = 0;
@@ -2371,11 +2388,16 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 	dict_spill_rewind(&spill);
 	seg->dictstart = bm25_write_dictionary_iter(index, dict_spill_next, &spill,
 												&seg->dictindexstart);
-	dict_spill_rewind(&spill);
-	seg->trgmstart = bm25_write_trigrams_iter(index, dict_spill_next, &spill);
-	/* both passes must consume exactly the nout spilled records; a mismatch would
-	 * mean the trigram->term-ordinal mapping diverged from the dict write order */
-	Assert(spill.ordinal + 1 == (int) nout);
+	if (bs->want_trigrams)
+	{
+		dict_spill_rewind(&spill);
+		seg->trgmstart = bm25_write_trigrams_iter(index, dict_spill_next, &spill);
+		/* both passes must consume exactly the nout spilled records; a mismatch would
+		 * mean the trigram->term-ordinal mapping diverged from the dict write order */
+		Assert(spill.ordinal + 1 == (int) nout);
+	}
+	else
+		seg->trgmstart = InvalidBlockNumber;	/* trigrams opt-in; see bm25_index_wants_trigrams */
 	seg->livedocs = InvalidBlockNumber;
 	seg->ndocs = bs->ndocs;
 	seg->sumdoclen = bs->sumdoclen;
@@ -2640,6 +2662,7 @@ bm25_merge_group_to_seg(Relation index, const BM25SegMeta *group, uint32 ngroup,
 	bs.ctx = AllocSetContextCreate(CurrentMemoryContext, "bm25 merge group",
 								   ALLOCSET_DEFAULT_SIZES);
 	bs.want_positions = bm25_index_wants_positions(index);
+	bs.want_trigrams = bm25_index_wants_trigrams(index);
 	bs.terms = NULL;
 	bs.nterms = 0;
 	bs.maxterms = 0;
@@ -2689,6 +2712,7 @@ bm25_merge_selected(Relation index, const uint32 *sel, uint32 nsel)
 	bs.ctx = AllocSetContextCreate(CurrentMemoryContext, "bm25 merge segs",
 								   ALLOCSET_DEFAULT_SIZES);
 	bs.want_positions = bm25_index_wants_positions(index);
+	bs.want_trigrams = bm25_index_wants_trigrams(index);
 	bs.terms = NULL;
 	bs.nterms = 0;
 	bs.maxterms = 0;
@@ -3752,6 +3776,7 @@ bm25_parallel_build_main(dsm_segment *seg, shm_toc *toc)
 	bs.ctx = AllocSetContextCreate(CurrentMemoryContext, "bm25 parallel worker",
 								   ALLOCSET_DEFAULT_SIZES);
 	bs.want_positions = bm25_index_wants_positions(index);
+	bs.want_trigrams = bm25_index_wants_trigrams(index);
 	bs.terms = NULL;
 	bs.nterms = 0;
 	bs.maxterms = 0;
@@ -3944,6 +3969,7 @@ bm25_build(Relation heap, Relation index, IndexInfo *indexInfo)
 	bs.ctx = AllocSetContextCreate(CurrentMemoryContext, "bm25 build",
 								   ALLOCSET_DEFAULT_SIZES);
 	bs.want_positions = bm25_index_wants_positions(index);
+	bs.want_trigrams = bm25_index_wants_trigrams(index);
 	bs.terms = NULL;
 	bs.nterms = 0;
 	bs.maxterms = 0;
@@ -4043,6 +4069,7 @@ bm25_insert_oversized_as_segment(Relation index, FtsDoc doc, ItemPointer tid)
 	bs.ctx = AllocSetContextCreate(CurrentMemoryContext, "bm25 oversized",
 								   ALLOCSET_DEFAULT_SIZES);
 	bs.want_positions = bm25_index_wants_positions(index);
+	bs.want_trigrams = bm25_index_wants_trigrams(index);
 	bs.terms = NULL;
 	bs.nterms = 0;
 	bs.maxterms = 0;
@@ -4272,6 +4299,7 @@ bm25_flush_pending(Relation index)
 	bs.ctx = AllocSetContextCreate(CurrentMemoryContext, "bm25 flush",
 								   ALLOCSET_DEFAULT_SIZES);
 	bs.want_positions = bm25_index_wants_positions(index);
+	bs.want_trigrams = bm25_index_wants_trigrams(index);
 	bs.terms = NULL;
 	bs.nterms = 0;
 	bs.maxterms = 0;
@@ -4846,6 +4874,7 @@ bm25_options(Datum reloptions, bool validate)
 {
 	static const relopt_parse_elt tab[] = {
 		{"positions", RELOPT_TYPE_BOOL, offsetof(BM25Options, positions)},
+		{"trigrams", RELOPT_TYPE_BOOL, offsetof(BM25Options, trigrams)},
 	};
 
 	return (bytea *) build_reloptions(reloptions, validate,
@@ -4868,6 +4897,23 @@ bm25_index_wants_positions(Relation index)
 	BM25Options *opts = (BM25Options *) index->rd_options;
 
 	return opts ? opts->positions : false;
+}
+
+/*
+ * Does this index build the per-segment trigram index?  Reads the `trigrams`
+ * reloption (default OFF).  The trigram index accelerates only regex and
+ * over-long fuzzy terms and is ~18% of the on-disk index, so it is opt-in:
+ * plain/boolean/ranked/phrase/prefix/short-fuzzy queries never consult it, and
+ * regex/long-fuzzy remain CORRECT without it (they fall back to a full
+ * dictionary scan when trgmstart is InvalidBlockNumber).  Turn it on with
+ * WITH (trigrams=on) for regex- or long-fuzzy-heavy workloads.
+ */
+static bool
+bm25_index_wants_trigrams(Relation index)
+{
+	BM25Options *opts = (BM25Options *) index->rd_options;
+
+	return opts ? opts->trigrams : false;
 }
 
 static bool
