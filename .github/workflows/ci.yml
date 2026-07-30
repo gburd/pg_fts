@@ -80,33 +80,11 @@ jobs:
           PGBIN=/usr/lib/postgresql/${{ matrix.pg }}/bin
           pg_virtualenv -v ${{ matrix.pg }} \
             make installcheck REGRESS= ISOLATION= \
-              PROVE_TESTS='t/003_corruption.pl t/004_encodings.pl t/005_concurrency.pl t/007_segment_cap.pl t/008_vacuum_reclaim.pl' \
+              PROVE_TESTS='t/003_corruption.pl t/004_encodings.pl t/005_concurrency.pl t/006_concurrent_extend.pl t/007_segment_cap.pl t/008_vacuum_reclaim.pl' \
               PG_CONFIG=$PGBIN/pg_config || {
               echo '=== TAP logs ==='
               cat tmp_check/log/*.log tmp_check/log/regress_log_* 2>/dev/null | tail -120 || true
               exit 1
-            }
-
-      - name: TAP t/006 concurrent read+insert+merge (non-gating; tracked)
-        # t/006 hammers read + insert + merge + vacuum on one index.  Its real
-        # invariants (no "unexpected data beyond EOF", no query error, no
-        # anchor-miss, stable count) pass reliably; but a RARE intermittent crash
-        # under this runner's very heavy concurrent churn (a pre-existing
-        # scan-vs-merge recycle-race timing window the 1.2.1 guards reduced but
-        # did not fully close) occasionally trips it.  Kept visible but
-        # non-gating here until that race is root-caused with a captured stack
-        # (see DEFERRED.md).  It IS gating in the Nix tap-pg17/tap-pg18 checks,
-        # where it is stable.
-        continue-on-error: true
-        run: |
-          PGBIN=/usr/lib/postgresql/${{ matrix.pg }}/bin
-          pg_virtualenv -v ${{ matrix.pg }} \
-            make installcheck REGRESS= ISOLATION= \
-              PROVE_TESTS='t/006_concurrent_extend.pl' \
-              PG_CONFIG=$PGBIN/pg_config || {
-              echo '=== t/006 TAP logs ==='
-              cat tmp_check/log/*.log 2>/dev/null | tail -80 || true
-              true
             }
 
       - name: Show diffs on failure
