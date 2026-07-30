@@ -42,3 +42,4 @@ pg_fts-*.zip
 /build/
 VSIC-FiC16.pdf
 bench_vac/
+pg_fts-managed-service-readiness.md
