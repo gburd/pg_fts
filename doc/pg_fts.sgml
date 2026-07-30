@@ -230,7 +230,8 @@ SELECT id FROM docs
       segment into one now, instead of waiting for <command>VACUUM</command>.
       Returns whether any work was done.  This compacts the segment directory
       but does not shrink the physical file; use <function>fts_vacuum</function>
-      to reclaim disk space.
+      to reclaim disk space.  Requires ownership of the index and errors on a
+      read replica (it writes WAL, so it cannot run during recovery).
      </para>
     </listitem>
    </varlistentry>
@@ -247,7 +248,10 @@ SELECT id FROM docs
       a <command>REINDEX</command>.  Returns whether any work was done.  A
       single call reclaims most of the space; a second call converges to the
       fully compacted size.  Runs automatically during <command>VACUUM</command>
-      when the index is substantially bloated.
+      when the index is substantially bloated.  Takes
+      <literal>AccessExclusiveLock</literal> on the index (like
+      <command>REINDEX</command>), requires ownership of the index, and errors
+      on a read replica (it writes WAL, so it cannot run during recovery).
      </para>
     </listitem>
    </varlistentry>
@@ -373,6 +377,30 @@ CREATE INDEX docs_bm25 ON docs USING fts (to_ftsdoc('english', body))
    only makes them <emphasis>fast</emphasis> (index-only).  This is an on-disk
    format change (BM25 v2 &rarr; v3); an index built by an older release must be
    <command>REINDEX</command>ed.
+  </para>
+ </sect2>
+
+ <sect2 id="pgfts-trigrams">
+  <title>Regex and long-fuzzy acceleration (<literal>WITH (trigrams = on)</literal>)</title>
+
+  <para>
+   Regex (<literal>/re/</literal>) and long fuzzy (<literal>term~k</literal>)
+   queries match many dictionary terms.  The index can build a per-segment
+   trigram tier that narrows the candidate terms for these queries; by default
+   it is <emphasis>off</emphasis>, and such queries fall back to a full
+   dictionary scan (always correct, just slower on regex / long fuzzy).  Build
+   <literal>WITH (trigrams = on)</literal> for a regex- or long-fuzzy-heavy
+   workload:
+<programlisting>
+CREATE INDEX docs_bm25 ON docs USING fts (to_ftsdoc('english', body))
+  WITH (trigrams = on);
+</programlisting>
+   The trade-off is index size (the trigram tier was ~18 percent of the index in
+   one 2.19M-document measurement).  Results are identical whether trigrams are
+   on or off; the option only affects the speed of regex and long fuzzy queries.
+   This is not an on-disk format change &mdash; both settings read on any
+   release &mdash; so it needs no <command>REINDEX</command> to change (rebuild
+   the index to actually add or drop the tier).
   </para>
  </sect2>
 
