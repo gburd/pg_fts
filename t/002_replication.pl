@@ -26,7 +26,7 @@ $primary->safe_psql(
 	CREATE TABLE docs (id int primary key, d ftsdoc);
 	INSERT INTO docs SELECT g, to_ftsdoc('alpha doc ' || g)
 		FROM generate_series(1, 1500) g;
-	CREATE INDEX docs_bm25 ON docs USING bm25 (d);
+	CREATE INDEX docs_bm25 ON docs USING fts (d);
 });
 
 # Standby from a base backup
@@ -73,6 +73,25 @@ for my $case (
 my $alpha_standby = $standby->safe_psql('postgres',
 	"$q SELECT count(*) FROM docs WHERE d \@\@\@ 'alpha'::ftsquery");
 is($alpha_standby, 1400, 'standby reflects deletes (1500 - 100 tombstoned)');
+
+# Maintenance functions must refuse to run during recovery: on a hot standby
+# fts_merge()/fts_vacuum() would otherwise start work and fail hard at their
+# first WAL write.  Each must ERROR cleanly (read-only transaction), not crash.
+my ($rc, $stdout, $stderr);
+($rc, $stdout, $stderr) =
+  $standby->psql('postgres', "SELECT fts_merge('docs_bm25')");
+isnt($rc, 0, 'fts_merge() errors on a standby (does not run during recovery)');
+like($stderr, qr/cannot run during recovery/,
+	'fts_merge() gives the recovery error');
+($rc, $stdout, $stderr) =
+  $standby->psql('postgres', "SELECT fts_vacuum('docs_bm25')");
+isnt($rc, 0, 'fts_vacuum() errors on a standby (does not run during recovery)');
+like($stderr, qr/cannot run during recovery/,
+	'fts_vacuum() gives the recovery error');
+# The standby is still queryable after the rejected maintenance calls.
+is( $standby->safe_psql('postgres',
+		"$q SELECT count(*) FROM docs WHERE d \@\@\@ 'alpha'::ftsquery"),
+	1400, 'standby still answers queries after rejected maintenance calls');
 
 $standby->stop;
 $primary->stop;
