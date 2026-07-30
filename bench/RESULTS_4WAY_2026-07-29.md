@@ -33,12 +33,19 @@ store, xfs), one engine at a time, warm median-of-9.
 
 ## Results — size, build, ranked top-k latency (stored/expr form as noted)
 
+pg_fts row is the RE-RUN on 1.2.2 (2026-07-30, same r6id.4xlarge / local-NVMe /
+2.19M-Wikipedia harness), correcting the two methodology/tooling issues that
+invalidated the first pg_fts attempt (compact with `fts_vacuum` not `fts_merge`;
+query in the `WHERE @@@ ... ORDER BY <=>` form).  Competitor rows unchanged from
+the 2026-07-29 run.
+
 | engine | index size (compacted) | build | rare k10 | mid k10 | common k10 | common k100 | count(*) common |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | **VectorChord-bm25** | **1449 MB** | **48 s** (+~13 min tsvector prep) | 16.9 ms | 15.3 ms | 15.3 ms | 45.4 ms | n/a (ranking-only) |
 | **Timescale pg_textsearch** | 1869 MB | 231 s | 13.3 ms | 13.9 ms | 38.0 ms | 46.8 ms | n/a (ranking-only) |
-| **ParadeDB pg_search** | 2321 MB | 62 s | **14.0 ms** | **13.6 ms** | **13.8 ms** | **18.5 ms** | 96.0 ms |
-| **pg_fts 1.2.1** | **15 GB (!)** | 85 s | (KNN scan did not engage — see below) | | | | (count pushdown needs preload) |
+| **ParadeDB pg_search** | 2321 MB | 62 s | 14.0 ms | 13.6 ms | **13.8 ms** | **18.5 ms** | 96.0 ms |
+| **pg_fts 1.2.2 (stored col)** | **4239 MB** | 57 s + 231 s `fts_vacuum` (+~16 min stored-col materialize) | **8.5 ms** | **4.6 ms** | 31.8 ms | 32.9 ms | 756 ms |
+| **pg_fts 1.2.2 (expr index)** | 4239 MB | 163 s + 232 s `fts_vacuum` | 19.2 ms | 4.8 ms | 43.9 ms | 77.9 ms | (same count path) |
 
 Notes:
 - **VectorChord** smallest + fastest build, flat latency (its Block-WeakAnd
@@ -50,11 +57,26 @@ Notes:
   ranked path.
 - **pg_textsearch** compact + fast rare/mid, but common-term degrades (38–47 ms)
   and it is ranking-only.
+- **pg_fts 1.2.2**: index floor **4239 MB** — matches the historical 4188 MB
+  (0.3.5, pos=off); NO size regression (the first run's "15 GB" was compacting
+  with the extend-only `fts_merge` instead of the reclaiming `fts_vacuum`, plus
+  a 1.2.1 `fts_vacuum` bug now fixed in 1.2.2). ~1.9–2.9× the two smallest
+  competitors, in line with history. RANKED LATENCY is competitive and even
+  leads on rare/mid: rare 8.5 ms and mid 4.6 ms (stored-col form) are the
+  fastest in the table; common-term is 32 ms (behind pg_search's 14 ms — the
+  known impact-ordered-codec gap). The stored-vs-expr delta (rare 8.5 vs 19.2,
+  k100 33 vs 78) is exactly the per-row re-analysis tax the methodology warns
+  about — report the stored-col form as the app-representative number.
+- **pg_fts weak spot, now measured:** `count(*)` on a common term is **756 ms**
+  (df ~735k) — the index-native count walks all matches; a real latency gap vs
+  everything else and a concrete optimization target. Mid-term count is 5 ms, so
+  it is specifically the very-high-df count that is slow.
 
-## pg_fts anomalies (findings — NOT clean competitive numbers)
+## pg_fts anomalies (findings — NOW RESOLVED; pg_fts row above is the re-run)
 
-**RESOLVED after root-cause (see follow-up commit).** The two issues below were
-diagnosed and one was a real bug, now fixed:
+**RESOLVED after root-cause and a full re-run on 1.2.2** (the pg_fts rows in the
+results table above are the corrected numbers: 4239 MB floor, ranked 4.6–8.5 ms
+rare/mid).  The two issues below were diagnosed and one was a real bug, now fixed:
 
 1. **The "15 GB" was not a true index-size regression.** Two causes:
    (a) *Methodology error*: this run compacted with `fts_merge()`, which is
@@ -88,16 +110,23 @@ re-run (the EC2 run's pg_fts column was invalid); the corrected harness must
 (a) compact pg_fts with `fts_vacuum()` not `fts_merge()`, and (b) use the
 `@@@`+`<=>` query form.
 
-## Honest read (unchanged in shape from NOTE_COMPETITIVE_LANDSCAPE.md)
-- **pg_search** is the ranked-latency + capability leader (flattest common-term,
-  richest queries); **VectorChord** the size/build-speed leader (ranking-only);
-  **pg_textsearch** the compact native-C middle.
-- **pg_fts** could not post a valid latency number this run and shows a serious
-  **index-size regression (15 GB)**. Its differentiators remain capability
-  (index-native count, phrase/boolean/fuzzy/regex) and correctness/robustness
-  (the 1.2.x concurrency + build fixes) — but the size regression must be
-  root-caused and fixed before pg_fts is competitively benchmarkable on size or
-  ranked latency again. **This is the #1 action item.**
+## Honest read (updated after the pg_fts 1.2.2 re-run)
+- **pg_search** is the common-term ranked-latency + capability leader (flat
+  ~14 ms across bands, richest queries); **VectorChord** the size/build-speed
+  leader (ranking-only); **pg_textsearch** the compact native-C middle.
+- **pg_fts 1.2.2** is competitive, not the outlier the first run implied:
+  - **Size:** 4239 MB floor after `fts_vacuum` — matches history (4188 MB), no
+    regression. ~1.9–2.9× the smallest competitors (the known size gap; the
+    doclen-sidecar ROADMAP lever still applies).
+  - **Ranked latency:** LEADS on rare (8.5 ms) and mid (4.6 ms) in the
+    stored-column form — fastest in the table; TRAILS on common-term (32 ms vs
+    pg_search 14 ms), the impact-ordered-codec gap.
+  - **Capability:** still the only one with index-native count(*), phrase,
+    boolean, prefix/fuzzy/regex over one operator — but common-term count(*) is
+    **756 ms** (df ~735k), a real weak spot and a concrete optimization target.
+  - **Correctness/robustness:** the 1.2.x concurrency + build + fts_vacuum fixes
+    (ASan-clean concurrent read+insert+merge+vacuum) are a genuine
+    differentiator the competitors were not tested on here.
 
 ## Not yet measured (dims 4/7/8 — the new axes)
 Ranked QPS under concurrency (dim 4), concurrent write+query correctness (dim 7,
