@@ -526,6 +526,108 @@ CREATE INDEX docs_bm25 ON docs USING fts (to_ftsdoc('english', body))
   </para>
  </sect2>
 
+ <sect2 id="pgfts-operating">
+  <title>Operating pg_fts (maintenance, replicas, and space)</title>
+
+  <para>
+   pg_fts is designed to run with little hands-on maintenance and to be safe on a
+   managed PostgreSQL service (all page changes go through
+   <literal>GenericXLog</literal>, so the index is crash-safe and replicates on a
+   physical standby with no extra configuration).  This section is the operator
+   summary.
+  </para>
+
+  <formalpara>
+   <title>Automatic maintenance</title>
+   <para>
+    Two things happen without operator action.  <emphasis>Auto-merge</emphasis>:
+    incremental inserts land in a small pending buffer and are folded into the
+    main segments as they accumulate; a leveled, bounded-fan-in merge runs on the
+    write path so the segment count stays bounded under continuous ingestion (it
+    does not grow without limit).  <emphasis>Auto-vacuum</emphasis>: ordinary
+    <command>VACUUM</command> (autovacuum included) removes deleted documents
+    from the index via the access method's bulk-delete + cleanup callbacks, and
+    when the index is substantially bloated its cleanup gently compacts and
+    reclaims space across passes under a lock that does not block reads.  For
+    most workloads you never need to call anything by hand.
+   </para>
+  </formalpara>
+
+  <formalpara>
+   <title><function>fts_merge()</function> vs <function>fts_vacuum()</function></title>
+   <para>
+    Call <function>fts_merge(<replaceable>index</replaceable>)</function> to
+    <emphasis>optimize now</emphasis>: it folds the pending buffer and merges
+    live segments into one, e.g. right after a parallel build (which leaves the
+    workers' segments unmerged for speed) or after heavy churn.  It compacts the
+    segment directory but does <emphasis>not</emphasis> shrink the physical file.
+    Call <function>fts_vacuum(<replaceable>index</replaceable>)</function> to
+    <emphasis>reclaim disk</emphasis>: it additionally relocates live pages to
+    the front of the index file and truncates the free tail back to the operating
+    system, shrinking an index that has grown larger than its live contents
+    (after a bulk build or heavy update churn) without a
+    <command>REINDEX</command>.  A single <function>fts_vacuum()</function> call
+    reclaims most of the space; a second converges to the floor.
+   </para>
+  </formalpara>
+
+  <formalpara>
+   <title>Transient space during compaction</title>
+   <para>
+    <function>fts_vacuum()</function> and <command>REINDEX</command> rewrite the
+    live data into fresh pages before freeing the old copy, like a table rewrite:
+    provision enough free disk for both the old and the new copy transiently.
+    <function>fts_vacuum()</function> takes <literal>AccessExclusiveLock</literal>
+    on the index (like <command>REINDEX</command>); use
+    <command>REINDEX INDEX CONCURRENTLY</command> if you need the rebuild to stay
+    online.
+   </para>
+  </formalpara>
+
+  <formalpara>
+   <title>Behavior on a read replica</title>
+   <para>
+    Reads work normally on a hot standby (the index is fully replicated).  The
+    maintenance functions <function>fts_merge()</function> and
+    <function>fts_vacuum()</function> write WAL, so they cannot run during
+    recovery: called on a replica they raise an error
+    (<literal>cannot run during recovery</literal>) rather than doing damage.
+    Run them on the primary; the effect replicates.  Both also require the caller
+    to own the target index.
+   </para>
+  </formalpara>
+
+  <formalpara>
+   <title>Privileges</title>
+   <para>
+    The value-level API (<function>to_ftsdoc</function>,
+    <function>to_ftsquery</function>, <function>fts_bm25</function>, the operators
+    and I/O functions) is available to <literal>PUBLIC</literal>.  Two functions
+    that emit indexed content by index OID &mdash; <function>fts_search</function>
+    and <function>fts_anomalous_docs</function> &mdash; are revoked from
+    <literal>PUBLIC</literal>; the index owner and superusers keep access, and an
+    owner can grant them explicitly (for example <literal>GRANT EXECUTE ON
+    FUNCTION fts_search(regclass, ftsquery, int) TO <replaceable>role</replaceable></literal>).
+   </para>
+  </formalpara>
+
+  <formalpara>
+   <title>Behavior under continuous ingestion</title>
+   <para>
+    Inserts are cheap (pending buffer) and periodically merged; the write
+    amplification is that of a tiered/leveled merge (each document's postings are
+    rewritten a bounded number of times as small segments merge into larger
+    ones), and the live segment count stays bounded.  Deletes are marked and
+    reclaimed by <command>VACUUM</command>; an old snapshot held open (for
+    example continuous replica feedback) defers that reclaim and defers physical
+    shrink, which is expected &mdash; results and corpus statistics stay correct,
+    the index simply holds the deferred space until the horizon advances.  Corpus
+    statistics used for scoring count only live documents, so ranking is not
+    biased by not-yet-reclaimed deleted rows.
+   </para>
+  </formalpara>
+ </sect2>
+
  <sect2 id="pgfts-limitations">
   <title>Limitations</title>
 

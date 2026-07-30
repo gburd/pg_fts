@@ -439,6 +439,14 @@ _PG_init(void)
 							PGC_USERSET, GUC_UNIT_MB, NULL, NULL, NULL);
 
 #ifdef PG_FTS_TEST_HOOKS
+	/*
+	 * TEST-ONLY build.  This GUC only exists when compiled with
+	 * -DPG_FTS_TEST_HOOKS (never in a release build recipe -- Makefile, meson,
+	 * and flake all omit it).  Announce loudly at load so a test-hook build can
+	 * never be mistaken for, or silently shipped as, a production build.
+	 */
+	ereport(WARNING,
+			(errmsg("pg_fts was built with PG_FTS_TEST_HOOKS: this is a TEST build, not for production")));
 	DefineCustomIntVariable("pg_fts.test_pause_advisory_key",
 							"TEST-ONLY: advisory key a scan waits on mid-collect (0=off).",
 							NULL,

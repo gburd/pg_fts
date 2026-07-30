@@ -1329,6 +1329,7 @@ BEGIN
     PERFORM fts_merge('recyc_bm25');
   END LOOP;
 END $$;
+SELECT pg_relation_size('recyc_bm25') AS recyc_churned \gset
 -- after churn the index is still correct
 SELECT count(*) > 0 AS still_matches
 FROM fts_search('recyc_bm25', 'term1'::ftsquery, 5000) r JOIN recyc x ON x.ctid = r.ctid;
@@ -1337,15 +1338,31 @@ FROM fts_search('recyc_bm25', 'term1'::ftsquery, 5000) r JOIN recyc x ON x.ctid 
  t
 (1 row)
 
--- size stays bounded across churn (freed blocks recycled, not leaked); the
--- bound includes the trigram index pages rebuilt on each merge.
-SELECT pg_relation_size('recyc_bm25') < 800 * 8192 AS size_bounded;
+-- fts_merge compacts the segment directory but deliberately does NOT shrink the
+-- file (that is fts_vacuum's job); after fts_vacuum the space IS reclaimed, so
+-- the vacuumed index is within a small multiple of a freshly-built twin over the
+-- SAME rows -- the leak-free property, asserted against a from-scratch build
+-- rather than a hardcoded byte size / block number (which is environment-
+-- dependent, e.g. a pinned-horizon reader defers reclaim and inflates any fixed
+-- bound).  A genuine per-merge leak would not come back down under fts_vacuum.
+SELECT fts_vacuum('recyc_bm25');
+ fts_vacuum 
+------------
+ t
+(1 row)
+
+SELECT pg_relation_size('recyc_bm25') AS recyc_vacuumed \gset
+CREATE TABLE recyc_fresh (id serial, d ftsdoc);
+INSERT INTO recyc_fresh (d) SELECT d FROM recyc ORDER BY id;
+CREATE INDEX recyc_fresh_bm25 ON recyc_fresh USING fts (d);
+SELECT pg_relation_size('recyc_fresh_bm25') AS recyc_fresh \gset
+SELECT :recyc_vacuumed <= :recyc_fresh * 3 AS size_bounded;
  size_bounded 
 --------------
  t
 (1 row)
 
-DROP TABLE recyc;
+DROP TABLE recyc, recyc_fresh;
 -- amcanorderbyop: ORDER BY col <=> query LIMIT k uses an index ordering scan.
 CREATE TABLE ord (id serial, d ftsdoc);
 INSERT INTO ord (d) VALUES

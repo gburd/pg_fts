@@ -93,6 +93,32 @@ is( $standby->safe_psql('postgres',
 		"$q SELECT count(*) FROM docs WHERE d \@\@\@ 'alpha'::ftsquery"),
 	1400, 'standby still answers queries after rejected maintenance calls');
 
+# Failover: promote the standby to a primary.  The replicated bm25 index must
+# answer identically on the promoted node, and maintenance functions -- rejected
+# while it was in recovery -- must now SUCCEED (recovery has ended).
+$primary->stop;                  # simulate primary loss
+$standby->promote;
+$standby->poll_query_until('postgres', 'SELECT NOT pg_is_in_recovery()')
+  or die "standby did not leave recovery after promote";
+
+# same answers on the promoted node (ranked + boolean + count)
+is( $standby->safe_psql('postgres',
+		"$q SELECT count(*) FROM docs WHERE d \@\@\@ 'alpha'::ftsquery"),
+	1400, 'promoted node: alpha count correct (index survived failover)');
+is( $standby->safe_psql('postgres',
+		"$q SELECT count(*) FROM docs WHERE d \@\@\@ 'beta'::ftsquery"),
+	201, 'promoted node: beta count correct');
+is( $standby->safe_psql('postgres', "SELECT fts_count('docs_bm25', 'alpha'::ftsquery)"),
+	1400, 'promoted node: fts_count correct');
+
+# maintenance now works on the promoted primary, and writes replicate/persist
+is( $standby->safe_psql('postgres', "SELECT fts_vacuum('docs_bm25') IS NOT NULL"),
+	't', 'promoted node: fts_vacuum() now runs (no longer in recovery)');
+$standby->safe_psql('postgres',
+	"INSERT INTO docs SELECT g, to_ftsdoc('gamma doc ' || g) FROM generate_series(9000, 9099) g");
+is( $standby->safe_psql('postgres',
+		"$q SELECT count(*) FROM docs WHERE d \@\@\@ 'gamma'::ftsquery"),
+	100, 'promoted node accepts writes to the index after failover');
+
 $standby->stop;
-$primary->stop;
 done_testing();
