@@ -2441,16 +2441,21 @@ bm25_page_recyclable(Relation index, Page page)
 	if (PageIsNew(page))
 		return true;
 	/*
-	 * During single-writer compaction (fts_vacuum / CIC), bm25_alloc_begin has
-	 * gathered the low free list and we hold a lock that excludes concurrent
-	 * scans -- so a just-freed page is safe to reuse IMMEDIATELY, and we MUST,
-	 * or the vacate+pack phase cannot repack into the low region it just freed
-	 * (it would extend instead, growing the file every pass and leaving no
-	 * truncatable tail -- observed as fts_vacuum making the index bigger).  The
-	 * recycle gate exists only to protect concurrent readers on the normal
-	 * INSERT/merge path; it does not apply here.
+	 * The recycle gate protects a CONCURRENT scan from reading a page we free
+	 * and hand back to the allocator (the scan holds only AccessShareLock, which
+	 * does not conflict with a merge/vacuum's ShareUpdateExclusiveLock).  It is
+	 * safe to bypass ONLY when no concurrent scan can exist -- i.e. we hold
+	 * AccessExclusiveLock on the index (CIC finalize, or fts_vacuum which now
+	 * takes AccessExclusiveLock).  Under ShareUpdateExclusiveLock (autovacuum
+	 * cleanup, plain VACUUM) a scan CAN be running, so the gate must stand even
+	 * during compaction -- bypassing it there let fts_vacuum recycle a segment's
+	 * pages while a concurrent reader was still copying them (e.g. a livedocs
+	 * blob), corrupting the read and crashing (a rare SIGSEGV under heavy
+	 * read+insert+merge+vacuum churn).  The bm25_lowfree/extend-only compaction
+	 * state alone is NOT sufficient license to bypass; the LOCK is.
 	 */
-	if (bm25_lowfree != NULL || bm25_alloc_extend_only)
+	if ((bm25_lowfree != NULL || bm25_alloc_extend_only) &&
+		CheckRelationLockedByMe(index, AccessExclusiveLock, true))
 		return true;
 	op = BM25PageGetOpaque(page);
 	if (!(op->flags & BM25_FREED))
@@ -4757,6 +4762,14 @@ PG_FUNCTION_INFO_V1(fts_vacuum);
  * pages left by prior merges -- packing live pages at the front of the file
  * and truncating the free tail back to the OS.  Use this to shrink an index
  * that has grown physically larger than its live contents.
+ *
+ * Takes AccessExclusiveLock on the index (like REINDEX): the vacate+pack phase
+ * recycles just-freed pages immediately, which is only safe when no concurrent
+ * scan can still be reading them.  Under the weaker ShareUpdateExclusiveLock a
+ * scan could read a page mid-recycle (a rare crash); the exclusive lock is the
+ * price of single-pass in-place shrink.  Autovacuum's cleanup path compacts
+ * under its own SUEL and therefore keeps the recycle gate, reclaiming across
+ * passes rather than corrupting a concurrent scan.
  */
 Datum
 fts_vacuum(PG_FUNCTION_ARGS)
@@ -4765,7 +4778,7 @@ fts_vacuum(PG_FUNCTION_ARGS)
 	Relation	index;
 	bool		done;
 
-	index = index_open(indexoid, ShareUpdateExclusiveLock);
+	index = index_open(indexoid, AccessExclusiveLock);
 	if (index->rd_rel->relam != get_index_am_oid("fts", true))
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
@@ -4774,7 +4787,7 @@ fts_vacuum(PG_FUNCTION_ARGS)
 	done = bm25_flush_pending(index);
 	if (bm25_vacuum_compact(index))
 		done = true;
-	index_close(index, ShareUpdateExclusiveLock);
+	index_close(index, AccessExclusiveLock);
 
 	PG_RETURN_BOOL(done);
 }
