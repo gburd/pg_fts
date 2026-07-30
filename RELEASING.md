@@ -23,6 +23,55 @@ Releases are **tag-triggered**. The version lives in `META.json` and
    git push origin vX.Y.Z
    ```
 
+## Storage / WAL / crash-recovery review checklist (per release)
+
+pg_fts is a single-author project; this checklist is the standing "second set of
+eyes" for any change that touches the storage, WAL, crash-recovery, page-recycle,
+or concurrency paths.  Work through it before tagging a release that modifies
+any of `pg_fts_am.c` / `pg_fts_am_scan.c` / `pg_fts_customscan.c` /
+`pg_fts_migrate.c` or the on-disk structures in `pg_fts_am.h` / `pg_fts_for.h`.
+A change confined to analysis/query-parse/ranking value code (no page or catalog
+effect) can skip it.
+
+- [ ] **All page mutations go through `GenericXLog`.** No new
+      `log_newpage`/`XLogInsert`/`smgrwrite`/direct buffer flush; no custom
+      resource manager.  (`grep -nE 'log_newpage|XLogInsert|smgrwrite' *.c` is
+      empty.)
+- [ ] **Atomic publish point preserved.** A built/flushed/merged segment is
+      written while invisible and published by a single metapage record; a
+      crash leaves the old state or the new state, never a torn structure.
+- [ ] **Standby-safe page recycling.** A freed page is not reused until its
+      free-XID horizon has passed (`bm25_page_recyclable`); any new recycle site
+      honors the gate, and any gate bypass is justified by an exclusive lock
+      (`CheckRelationLockedByMe(..., AccessExclusiveLock)`).
+- [ ] **No write path runs during recovery.** New SQL-callable functions that
+      write WAL call the recovery guard (`RecoveryInProgress()` &rarr; error);
+      AM callbacks are exempt (core never invokes them in recovery).
+- [ ] **Privilege check on any function that opens an index by OID or exposes
+      indexed content.** Maintenance functions require index ownership; content
+      functions are revoked from `PUBLIC` in the install + upgrade SQL.
+- [ ] **Bounded miss, never crash.** Any new decode of page-derived bytes
+      bounds-checks lengths against the page before trusting them, and degrades
+      to a bounded wrong-count rather than an out-of-bounds read; a
+      corresponding fuzz/property case exists.
+- [ ] **Cancellation.** Every new long loop polls `CHECK_FOR_INTERRUPTS()` with
+      no lock held across the yield.
+- [ ] **Corpus statistics count only live documents** (build callback gates
+      `ndocs`/`sumdoclen` on `tupleIsAlive`; merge accumulation uses
+      `ndocs - ndeleted`).
+- [ ] **On-disk format change?** If yes, bump `BM25MetaPageData.version`, read
+      both old and new formats, ship as a MINOR release with a real old-format
+      TAP test, and add the upgrade path (see below).  A forced REINDEX is a
+      release blocker.
+- [ ] **Full gate green on the supported majors (17, 18):** `installcheck`,
+      isolation, TAP (incl. crash-recovery `t/001`, replication `t/002`,
+      pinned-horizon `t/009`), `make check-ascii`, `make check-alloc`, the fuzz
+      harness (`== ALL CLEAN ==`), and coverage &ge; 90% of pg_fts-own sources.
+- [ ] **Concurrency/traversal-core change?** Get a second review (a reviewer
+      sub-agent or a human) and, for anything scale-sensitive, an A/B on real
+      hardware before shipping &mdash; do not ship a plausible-but-unproven
+      concurrency fix (a crash is worse than the bug it claims to fix).
+
 ## On-disk format changes (MANDATORY upgrade path)
 
 **Rule: any release that changes the on-disk index format MUST ship an upgrade
