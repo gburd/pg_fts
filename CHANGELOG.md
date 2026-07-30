@@ -2,6 +2,30 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.2.2
+
+Bug-fix release. **No on-disk format change** from 1.2.1; no **REINDEX**
+required (`ALTER EXTENSION pg_fts UPDATE TO '1.2.2'`). Two `fts_vacuum` fixes.
+
+- **Fixed `fts_vacuum()` growing the index instead of shrinking it.** The 1.2.1
+  deletion-XID recycle gate (which protects a concurrent scan from reading a
+  just-freed page) also blocked `fts_vacuum()`'s compaction from repacking into
+  the low pages it had itself just freed, so the vacate+pack phase extended the
+  relation and `fts_vacuum()` GREW the index on every call and never truncated a
+  tail. Compaction now reuses freed pages again and `fts_vacuum()` compacts to a
+  stable floor (measured: a churned index 143 MB -> 60 MB, idempotent). If you
+  ran `fts_vacuum()` on 1.2.1 and it did not shrink, re-run it on 1.2.2.
+- **Fixed a rare crash from `fts_vacuum()` (or autovacuum) concurrent with
+  reads.** `fts_vacuum()` ran under a lock that does not block scans, so a
+  reader could still be copying a segment's pages while compaction recycled and
+  overwrote them, corrupting the read (a rare SIGSEGV under heavy simultaneous
+  read + insert + merge + vacuum). Page recycling during compaction is now
+  bypassed only under an exclusive lock, and `fts_vacuum()` takes
+  `AccessExclusiveLock` on the index (like `REINDEX`) so its in-place shrink is
+  safe; autovacuum's cleanup keeps the gate and reclaims space across passes
+  without blocking or corrupting concurrent scans. (Root-caused with
+  AddressSanitizer; a concurrent read+vacuum regression test now gates CI.)
+
 ## 1.2.1
 
 Bug-fix release. **No on-disk format change** from 1.2.0; no **REINDEX**
