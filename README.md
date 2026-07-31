@@ -75,8 +75,10 @@ CREATE INDEX docs_bm25 ON docs USING fts (to_ftsdoc('english', body));
 SELECT id FROM docs
  WHERE to_ftsdoc('english', body) @@@ to_ftsquery('english', 'quick & fox');
 
--- BM25-ranked top-k (index-only ordering scan)
+-- BM25-ranked top-k (index-only ordering scan).  The @@@ predicate is required
+-- to use the index for the ORDER BY d <=> q KNN scan.
 SELECT id FROM docs
+ WHERE to_ftsdoc('english', body) @@@ to_ftsquery('english', 'quick fox')
  ORDER BY to_ftsdoc('english', body) <=> to_ftsquery('english', 'quick fox')
  LIMIT 10;
 
@@ -84,9 +86,15 @@ SELECT id FROM docs
 SELECT count(*) FROM docs
  WHERE to_ftsdoc('english', body) @@@ to_ftsquery('english', 'quick');
 
--- maintenance
+-- maintenance (run on the primary; both require index ownership and error on a
+-- read replica -- they write WAL)
 SELECT fts_merge('docs_bm25');    -- compact segments now
 SELECT fts_vacuum('docs_bm25');   -- reclaim disk space (compact + truncate)
+
+-- regex / long-fuzzy acceleration is opt-in (default off):
+--   CREATE INDEX ... USING fts (to_ftsdoc('english', body)) WITH (trigrams = on);
+-- fts_search()/fts_anomalous_docs() emit indexed content and are REVOKEd from
+-- PUBLIC; the index owner and superusers keep access (GRANT to widen).
 ```
 
 See `doc/pg_fts.sgml` for the full reference (rendered to HTML and published to
@@ -127,14 +135,19 @@ Features
     ranking needs no heap recheck
   * fts_highlight() and fts_snippet(); tsquery_to_ftsquery() migration + cast
   * phrase queries ("a b c") via per-term positions; prefix (term*), fuzzy
-    (term~k, Levenshtein DFA), and regex (/re/) terms, with a trigram pre-filter
+    (term~k, Levenshtein DFA), and regex (/re/) terms, with an optional trigram
+    pre-filter (`WITH (trigrams = on)`; default off -- regex/long-fuzzy fall
+    back to a dictionary scan without it)
   * external-content indexing via an expression index on to_ftsdoc(col)
   * incremental maintenance (INSERT appends to a pending list, no REINDEX);
     background/on-demand merge (fts_merge()) and compaction (fts_vacuum())
   * block-max WAND / MaxScore top-k with lazy per-column decode; fts_search()
     index-only BM25 top-k
   * fts_count(): MVCC-correct bulk count via the index, plus a transparent
-    count(*) WHERE @@@ CustomScan pushdown
+    count(*) WHERE @@@ CustomScan pushdown (fires for a stored-column index too,
+    not only an expression index); a single plain term over a VACUUMed index is
+    answered from the dictionary document frequency alone (~hundreds of times
+    faster than decoding the postings)
 
 Query language
 --------------
@@ -178,15 +191,19 @@ analysis.  The honest summary:
     retrieval (up to ~40x on common-term top-k, because ts_rank must fetch and
     sort every match) — see bench/RESULTS_WIKIPEDIA_2M.md.
   * vs the specialist BM25 extensions (VectorChord-bm25, Timescale
-    pg_textsearch), pg_fts currently *trails* on raw ranked latency and index
-    size — see bench/RESULTS_VS_VCHORD_PGTEXTSEARCH.md.  The verified root cause
-    is the posting codec, not positions: the bm25 index stores per-document
-    length once per posting (per doc×term pair), which is a large fraction of
-    the index and makes its docid-ordered block-max WAND decode more per
-    candidate.  (Token positions live in the heap `ftsdoc`, not the index;
-    `WITH (positions = on)` adds a lazily-decoded positions column only when
-    requested.)  Closing the gap is a posting-codec change (a per-segment doclen
-    sidecar, then impact-quantized postings) tracked in ROADMAP.md.
+    pg_textsearch), pg_fts leads on rare/mid-term ranked latency and on the
+    index-native count(*); it trails on common-term ranked latency, and its
+    index size depends heavily on the trigram tier — which is now off by default
+    (1.3.0), removing what on high-vocabulary corpora is a large fraction of the
+    index (enable it only for regex/long-fuzzy-heavy workloads).  See
+    bench/RESULTS_VS_VCHORD_PGTEXTSEARCH.md and bench/RESULTS_130_vs_122.md.  The
+    remaining common-term latency gap is a posting-codec matter: the bm25 index
+    stores per-document length once per posting (per doc×term pair), which makes
+    its docid-ordered block-max WAND decode more per candidate.  (Token
+    positions live in the heap `ftsdoc`, not the index; `WITH (positions = on)`
+    adds a lazily-decoded positions column only when requested.)  Closing the
+    gap is a posting-codec change (a per-document doclen sidecar, then
+    impact-quantized postings) tracked in ROADMAP.md.
   * pg_fts's distinguishing strengths are its query-language breadth
     (phrase/NEAR/prefix/fuzzy/regex over one operator), an index-native
     count(*) that the specialist engines do not expose, and MVCC/crash/
@@ -228,8 +245,9 @@ The fts index is a set of immutable SEGMENTS plus a small pending write buffer
 
   * Each segment has a term dictionary (with a sparse per-page block index for
     O(log P) term lookup and sublinear prefix scan), FOR-bit-packed 128-doc
-    posting blocks carrying per-block max-tf and min-|D| impact bounds, a
-    trigram index over the vocabulary (for fuzzy/regex), and a livedocs
+    posting blocks carrying per-block max-tf and min-|D| impact bounds, an
+    optional trigram index over the vocabulary (fuzzy/regex; built only
+    `WITH (trigrams = on)`, default off), and a livedocs
     tombstone bitmap.
   * INSERT appends to the pending buffer (immediately searchable); a flush
     (fts_merge() or VACUUM) folds pending docs into a new segment.  CREATE INDEX
