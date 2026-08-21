@@ -222,8 +222,10 @@ jobs:
         run: |
           PGBIN=/usr/lib/postgresql/17/bin
           # ci/coverage.sh builds with --coverage, runs REGRESS+ISOLATION against
-          # a throwaway cluster, and fails if pg_fts-own line coverage < COV_MIN.
-          COV_MIN=90 PG_CONFIG=$PGBIN/pg_config PGBIN=$PGBIN \
+          # a throwaway cluster, and gates line/function/branch coverage.
+          # COV_CORPUS=1 also drives a moderate high-vocab corpus so the engine's
+          # scale/feature branches count (matches the local measurement).
+          COV_MIN=90 COV_CORPUS=1 PG_CONFIG=$PGBIN/pg_config PGBIN=$PGBIN \
             COV_HTML=coverage-html bash ci/coverage.sh
       - name: Upload coverage HTML
         if: always()
