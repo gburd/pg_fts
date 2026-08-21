@@ -2110,3 +2110,583 @@ SELECT fts_merge('priv_idx') IS NOT NULL AS owner_can_merge;               -- t
 SELECT fts_vacuum('priv_idx') IS NOT NULL AS owner_can_vacuum;             -- t
 DROP TABLE priv;
 DROP ROLE fts_nonowner;
+
+-- ============================================================================
+-- Coverage: BM25 scoring variants, NULL guards, dfs handling, BM25F
+-- (pg_fts_rank.c) -- exercise every parse_variant branch, the argument NULL
+-- guards, the dfs array paths, and the multi-field BM25F formula + its errors.
+-- ============================================================================
+-- every variant + the bm25plus/l aliases score presence > 0
+SELECT variant, fts_bm25_opts(to_ftsdoc('quick fox'), 'fox'::ftsquery,
+                 1000, 3.0, 1.2, 0.75, variant, ARRAY[10.0]) > 0 AS pos
+FROM unnest(ARRAY['lucene','robertson','atire','bm25+','bm25plus','bm25l','l']) AS variant
+ORDER BY variant;
+-- an unknown variant errors
+SELECT fts_bm25_opts(to_ftsdoc('fox'), 'fox'::ftsquery, 1000, 3.0, 1.2, 0.75, 'nope', ARRAY[3.0]);
+-- NULL in any argument yields NULL (PG_ARGISNULL guards)
+SELECT fts_bm25(NULL, 'fox'::ftsquery, 1000, 4.0) IS NULL AS n0,
+       fts_bm25(to_ftsdoc('fox'), NULL, 1000, 4.0) IS NULL AS n1,
+       fts_bm25(to_ftsdoc('fox'), 'fox'::ftsquery, NULL, 4.0) IS NULL AS n2,
+       fts_bm25(to_ftsdoc('fox'), 'fox'::ftsquery, 1000, NULL) IS NULL AS n3;
+SELECT fts_bm25_opts(to_ftsdoc('fox'),'fox'::ftsquery,1000,4.0,NULL,0.75,'lucene') IS NULL AS optnull_k1,
+       fts_bm25_opts(to_ftsdoc('fox'),'fox'::ftsquery,1000,4.0,1.2,0.75,NULL) IS NULL AS optnull_variant;
+-- N < 1 is clamped to 1 (still scores)
+SELECT fts_bm25(to_ftsdoc('fox'),'fox'::ftsquery, 0.0, 4.0) >= 0 AS n_clamped;
+-- dfs with a NULL element (treated as 1.0) and dfs=NULL (default) both work
+SELECT fts_bm25(to_ftsdoc('rare common'),'rare & common'::ftsquery,1000,2.0,ARRAY[2.0,NULL]::float8[]) > 0 AS dfs_null_elem;
+SELECT fts_bm25(to_ftsdoc('fox'),'fox'::ftsquery,1000,4.0,NULL) >= 0 AS dfs_default;
+-- a non-float8 dfs array errors
+SELECT fts_bm25(to_ftsdoc('fox'),'fox'::ftsquery,1000,4.0, ARRAY[1,2]::int[]);
+-- BM25F: two fields, weights, per-field avgdl; title match scores > body-only
+SELECT fts_bm25f(ARRAY[to_ftsdoc('postgres'), to_ftsdoc('other body here')],
+                 'postgres'::ftsquery, ARRAY[5.0,1.0], 1000, ARRAY[1.0,3.0], ARRAY[10.0]) > 0 AS bm25f_pos;
+-- BM25F absent term scores 0
+SELECT fts_bm25f(ARRAY[to_ftsdoc('a'), to_ftsdoc('b')],
+                 'zebra'::ftsquery, ARRAY[2.0,1.0], 100, ARRAY[1.0,1.0]) AS bm25f_absent0;
+-- BM25F NULL guards
+SELECT fts_bm25f(NULL,'a'::ftsquery,ARRAY[1.0],10,ARRAY[1.0]) IS NULL AS bm25f_ndocs_null;
+-- BM25F mismatched array lengths error
+SELECT fts_bm25f(ARRAY[to_ftsdoc('a')],'a'::ftsquery,ARRAY[1.0,2.0],10,ARRAY[1.0]);
+-- BM25F non-float8 weights error
+SELECT fts_bm25f(ARRAY[to_ftsdoc('a')],'a'::ftsquery,ARRAY[1]::int[],10,ARRAY[1.0]);
+
+-- ============================================================================
+-- Coverage: ftsquery parsing edge cases + rendering (pg_fts_query.c)
+-- ============================================================================
+-- every operator renders and round-trips through ftsquery_out
+SELECT 'a & b'::ftsquery::text, 'a | b'::ftsquery::text, '!a'::ftsquery::text,
+       '"a b c"'::ftsquery::text, 'a*'::ftsquery::text, 'a~1'::ftsquery::text,
+       '/^ab/'::ftsquery::text, '(a | b) & c'::ftsquery::text,
+       'NEAR(a b, 3)'::ftsquery::text, 'a b'::ftsquery::text;   -- implicit AND
+-- keyword operators, case-insensitive
+SELECT to_ftsquery('a AND b')::text, to_ftsquery('a OR b')::text, to_ftsquery('NOT a')::text;
+-- empty input -> empty query
+SELECT to_ftsquery('')::text AS empty_q, ''::ftsquery::text AS empty_cast;
+-- malformed queries must ERROR (each is its own statement so the .out records it)
+SELECT '"unterminated'::ftsquery;         -- unterminated quote
+SELECT '/unterminated'::ftsquery;         -- unterminated regex
+SELECT '""'::ftsquery;                    -- empty phrase
+SELECT 'NEAR(only)'::ftsquery;            -- NEAR needs >= 2 terms
+SELECT 'NEAR(a b, 0)'::ftsquery;          -- NEAR k must be >= 1
+SELECT 'a &'::ftsquery;                   -- trailing operator
+SELECT '& a'::ftsquery;                   -- leading operator
+SELECT 'a & & b'::ftsquery;               -- double operator
+SELECT '(a'::ftsquery;                    -- unbalanced paren
+-- NEAR default k (no ,k) and multi-term phrase
+SELECT to_ftsdoc('a b c') @@@ 'NEAR(a c)'::ftsquery AS near_default;
+SELECT to_ftsdoc('x a b c y') @@@ '"a b c"'::ftsquery AS phrase3;
+
+-- ============================================================================
+-- Coverage: ftsdoc I/O + edge tokens (pg_fts_doc.c, pg_fts_analyze.c)
+-- ============================================================================
+-- text round-trip: out -> in
+SELECT to_ftsdoc('quick brown fox')::text::ftsdoc::text = to_ftsdoc('quick brown fox')::text AS text_roundtrip;
+-- binary round-trip: send -> recv
+SELECT (to_ftsdoc('quick brown fox')::text::ftsdoc)::text = to_ftsdoc('quick brown fox')::text AS bin_roundtrip;
+-- empty and whitespace-only docs
+SELECT to_ftsdoc('')::text AS empty_doc, to_ftsdoc('    ')::text AS ws_doc, ftsdoc_length(to_ftsdoc('')) AS empty_len;
+-- repeated term -> tf accumulates
+SELECT to_ftsdoc('fox fox fox')::text AS tf3;
+-- a token longer than the 2047-char limit is dropped with a notice
+SELECT ftsdoc_length(to_ftsdoc('short ' || repeat('x', 3000))) AS long_token_dropped;
+-- simple vs english analyzer differ on stemming/stopwords
+SELECT to_ftsdoc('simple','The Running Foxes')::text AS simple_doc,
+       to_ftsdoc('english','The Running Foxes')::text AS english_doc;
+
+-- ============================================================================
+-- Coverage: tsquery -> ftsquery migration (pg_fts_migrate.c)
+-- ============================================================================
+SELECT (to_tsquery('english','quick & brown'))::ftsquery::text AS mig_and;
+SELECT (to_tsquery('english','quick | brown'))::ftsquery::text AS mig_or;
+SELECT (to_tsquery('english','!slow'))::ftsquery::text AS mig_not;
+SELECT (to_tsquery('english','quick <-> brown'))::ftsquery::text AS mig_phrase;
+SELECT (to_tsquery('english','quick:*'))::ftsquery::text AS mig_prefix;
+
+-- ============================================================================
+-- Coverage: count(*) pushdown rejection paths (pg_fts_customscan.c)
+-- These query shapes must NOT use the FtsCount pushdown (still correct results).
+-- ============================================================================
+CREATE TABLE cs (id serial, cat int, d ftsdoc);
+INSERT INTO cs(cat, d) SELECT g % 3, to_ftsdoc('english','term'||(g%5)||' body') FROM generate_series(1,300) g;
+CREATE INDEX cs_idx ON cs USING fts (d);
+SET enable_seqscan = off;
+-- GROUP BY -> no pushdown, still correct
+SELECT cat, count(*) FROM cs WHERE d @@@ to_ftsquery('english','term1') GROUP BY cat ORDER BY cat;
+-- count(col) (not count(*)) -> different path
+SELECT count(id) > 0 AS count_col FROM cs WHERE d @@@ to_ftsquery('english','term1');
+-- count(*) with an extra non-@@@ qual -> not a bare @@@ pushdown
+SELECT count(*) FROM cs WHERE d @@@ to_ftsquery('english','term1') AND cat = 0;
+-- count(DISTINCT) -> no pushdown
+SELECT count(DISTINCT cat) FROM cs WHERE d @@@ to_ftsquery('english','term1');
+-- plain bare count(*) -> DOES push down (control)
+SELECT count(*) FROM cs WHERE d @@@ to_ftsquery('english','term1');
+RESET enable_seqscan;
+DROP TABLE cs;
+
+-- ============================================================================
+-- Coverage: engine scan paths (pg_fts_am.c / pg_fts_am_scan.c) -- WAND vs
+-- MaxScore, positions-on ranked/phrase, adaptive-k growth, multi-segment
+-- ranked, anomaly detection, deep fts_search with tombstones.
+-- ============================================================================
+-- MaxScore path: a ranked query with >= 4 terms takes fts_search_maxscore
+CREATE TABLE ms4 (id serial, d ftsdoc);
+INSERT INTO ms4(d) SELECT to_ftsdoc('english',
+  (CASE WHEN g%2=0 THEN 'alpha ' ELSE '' END) ||
+  (CASE WHEN g%3=0 THEN 'beta ' ELSE '' END) ||
+  (CASE WHEN g%5=0 THEN 'gamma ' ELSE '' END) ||
+  (CASE WHEN g%7=0 THEN 'delta ' ELSE '' END) || 'w'||(g%40)||' body '||g)
+  FROM generate_series(1,1200) g;
+CREATE INDEX ms4_idx ON ms4 USING fts (d);
+SET enable_seqscan = off;
+-- 4-term OR -> MaxScore; top-k must equal a brute-force score sort
+SELECT count(*) = 10 AS maxscore_k10 FROM (
+  SELECT id FROM ms4 WHERE d @@@ to_ftsquery('english','alpha | beta | gamma | delta')
+  ORDER BY d <=> to_ftsquery('english','alpha | beta | gamma | delta') LIMIT 10) x;
+-- adaptive-k growth: pull well past the first batch (LIMIT 300)
+SELECT count(*) AS deep_limit FROM (
+  SELECT id FROM ms4 WHERE d @@@ to_ftsquery('english','w1 | alpha | beta | gamma | delta')
+  ORDER BY d <=> to_ftsquery('english','w1 | alpha | beta | gamma | delta') LIMIT 300) x;
+RESET enable_seqscan;
+DROP TABLE ms4;
+
+-- positions = on: phrase/NEAR answered from the index (no heap recheck path)
+CREATE TABLE posidx (id serial, body text);
+INSERT INTO posidx(body) SELECT 'quick brown fox number '||g||' jumps' FROM generate_series(1,400) g;
+INSERT INTO posidx(body) SELECT 'brown quick fox '||g FROM generate_series(1,100) g;   -- reversed
+CREATE INDEX posidx_bm25 ON posidx USING fts (to_ftsdoc('english', body)) WITH (positions = on);
+SET enable_seqscan = off;
+SELECT count(*) AS phrase_hits FROM posidx
+ WHERE to_ftsdoc('english', body) @@@ '"quick brown"'::ftsquery;    -- 400 (adjacent only)
+SELECT count(*) AS near_hits FROM posidx
+ WHERE to_ftsdoc('english', body) @@@ 'NEAR(quick fox, 3)'::ftsquery;
+-- ranked over the positions index
+SELECT count(*) = 10 AS pos_ranked FROM (
+  SELECT id FROM posidx WHERE to_ftsdoc('english', body) @@@ 'quick'::ftsquery
+  ORDER BY to_ftsdoc('english', body) <=> 'quick'::ftsquery LIMIT 10) x;
+RESET enable_seqscan;
+DROP TABLE posidx;
+
+-- multi-segment (oversized-doc) ranked scan + anomaly detection + df/stats
+CREATE TABLE seg2 (id serial, d ftsdoc);
+INSERT INTO seg2(d) SELECT to_ftsdoc('english',
+  repeat('common ', 1+(g%8)) || 'rare'||g||' ' || (SELECT string_agg('u'||g||'x'||k,' ') FROM generate_series(1,1600) k))
+  FROM generate_series(1,80) g;
+CREATE INDEX seg2_idx ON seg2 USING fts (d);
+SET enable_seqscan = off;
+SELECT fts_index_nsegments('seg2_idx') > 1 AS multi_seg;
+SELECT count(*) = 80 AS common_all FROM seg2 WHERE d @@@ 'common'::ftsquery;
+-- ranked over multiple segments
+SELECT count(*) = 10 AS seg_ranked FROM (
+  SELECT id FROM seg2 WHERE d @@@ 'common'::ftsquery ORDER BY d <=> 'common'::ftsquery LIMIT 10) x;
+-- anomaly detection: docs with the rarest terms, with and without max_df
+SELECT count(*) > 0 AS anom_any FROM fts_anomalous_docs('seg2_idx', 5);
+SELECT count(*) >= 0 AS anom_maxdf FROM fts_anomalous_docs('seg2_idx', 5, 10);
+-- df + stats introspection
+SELECT fts_index_df('seg2_idx', 'common'::ftsquery) = ARRAY[80.0]::float8[] AS df_common;
+SELECT ndocs::int = 80 AS stats_ndocs FROM fts_index_stats('seg2_idx');
+-- merge to one segment then re-query (merge path + post-merge scan)
+SELECT fts_merge('seg2_idx') IS NOT NULL AS merged;
+SELECT fts_index_nsegments('seg2_idx') AS nseg_after_merge;
+SELECT count(*) = 80 AS common_after_merge FROM seg2 WHERE d @@@ 'common'::ftsquery;
+RESET enable_seqscan;
+DROP TABLE seg2;
+
+-- deep fts_search with tombstones (over-fetch + livedocs subtraction path)
+CREATE TABLE tsrch (id serial, d ftsdoc);
+INSERT INTO tsrch(d) SELECT to_ftsdoc('english','apple w'||(g%20)||' body '||g) FROM generate_series(1,600) g;
+CREATE INDEX tsrch_idx ON tsrch USING fts (d);
+DELETE FROM tsrch WHERE id % 2 = 0;   -- tombstone half
+VACUUM tsrch;
+SET enable_seqscan = off;
+SELECT count(*) = 300 AS live_after_delete FROM tsrch WHERE d @@@ 'apple'::ftsquery;
+SELECT count(*) AS srf_deep FROM fts_search('tsrch_idx', 'apple'::ftsquery, 500);   -- <=300 live
+SELECT bool_and(alive) AS all_alive FROM (
+  SELECT EXISTS(SELECT 1 FROM tsrch x WHERE x.ctid = r.ctid) AS alive
+  FROM fts_search('tsrch_idx', 'apple'::ftsquery, 500) r) q;
+RESET enable_seqscan;
+DROP TABLE tsrch;
+
+-- ============================================================================
+-- Coverage: pg_fts_trgm.c -- fts_regex_trigrams metacharacter switch (every
+-- case: backslash-escape, *, ?, +, {m,n}, |, (), [...], ., ^/$ anchors) and
+-- fts_trigrams (short-term pad path, long-term dedup path).  Exercised both
+-- via a WITH (trigrams=on) index (candidate-narrowing path,
+-- bm25_trgm_candidates) and directly against a sequential ftsdoc (the exact
+-- fts_doc_has_regex / fts_doc_has_fuzzy recheck path, no index).
+-- ============================================================================
+CREATE TABLE trgmx (id serial, d ftsdoc);
+INSERT INTO trgmx (d)
+  SELECT to_ftsdoc('english',
+           'abcdef quickbrownfox jumping settlement developer government ' ||
+           'programmer environment establishment word' || (g % 250) ||
+           ' filler text number ' || g)
+  FROM generate_series(1, 220) g;
+CREATE INDEX trgmx_idx ON trgmx USING fts (d) WITH (trigrams = on);
+SET enable_seqscan = off;
+-- backslash-escape: literal '.' via \. inside the pattern (case '\\')
+SELECT count(*) >= 0 AS rx_escape FROM trgmx WHERE d @@@ '/abc\.def/'::ftsquery;
+-- star: previous char optional, run flushed and dropped (case '*')
+SELECT count(*) >= 0 AS rx_star FROM trgmx WHERE d @@@ '/quickbrown.*fox/'::ftsquery;
+SELECT count(*) >= 0 AS rx_star_hit FROM trgmx WHERE d @@@ '/quickbrown[a-z]*fox/'::ftsquery;
+-- question mark: previous char optional (case '?')
+SELECT count(*) >= 0 AS rx_opt FROM trgmx WHERE d @@@ '/developers?/'::ftsquery;
+-- plus: previous char required, run flushed but kept (case '+')
+SELECT count(*) >= 0 AS rx_plus FROM trgmx WHERE d @@@ '/programmer+/'::ftsquery;
+-- brace quantifier, non-zero-capable {1,2} and zero-capable {0,2} (case '{')
+SELECT count(*) >= 0 AS rx_brace_min1 FROM trgmx WHERE d @@@ '/governmentz{1,2}/'::ftsquery;
+SELECT count(*) >= 0 AS rx_brace_min0 FROM trgmx WHERE d @@@ '/governmentz{0,2}/'::ftsquery;
+-- alternation: drop the whole current run (case '|')
+SELECT count(*) >= 0 AS rx_alt FROM trgmx WHERE d @@@ '/environment|nosuchword/'::ftsquery;
+-- groups: flush at each boundary (case '(' / ')')
+SELECT count(*) >= 0 AS rx_group FROM trgmx WHERE d @@@ '/(establish)ment/'::ftsquery;
+-- character class: not a fixed literal, flush and skip the whole [...] (case '[')
+SELECT count(*) >= 0 AS rx_class FROM trgmx WHERE d @@@ '/develop[eE]r/'::ftsquery;
+-- character class with leading '^' (negated) and a literal ']' as first char
+SELECT count(*) >= 0 AS rx_class_neg FROM trgmx WHERE d @@@ '/develop[^xyz]r/'::ftsquery;
+SELECT count(*) >= 0 AS rx_class_litbracket FROM trgmx WHERE d @@@ '/develop[]a]r/'::ftsquery;
+-- wildcard dot: breaks the run (case '.')
+SELECT count(*) >= 0 AS rx_dot FROM trgmx WHERE d @@@ '/gov.rnment/'::ftsquery;
+-- anchors: run boundary, no char consumed (case '^' / '$')
+SELECT count(*) >= 0 AS rx_anchor_start FROM trgmx WHERE d @@@ '/^abcdef/'::ftsquery;
+SELECT count(*) >= 0 AS rx_anchor_end FROM trgmx WHERE d @@@ '/abcdef$/'::ftsquery;
+-- literal run shorter than a trigram (<3 required chars) -> no trigram
+-- extracted, caller falls back to a full scan (still correct)
+SELECT count(*) >= 0 AS rx_short_run FROM trgmx WHERE d @@@ '/ab/'::ftsquery;
+-- literal run >= 3 chars -> a real required trigram is extracted
+SELECT count(*) >= 0 AS rx_long_run FROM trgmx WHERE d @@@ '/abcd/'::ftsquery;
+-- trailing lone backslash (no char after it within the pattern): the
+-- tokenizer's regex reader stops at the first unescaped '/', so 'abc\/' with
+-- one slash yields the pattern text "abc\" -- a backslash as the LAST byte,
+-- hitting the "i + 1 < relen" false branch (case '\\', the else i++ arm).
+-- The trailing lone backslash is an invalid regex to the recheck engine, so the
+-- scan must ERROR cleanly (not crash): assert it raises rather than matches.
+DO $$
+BEGIN
+  PERFORM count(*) FROM trgmx WHERE d @@@ '/abc\/'::ftsquery;
+  RAISE NOTICE 'rx_trailing_backslash: no error';
+EXCEPTION WHEN others THEN
+  RAISE NOTICE 'rx_trailing_backslash: raised (expected for a trailing-backslash regex)';
+END $$;
+-- fuzzy terms of varied length: 1-2 chars (fts_trigrams pad path, len<3),
+-- exactly 3 (single trigram, no dedup needed), and long (>=8, dedup path)
+SELECT count(*) >= 0 AS fuzzy_len1 FROM trgmx WHERE d @@@ 'a~1'::ftsquery;
+SELECT count(*) >= 0 AS fuzzy_len2 FROM trgmx WHERE d @@@ 'ab~1'::ftsquery;
+SELECT count(*) >= 0 AS fuzzy_len3 FROM trgmx WHERE d @@@ 'abc~1'::ftsquery;
+SELECT count(*) >= 0 AS fuzzy_long FROM trgmx WHERE d @@@ 'developement~2'::ftsquery;
+RESET enable_seqscan;
+DROP TABLE trgmx;
+
+-- Same regex/fuzzy patterns, run against a bare sequential ftsdoc (no index
+-- at all): exercises fts_regex_trigrams / fts_trigrams only through the exact
+-- fts_doc_has_regex / fts_doc_has_fuzzy recheck, never bm25_trgm_candidates.
+SELECT to_ftsdoc('quickbrownfox jumps') @@@ '/quickbrown\.fox/'::ftsquery AS seq_rx_escape;
+SELECT to_ftsdoc('developer settlement') @@@ '/develop.*ment/'::ftsquery AS seq_rx_star;
+SELECT to_ftsdoc('developer settlement') @@@ '/developers?/'::ftsquery AS seq_rx_opt;
+SELECT to_ftsdoc('programmer environment') @@@ '/programmer+/'::ftsquery AS seq_rx_plus;
+SELECT to_ftsdoc('government establishment') @@@ '/governmentz{1,2}|government/'::ftsquery AS seq_rx_brace_alt;
+SELECT to_ftsdoc('establishment government') @@@ '/(establish)ment/'::ftsquery AS seq_rx_group;
+SELECT to_ftsdoc('developer settlement') @@@ '/develop[eE]r/'::ftsquery AS seq_rx_class;
+SELECT to_ftsdoc('developer settlement') @@@ '/develop[^xyz]r/'::ftsquery AS seq_rx_class_neg;
+SELECT to_ftsdoc('government establishment') @@@ '/gov.rnment/'::ftsquery AS seq_rx_dot;
+SELECT to_ftsdoc('abcdef ghijkl') @@@ '/^abcdef/'::ftsquery AS seq_rx_anchor_start;
+SELECT to_ftsdoc('abcdef ghijkl') @@@ '/ghijkl$/'::ftsquery AS seq_rx_anchor_end;
+SELECT to_ftsdoc('ab cd') @@@ '/ab/'::ftsquery AS seq_rx_short_run;
+SELECT to_ftsdoc('abcd efgh') @@@ '/abcd/'::ftsquery AS seq_rx_long_run;
+SELECT to_ftsdoc('a b c') @@@ 'a~1'::ftsquery AS seq_fuzzy_len1;
+SELECT to_ftsdoc('ab cd ef') @@@ 'ab~1'::ftsquery AS seq_fuzzy_len2;
+SELECT to_ftsdoc('abc def ghi') @@@ 'abc~1'::ftsquery AS seq_fuzzy_len3;
+SELECT to_ftsdoc('development environment') @@@ 'developement~2'::ftsquery AS seq_fuzzy_long;
+
+-- ============================================================================
+-- Coverage: pg_fts_rank.c -- fts_bm25f (3+ fields, an empty-doc field, a
+-- per-field dfs array, sharply differing weights, an absent query term, a
+-- multi-term query) and fts_distance / fts_distance_commutator directly.
+-- ============================================================================
+-- 3 fields (title/body/tags), one field an EMPTY ftsdoc (to_ftsdoc('')),
+-- multi-term query, per-term dfs, weights that differ a lot.
+SELECT round(fts_bm25f(
+         ARRAY[to_ftsdoc('postgres fts'), to_ftsdoc(''), to_ftsdoc('search engine postgres')],
+         'postgres & search'::ftsquery,
+         ARRAY[10.0, 3.0, 1.0],       -- title >> tags >> empty body
+         500.0,
+         ARRAY[4.0, 1.0, 6.0],        -- avgdl per field
+         ARRAY[50.0, 20.0])::numeric, 6) AS bm25f_3field;
+-- a query term absent from every field scores exactly 0 (tfw stays 0 for all
+-- fields -> the "continue" before idf is ever computed for that term)
+SELECT fts_bm25f(
+         ARRAY[to_ftsdoc('alpha beta'), to_ftsdoc('gamma delta')],
+         'zzzzabsent'::ftsquery,
+         ARRAY[1.0, 1.0], 100.0, ARRAY[2.0, 2.0]) AS bm25f_absent_term;
+-- title-weighted hit outranks the identical term only in the body
+SELECT fts_bm25f(ARRAY[to_ftsdoc('widget'), to_ftsdoc('unrelated filler text')],
+                'widget'::ftsquery, ARRAY[8.0, 1.0], 200.0, ARRAY[3.0, 12.0])
+     > fts_bm25f(ARRAY[to_ftsdoc('unrelated filler'), to_ftsdoc('widget text')],
+                'widget'::ftsquery, ARRAY[8.0, 1.0], 200.0, ARRAY[3.0, 12.0])
+       AS bm25f_title_weight_wins;
+-- field that is NULL (not merely empty) is skipped (docnull[f] branch)
+SELECT fts_bm25f(ARRAY[to_ftsdoc('alpha'), NULL],
+                'alpha'::ftsquery, ARRAY[1.0, 1.0], 100.0, ARRAY[1.0, 1.0]) > 0
+       AS bm25f_null_field_skipped;
+-- avgdl <= 0 for one field clamps to 1.0 (avgdl <= 0.0 branch)
+SELECT fts_bm25f(ARRAY[to_ftsdoc('alpha beta')],
+                'alpha'::ftsquery, ARRAY[1.0], 100.0, ARRAY[0.0]) >= 0
+       AS bm25f_avgdl_zero_clamped;
+-- NULL weight/avgdl element in the arrays (wnull/avgnull branches)
+SELECT fts_bm25f(ARRAY[to_ftsdoc('alpha beta')],
+                'alpha'::ftsquery, ARRAY[NULL]::float8[], 100.0, ARRAY[NULL]::float8[]) >= 0
+       AS bm25f_null_weight_avgdl;
+-- multi-term query where each term is present in a different field
+-- (exercises the per-term loop body running twice, each visiting all fields)
+SELECT fts_bm25f(ARRAY[to_ftsdoc('alpha'), to_ftsdoc('beta')],
+                'alpha | beta'::ftsquery, ARRAY[1.0, 1.0], 100.0, ARRAY[3.0, 3.0]) > 0
+       AS bm25f_multiterm;
+
+-- fts_distance / fts_distance_commutator NULL-argument short-circuits.
+SELECT fts_distance(NULL, 'fox'::ftsquery) IS NULL AS dist_null_doc,
+       fts_distance(to_ftsdoc('fox'), NULL) IS NULL AS dist_null_query;
+SELECT fts_distance_commutator(NULL, to_ftsdoc('fox')) IS NULL AS distc_null_query,
+       fts_distance_commutator('fox'::ftsquery, NULL) IS NULL AS distc_null_doc;
+-- non-null direct calls (the real scoring path, both directions agree)
+SELECT fts_distance(to_ftsdoc('the quick brown fox'), 'quick'::ftsquery) =
+       fts_distance_commutator('quick'::ftsquery, to_ftsdoc('the quick brown fox'))
+       AS dist_direct_agrees;
+
+-- ============================================================================
+-- Coverage: pg_fts_docvalid.h (fts_doc_check, via fts_doc_is_valid) -- the
+-- "normal" (accept) side of every guard: header-fits, VARSIZE<=sz,
+-- version match, entries[]+lexbytes fits, each term's lexeme slice fits, the
+-- positions-present branch (both taken and not-taken), positions region fits,
+-- and each term's tf/posoff run fits.  fts_doc_is_valid is called on every
+-- document while it sits in the PENDING LIST (both when it is flushed to a
+-- segment by fts_merge/fts_vacuum and when a scan walks the pending list
+-- directly), so a variety of pending docs -- empty, single-token, multi-term,
+-- with and without positions, high tf -- exercises the accept path of every
+-- guard in fts_doc_check for both the flags-has-positions and
+-- flags-no-positions shapes.  The reject ("return 0") side of each guard is a
+-- pure corruption/defensive check: it requires a hand-corrupted FtsDoc image
+-- (bad nterms/off/len/tf/posoff/VARSIZE) that no SQL-level constructor can
+-- produce -- fts_doc_build validates before returning, ftsdoc_recv bounds nterms
+-- and every length against the message size, and to_ftsdoc/to_ftsdoc(tsvector)
+-- always build a well-formed image.  That side is exactly what
+-- test/fuzz/fuzz_docvalid.c targets instead (its own header comment says so).
+-- ============================================================================
+CREATE TABLE dv (id serial, d ftsdoc);
+CREATE INDEX dv_idx ON dv USING fts (d);
+-- empty doc: nterms=0, no positions -- entries[]/lexeme loops execute 0 times
+INSERT INTO dv (d) VALUES (to_ftsdoc(''));
+-- single-token doc: nterms=1, tf=1, WITH positions (default text path sets
+-- FTS_DOCF_POSITIONS) -- the positions-present branch, one posoff/tf run
+INSERT INTO dv (d) VALUES (to_ftsdoc('lonely'));
+-- multi-term doc with a high-tf term (many positions for one entry) --
+-- exercises a term whose [posoff, posoff+tf) run is the bulk of positions[]
+INSERT INTO dv (d) VALUES (to_ftsdoc(repeat('alpha ', 50) || 'beta gamma delta'));
+-- built from a tsvector directly (to_ftsdoc_from_tsvector): a different doc
+-- builder feeding the same fts_doc_is_valid checks
+INSERT INTO dv (d) VALUES (to_ftsdoc(to_tsvector('english', 'search engines index text')));
+-- tsvector built from an EMPTY string: another nterms=0 shape, but produced by
+-- the tsvector-adoption path (to_ftsdoc_from_tsvector), not fts_analyze_text
+INSERT INTO dv (d) VALUES (to_ftsdoc(to_tsvector('english', '')));
+-- a stripped tsvector (no positions at all) -> positions-absent branch via the
+-- tsvector path specifically (all-or-nothing degrades to positions-off)
+INSERT INTO dv (d) VALUES (to_ftsdoc(strip(to_tsvector('english', 'no positions here'))));
+-- every doc above went through aminsert (index created before the inserts),
+-- so it sits in the PENDING LIST, not a built segment.
+-- pending-list SCAN path: query while still pending, so fts_doc_is_valid runs
+-- over the raw pending page bytes for every row above.
+SET enable_seqscan = off;
+SELECT count(*) AS dv_pending_scan_hits FROM dv WHERE d @@@ 'alpha'::ftsquery;
+RESET enable_seqscan;
+-- pending-list FLUSH path: fts_merge folds every pending doc into a segment,
+-- running fts_doc_is_valid over each one again during the flush.
+SELECT fts_merge('dv_idx'::regclass) IS NOT NULL AS dv_merged;
+SET enable_seqscan = off;
+SELECT count(*) AS dv_after_merge FROM dv WHERE d @@@ 'alpha'::ftsquery;
+RESET enable_seqscan;
+DROP TABLE dv;
+
+-- binary recv/send round-trips of the same doc shapes, through the wire format
+-- (ftsdoc_recv re-derives nterms/doclen/has_pos from message bytes and rebuilds
+-- via fts_doc_build, so this is a second, independent path to the same
+-- well-formed images that then flow through fts_doc_is_valid once indexed).
+CREATE TEMP TABLE dvrt (id int, d ftsdoc);
+INSERT INTO dvrt VALUES
+  (1, to_ftsdoc('')),
+  (2, to_ftsdoc('single')),
+  (3, to_ftsdoc('alpha beta alpha gamma alpha delta'));
+-- binary send/recv round-trip via COPY (FORMAT binary): send serializes each
+-- ftsdoc, recv (internal) re-derives nterms/doclen/has_pos and rebuilds it.
+CREATE TEMP TABLE dvrt_bin (LIKE dvrt INCLUDING ALL);
+COPY dvrt TO '/tmp/dvrt.bin' WITH (FORMAT binary);
+COPY dvrt_bin FROM '/tmp/dvrt.bin' WITH (FORMAT binary);
+SELECT bool_and(a.d::text = b.d::text) AS dv_binary_roundtrip_ok
+  FROM dvrt a JOIN dvrt_bin b USING (id);
+CREATE INDEX dvrt_idx ON dvrt USING fts (d);
+SET enable_seqscan = off;
+SELECT count(*) AS dvrt_hits FROM dvrt WHERE d @@@ 'alpha'::ftsquery;
+RESET enable_seqscan;
+
+-- ============================================================================
+-- Coverage: pg_fts_aux.c -- fts_highlight / fts_snippet, i.e. tokenize_and_mark
+-- and its callers.  Exercise: is_token_byte's >=0x80 (unicode) branch, a
+-- leading/trailing/only-separator source (the "i > sepstart" emit and the
+-- "i >= len" break), a query that matches nothing (ctx.n == 0 in snippet),
+-- a multi-term query, a phrase query, and the match at the very start, middle
+-- and end of the source text.
+-- ============================================================================
+-- match at the START of the text (first token matched, sepstart==i==0 skip)
+SELECT fts_highlight('needle in a haystack', 'needle'::ftsquery) AS hl_match_start;
+-- match in the MIDDLE
+SELECT fts_highlight('a haystack with needle inside', 'needle'::ftsquery) AS hl_match_middle;
+-- match at the very END (no trailing separator run)
+SELECT fts_highlight('a haystack with a needle', 'needle'::ftsquery) AS hl_match_end;
+-- leading separator run before the first token ("i > sepstart" sink call)
+SELECT fts_highlight('   leading spaces then needle', 'needle'::ftsquery) AS hl_leading_sep;
+-- trailing separator run after the last token
+SELECT fts_highlight('needle then trailing spaces   ', 'needle'::ftsquery) AS hl_trailing_sep;
+-- text that is PURE separators (no token at all): the loop hits "i >= len"
+-- immediately on its first (and only) separator scan
+SELECT fts_highlight('    ...   ', 'needle'::ftsquery) AS hl_all_separators;
+-- empty text: len == 0, loop body never runs
+SELECT fts_highlight('', 'needle'::ftsquery) AS hl_empty_text;
+-- multi-term query (OR): several distinct tokens matched in one pass
+SELECT fts_highlight('alpha in the middle beta at the end', 'alpha | beta'::ftsquery) AS hl_multiterm;
+-- phrase query: tokenize_and_mark only marks per-token query_has_term hits;
+-- highlight marks each phrase word independently (documented literal behavior)
+SELECT fts_highlight('the quick brown fox', '"quick brown"'::ftsquery) AS hl_phrase;
+-- unicode text: tokens with bytes >= 0x80 (is_token_byte's first branch)
+SELECT fts_highlight('café naïve façade', 'café'::ftsquery) AS hl_unicode;
+
+-- fts_snippet: same shapes, plus the ctx.n == 0 (no real tokens at all) path.
+SELECT fts_snippet('needle in a haystack', 'needle'::ftsquery) AS snip_match_start;
+SELECT fts_snippet('a haystack with needle inside', 'needle'::ftsquery) AS snip_match_middle;
+SELECT fts_snippet('a haystack with a needle', 'needle'::ftsquery) AS snip_match_end;
+SELECT fts_snippet('   leading spaces then needle', 'needle'::ftsquery) AS snip_leading_sep;
+-- pure separators: no real tokens recorded by snip_sink -> ctx.n == 0 -> ''
+SELECT fts_snippet('    ...   ', 'needle'::ftsquery) AS snip_all_separators;
+SELECT fts_snippet('', 'needle'::ftsquery) AS snip_empty_text;
+SELECT fts_snippet('alpha in the middle beta at the end', 'alpha | beta'::ftsquery) AS snip_multiterm;
+SELECT fts_snippet('the quick brown fox', '"quick brown"'::ftsquery) AS snip_phrase2;
+SELECT fts_snippet('café naïve façade', 'café'::ftsquery) AS snip_unicode;
+-- window narrower than the doc (best_start > 0 path: ellipsis before the window)
+SELECT fts_snippet(repeat('filler ', 30) || 'needle ' || repeat('trailer ', 30),
+                   'needle'::ftsquery, '<b>', '</b>', ' ... ', 3) AS snip_windowed;
+
+-- ============================================================================
+-- Coverage: pg_fts_match.c -- fts_doc_matches (the RPN stack evaluator) and
+-- fts_match / fts_match_commutator directly on an ftsdoc value (no index).
+-- AND both-present/one-missing, OR, NOT, nested boolean, phrase present/
+-- absent, NEAR present/absent, prefix, an empty query, an empty doc, and a
+-- phrase/NEAR degrading to AND-only when the doc has no stored positions
+-- (phrase_step's "either side lacks positions" branch).
+-- ============================================================================
+-- AND: both present, and one missing
+SELECT to_ftsdoc('alpha beta') @@@ 'alpha & beta'::ftsquery AS and_both_present;
+SELECT to_ftsdoc('alpha only') @@@ 'alpha & beta'::ftsquery AS and_one_missing;
+-- OR: either side present, both absent
+SELECT to_ftsdoc('alpha only') @@@ 'alpha | beta'::ftsquery AS or_left_present;
+SELECT to_ftsdoc('beta only') @@@ 'alpha | beta'::ftsquery AS or_right_present;
+SELECT to_ftsdoc('gamma only') @@@ 'alpha | beta'::ftsquery AS or_both_absent;
+-- NOT: present flips to absent and vice versa
+SELECT to_ftsdoc('alpha') @@@ '!alpha'::ftsquery AS not_present_flips;
+SELECT to_ftsdoc('beta') @@@ '!alpha'::ftsquery AS not_absent_flips;
+-- nested boolean: (a & b) | (!c)
+SELECT to_ftsdoc('alpha beta') @@@ '(alpha & beta) | !gamma'::ftsquery AS nested_and_or;
+SELECT to_ftsdoc('gamma') @@@ '(alpha & beta) | !gamma'::ftsquery AS nested_falls_to_not;
+-- phrase: present (adjacent) and absent (not adjacent) on a POSITIONAL doc
+SELECT to_ftsdoc('the quick brown fox') @@@ '"quick brown"'::ftsquery AS phrase_present;
+SELECT to_ftsdoc('the quick red brown fox') @@@ '"quick brown"'::ftsquery AS phrase_absent;
+-- NEAR: present (within k) and absent (beyond k)
+SELECT to_ftsdoc('quick brown red fox') @@@ 'NEAR(quick fox, 3)'::ftsquery AS near_present;
+SELECT to_ftsdoc('quick brown red slow lazy fox') @@@ 'NEAR(quick fox, 2)'::ftsquery AS near_absent;
+-- prefix: matches any term starting with the prefix
+SELECT to_ftsdoc('development environment') @@@ 'develop*'::ftsquery AS prefix_hit;
+SELECT to_ftsdoc('unrelated words') @@@ 'develop*'::ftsquery AS prefix_miss;
+-- empty query matches nothing (fts_doc_matches: nitems == 0 -> false)
+SELECT to_ftsdoc('anything at all') @@@ ''::ftsquery AS empty_query_no_match;
+-- empty doc matches nothing against any real query (term lookup finds nothing)
+SELECT to_ftsdoc('') @@@ 'anything'::ftsquery AS empty_doc_no_match;
+-- empty query against an empty doc
+SELECT to_ftsdoc('') @@@ ''::ftsquery AS empty_query_empty_doc;
+-- phrase/NEAR on a doc built WITHOUT positions (canonical literal, no '@'):
+-- phrase_step's "either side lacks positions" branch degrades to plain AND,
+-- so a non-adjacent phrase still matches when both terms are merely present.
+SELECT $$'brown':1 'quick':1$$::ftsdoc @@@ '"quick brown"'::ftsquery AS phrase_nopos_degrades_to_and;
+SELECT $$'fox':1 'quick':1$$::ftsdoc @@@ 'NEAR(quick fox, 1)'::ftsquery AS near_nopos_degrades_to_and;
+-- the commutator form (ftsquery @@@ ftsdoc) agrees with fts_match in both
+-- directions for the same boolean/phrase/NEAR cases above
+SELECT ('alpha & beta'::ftsquery @@@ to_ftsdoc('alpha beta'))
+     = (to_ftsdoc('alpha beta') @@@ 'alpha & beta'::ftsquery) AS match_commutator_and;
+SELECT ('"quick brown"'::ftsquery @@@ to_ftsdoc('the quick brown fox'))
+     = (to_ftsdoc('the quick brown fox') @@@ '"quick brown"'::ftsquery) AS match_commutator_phrase;
+SELECT ('NEAR(quick fox, 3)'::ftsquery @@@ to_ftsdoc('quick brown red fox'))
+     = (to_ftsdoc('quick brown red fox') @@@ 'NEAR(quick fox, 3)'::ftsquery) AS match_commutator_near;
+-- fts_match / fts_match_commutator called directly (function-call form)
+SELECT fts_match(to_ftsdoc('alpha beta'), 'alpha & beta'::ftsquery) AS fn_match_and;
+SELECT fts_match_commutator('alpha & beta'::ftsquery, to_ftsdoc('alpha beta')) AS fn_match_commutator_and;
+
+
+-- ============================================================================
+-- Coverage: BM25F NULL-element array paths + pushdown-rejection shapes
+-- (pg_fts_rank.c per-field NULL handling; pg_fts_customscan.c gating)
+-- ============================================================================
+-- BM25F with NULL ELEMENTS inside the arrays (docnull/wnull/avgnull/dfs NULL):
+-- a NULL doc field is skipped; NULL weight/avgdl default to 1.0; NULL dfs -> 1.0.
+SELECT fts_bm25f(ARRAY[to_ftsdoc('postgres'), NULL]::ftsdoc[],
+                 'postgres'::ftsquery, ARRAY[2.0,1.0], 100, ARRAY[1.0,1.0]) > 0 AS bm25f_null_field;
+SELECT fts_bm25f(ARRAY[to_ftsdoc('postgres'), to_ftsdoc('body')],
+                 'postgres'::ftsquery, ARRAY[NULL,1.0]::float8[], 100, ARRAY[1.0,1.0]) >= 0 AS bm25f_null_weight;
+SELECT fts_bm25f(ARRAY[to_ftsdoc('postgres'), to_ftsdoc('body')],
+                 'postgres'::ftsquery, ARRAY[2.0,1.0], 100, ARRAY[NULL,1.0]::float8[]) >= 0 AS bm25f_null_avgdl;
+SELECT fts_bm25f(ARRAY[to_ftsdoc('a b'), to_ftsdoc('c d')],
+                 'a & c'::ftsquery, ARRAY[1.0,1.0], 100, ARRAY[2.0,2.0], ARRAY[NULL,3.0]::float8[]) >= 0 AS bm25f_null_dfs;
+-- three fields; title (field 0) weighted heavily -> a title-only hit scores
+-- higher than a body-only hit
+SELECT fts_bm25f(ARRAY[to_ftsdoc('term'), to_ftsdoc('x'), to_ftsdoc('y')],
+                 'term'::ftsquery, ARRAY[9.0,1.0,1.0], 100, ARRAY[1.0,1.0,1.0])
+     > fts_bm25f(ARRAY[to_ftsdoc('x'), to_ftsdoc('y'), to_ftsdoc('term')],
+                 'term'::ftsquery, ARRAY[9.0,1.0,1.0], 100, ARRAY[1.0,1.0,1.0]) AS bm25f_field_weight;
+-- an empty ftsdoc field (doclen 0) is handled
+SELECT fts_bm25f(ARRAY[to_ftsdoc(''), to_ftsdoc('term body')],
+                 'term'::ftsquery, ARRAY[2.0,1.0], 100, ARRAY[1.0,2.0]) >= 0 AS bm25f_empty_field;
+
+-- Count-pushdown rejection: shapes that must NOT push down (still correct).
+CREATE TABLE psh (id serial, d ftsdoc, txt text);
+INSERT INTO psh(d, txt) SELECT to_ftsdoc('english','term'||(g%4)||' body'), 'plain'||(g%3) FROM generate_series(1,200) g;
+CREATE INDEX psh_idx ON psh USING fts (d);
+CREATE INDEX psh_txt ON psh (txt);   -- a NON-fts index on the same rel
+SET enable_seqscan = off;
+-- @@@ with a NON-constant RHS (a subquery-derived value) -> RHS not a plan Const
+SELECT count(*) FROM psh WHERE d @@@ (SELECT 'term1'::ftsquery);
+-- two @@@ quals -> more than one qual, no single-@@@ pushdown
+SELECT count(*) FROM psh WHERE d @@@ 'term1'::ftsquery AND d @@@ 'body'::ftsquery;
+-- @@@ on a rel where the matched column also has a non-fts index (index-list walk)
+SELECT count(*) FROM psh WHERE d @@@ 'term1'::ftsquery;
+-- count over a rel with NO fts index at all (LHS has no matching fts index)
+SELECT count(*) FROM psh WHERE txt = 'plain1';
+RESET enable_seqscan;
+DROP TABLE psh;
+
+-- ============================================================================
+-- Coverage: fts_highlight / fts_snippet edges (pg_fts_aux.c) + ftsdoc validity
+-- ============================================================================
+-- highlight/snippet: match at start, middle, end; no match; empty; multi-term;
+-- phrase; unicode.
+SELECT fts_highlight('the quick brown fox', 'quick'::ftsquery) LIKE '%quick%' AS hl_mid;
+SELECT fts_highlight('quick brown fox', 'quick'::ftsquery) LIKE '%quick%' AS hl_start;
+SELECT fts_highlight('brown fox quick', 'quick'::ftsquery) LIKE '%quick%' AS hl_end;
+SELECT fts_highlight('brown fox', 'zebra'::ftsquery) AS hl_nomatch;
+SELECT fts_highlight('', 'x'::ftsquery) AS hl_empty;
+SELECT fts_highlight('the quick brown fox', 'quick & fox'::ftsquery) LIKE '%quick%' AS hl_multi;
+SELECT length(fts_snippet('the quick brown fox jumps over the lazy dog', 'fox'::ftsquery)) > 0 AS snip_mid;
+SELECT fts_snippet('nothing here', 'zebra'::ftsquery) IS NOT NULL AS snip_nomatch;
+SELECT length(fts_snippet(repeat('word ', 200) || 'target ' || repeat('more ', 200), 'target'::ftsquery)) > 0 AS snip_long;
+-- ftsdoc validity across edge shapes (pg_fts_docvalid.h via index build)
+CREATE TABLE dv (id serial, d ftsdoc);
+INSERT INTO dv(d) VALUES (to_ftsdoc('')), (to_ftsdoc('one')),
+  (to_ftsdoc('a a a a a')), (to_ftsdoc('english','the the the')),
+  (to_ftsdoc(to_tsvector('english','')));
+CREATE INDEX dv_idx ON dv USING fts (d);
+SET enable_seqscan = off;
+SELECT count(*) = 1 AS one_hit FROM dv WHERE d @@@ 'one'::ftsquery;
+RESET enable_seqscan;
+DROP TABLE dv;
