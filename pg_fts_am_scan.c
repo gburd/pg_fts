@@ -2873,6 +2873,22 @@ wand_contrib_cur(WandCursor *c)
 }
 
 /*
+ * Skip the cursor past the rest of its current 128-block: load the next block.
+ * Sound to call ONLY when this cursor is the single one at/before the pivot
+ * (its block is then a contiguous docid run that blocksum bounded whole, and no
+ * other cursor holds a docid in the block's range).  The abandoned block never
+ * had its tf/doclen decoded (block-max pruning pays only for docids), so this
+ * is O(1) amortized and is what keeps common-term BMW fast.  Always makes
+ * forward progress.
+ */
+static void
+wand_skip_block(WandCursor *c)
+{
+	wand_load_block(c);
+	wand_skip_own_tombstoned(c);
+}
+
+/*
  * Advance the cursor's paging state (curblk/curoff/nread) past whole 128-blocks
  * whose docids are all < target, reading only block HEADERS (no FOR decode).
  * A block is entirely below target when the NEXT block's first_docid <= target
@@ -3264,34 +3280,50 @@ fts_search_bmw(WandCursor *cursors, int nterms, int k, const DocidFilter *filter
 		if (nheap >= k)
 		{
 			double		blocksum = 0.0;
+			int			nle = 0;		/* cursors with docid <= pivot */
+			int			lei = -1;		/* index of the (single) such cursor */
 
 			for (i = 0; i < nterms; i++)
 			{
 				if (cursors[i].docid == UINT64_MAX)
 					break;
 				if (cursors[i].docid <= pivot_docid)
+				{
 					blocksum += wand_block_max_contrib(&cursors[i]);
+					nle++;
+					lei = i;
+				}
 			}
 			if (blocksum <= threshold)
 			{
 				/*
 				 * No document AT OR BEFORE the pivot can beat the threshold
 				 * (blocksum bounds exactly the cursors with docid <= pivot).
-				 * The sound BMW move is therefore to advance PAST the pivot and
-				 * re-pivot -- NOT to skip cursor[0]'s entire block.  Skipping
-				 * cursor[0]'s whole block jumps it to the start of its NEXT
-				 * block, which can lie arbitrarily far beyond pivot_docid, past
-				 * docids that other segment cursors still hold and whose true
-				 * score was never bounded by blocksum -- dropping true top-k
-				 * documents (a multi-segment ranked-exactness bug).  Instead,
-				 * seek every cursor sitting at or before the pivot to the first
-				 * docid strictly greater than the pivot; blocksum proved nothing
-				 * up to and including pivot_docid can win, so this skip is exact.
+				 *
+				 * FAST PATH -- exactly one cursor is at/before the pivot (the
+				 * common single-segment / few-term case): that one cursor's
+				 * current 128-block is a contiguous docid run, blocksum bounded
+				 * its WHOLE block <= threshold, and no other cursor holds any
+				 * docid in that block's range (they are all strictly past the
+				 * pivot).  So skipping the entire block is exact and O(1) per
+				 * block instead of O(128) per-posting seeks -- this is what
+				 * keeps common-term WAND fast.
+				 *
+				 * SAFE PATH -- two or more cursors sit at/before the pivot
+				 * (densely interleaved segments): skipping one cursor's whole
+				 * block could jump past docids another cursor still holds and
+				 * whose score blocksum never bounded (the multi-segment ranked-
+				 * exactness hazard).  Advance every at-or-before cursor to just
+				 * past the pivot instead; blocksum proved nothing up to and
+				 * including pivot_docid can win, so this is exact.
 				 */
-				for (i = 0; i < nterms; i++)
-					if (cursors[i].docid != UINT64_MAX &&
-						cursors[i].docid <= pivot_docid)
-						wand_seek(&cursors[i], pivot_docid + 1);
+				if (nle == 1)
+					wand_skip_block(&cursors[lei]);
+				else
+					for (i = 0; i < nterms; i++)
+						if (cursors[i].docid != UINT64_MAX &&
+							cursors[i].docid <= pivot_docid)
+							wand_seek(&cursors[i], pivot_docid + 1);
 				continue;
 			}
 		}
