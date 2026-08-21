@@ -2,6 +2,27 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.3.1
+
+Correctness bug-fix release. **No on-disk format change** from 1.3.0; no
+**REINDEX** required (`ALTER EXTENSION pg_fts UPDATE TO '1.3.1'`).
+
+- **Stopwords are now dropped from the query, not just the document.**
+  `to_ftsdoc(regconfig, text)` removes a configuration's stopwords (e.g. `the`,
+  `a`, `of`), but `to_ftsquery(regconfig, text)` previously kept them verbatim,
+  so a stopword query term was unsatisfiable and silently zeroed a boolean AND
+  (`the & postgres` matched nothing; `the vacuum problem` under implicit-AND
+  returned far fewer results than `vacuum problem`). `to_ftsquery` now runs each
+  term through the same dictionary pipeline and elides stopword terms from the
+  query tree -- matching standard `to_tsquery`: `to_ftsquery('english','the &
+  postgres')` reduces to `postgres`, and an all-stopword query becomes empty
+  (matches nothing). Prefix/fuzzy/regex terms are matched literally and are
+  never stopword-dropped. Reported against a 2.8M-document English email-body
+  index in production.
+- Known limitation (tracked, not fixed here): `and`/`or`/`not`/`near` are
+  reserved query operators and cannot be searched for as literal words; on
+  natural-language corpora they are stopwords and dropped anyway.
+
 ## 1.3.0
 
 Feature + hardening release. **No on-disk format change** from 1.2.2; no

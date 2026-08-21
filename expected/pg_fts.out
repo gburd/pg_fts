@@ -1,4 +1,4 @@
-CREATE EXTENSION pg_fts VERSION '1.3.0';
+CREATE EXTENSION pg_fts VERSION '1.3.1';
 -- ftsdoc: analysis, output shows terms with term frequencies
 SELECT to_ftsdoc('The quick brown fox, the QUICK fox!');
                      to_ftsdoc                     
@@ -300,6 +300,131 @@ SELECT to_ftsdoc(to_tsvector('english', 'the quick brown fox foxes')) @@@ 'fox &
  t
 (1 row)
 
+-- Stopword symmetry: to_ftsdoc drops configuration stopwords, so to_ftsquery
+-- MUST drop them too (like to_tsquery), or a stopword conjunct silently zeroes
+-- an AND.  A stopword term is elided from the query tree; a query that is only
+-- stopwords becomes empty (matches nothing, as to_tsquery('english','the')='').
+SELECT to_ftsquery('english','the')::text AS q_the_empty;               -- (empty)
+ q_the_empty 
+-------------
+ 
+(1 row)
+
+SELECT to_ftsquery('english','the & postgres')::text AS q_the_and_pg;   -- 'postgr'
+ q_the_and_pg 
+--------------
+ 'postgr'
+(1 row)
+
+SELECT to_ftsquery('english','postgres & the')::text AS q_pg_and_the;   -- 'postgr'
+ q_pg_and_the 
+--------------
+ 'postgr'
+(1 row)
+
+SELECT to_ftsquery('english','the | postgres')::text AS q_the_or_pg;    -- 'postgr'
+ q_the_or_pg 
+-------------
+ 'postgr'
+(1 row)
+
+SELECT to_ftsquery('english','the & a & of & postgres')::text AS q_many_stop; -- 'postgr'
+ q_many_stop 
+-------------
+ 'postgr'
+(1 row)
+
+SELECT to_ftsquery('english','(the | a) & postgres')::text AS q_grouped;-- 'postgr'
+ q_grouped 
+-----------
+ 'postgr'
+(1 row)
+
+SELECT to_ftsquery('english','postgres & (the | vacuum)')::text AS q_grp2; -- ('postgr' & 'vacuum')
+        q_grp2         
+-----------------------
+ ('postgr' & 'vacuum')
+(1 row)
+
+SELECT to_ftsquery('english','postgres & !the')::text AS q_pg_not_the;  -- 'postgr'
+ q_pg_not_the 
+--------------
+ 'postgr'
+(1 row)
+
+SELECT to_ftsquery('english','"postgres the database"')::text AS q_phrase_mid; -- ('postgr' <-> 'databas')
+       q_phrase_mid       
+--------------------------
+ ('postgr' <-> 'databas')
+(1 row)
+
+-- ftsquery elision matches the standard to_tsquery reduction (both drop 'the')
+SELECT to_ftsquery('english','the & postgres')::text
+     = to_ftsquery('english','postgres')::text AS matches_tsquery_reduction; -- t
+ matches_tsquery_reduction 
+---------------------------
+ t
+(1 row)
+
+-- prefix/fuzzy/regex terms are matched literally, never stopword-dropped
+SELECT to_ftsquery('english','the*')::text AS q_prefix_kept;            -- 'the'*
+ q_prefix_kept 
+---------------
+ 'the'*
+(1 row)
+
+SELECT to_ftsquery('english','the~1')::text AS q_fuzzy_kept;            -- 'the'~1
+ q_fuzzy_kept 
+--------------
+ 'the'~1
+(1 row)
+
+-- the reported bug: a stopword-containing AND now matches the content
+SELECT fts_match(to_ftsdoc('english','the postgres docs'),
+                 to_ftsquery('english','the & postgres')) AS stopword_and_matches;  -- t
+ stopword_and_matches 
+----------------------
+ t
+(1 row)
+
+SELECT fts_match(to_ftsdoc('english','the vacuum problem in postgres'),
+                 to_ftsquery('english','the vacuum problem')) AS nl_query_matches;  -- t
+ nl_query_matches 
+------------------
+ t
+(1 row)
+
+-- an all-stopword query matches nothing (consistent with to_tsquery)
+SELECT fts_match(to_ftsdoc('english','the postgres docs'),
+                 to_ftsquery('english','the')) AS allstopword_matches_nothing;      -- f
+ allstopword_matches_nothing 
+-----------------------------
+ f
+(1 row)
+
+-- count parity through the index: 'the & postgres' == 'postgres'
+CREATE TABLE sw (id serial, d ftsdoc);
+INSERT INTO sw(d) SELECT to_ftsdoc('english', b) FROM (VALUES
+  ('the postgres vacuum'), ('a checkpoint runs'), ('the the the'),
+  ('postgres runs a vacuum'), ('nothing relevant here')) v(b);
+CREATE INDEX sw_idx ON sw USING fts (d);
+SET enable_seqscan = off;
+SELECT count(*) AS the_cnt FROM sw WHERE d @@@ to_ftsquery('english','the');               -- 0
+ the_cnt 
+---------
+       0
+(1 row)
+
+SELECT (SELECT count(*) FROM sw WHERE d @@@ to_ftsquery('english','the & postgres'))
+     = (SELECT count(*) FROM sw WHERE d @@@ to_ftsquery('english','postgres'))
+       AS stopword_and_count_parity;                                                       -- t
+ stopword_and_count_parity 
+---------------------------
+ t
+(1 row)
+
+RESET enable_seqscan;
+DROP TABLE sw;
 -- BM25 scoring.
 -- score is positive when a query term is present, zero when absent
 SELECT round(fts_bm25(to_ftsdoc('quick brown fox'), 'fox'::ftsquery,
