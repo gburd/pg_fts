@@ -2,6 +2,28 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.3.2
+
+Performance bug-fix release. **No on-disk format change** from 1.3.1; no
+**REINDEX** required (`ALTER EXTENSION pg_fts UPDATE TO '1.3.2'`).
+
+- **Fixed a ~5x common-term ranked-latency regression introduced in 1.3.0.**
+  The 1.3.0 ranked-exactness hardening replaced the block-max WAND scan's O(1)
+  per-block skip with a per-posting re-pivot on every prune, which on a common
+  term turned each block-max prune into ~128 re-pivots (measured on 2.19M
+  Wikipedia, PostgreSQL 18: `year` top-10 rose 31.8ms -> 163ms; the slowdown
+  scaled with document frequency -- mid-frequency terms ~2.6x, rare terms
+  unaffected). The exactness bug that hardening guarded against is latent (not
+  reachable in practice -- segments own contiguous, non-overlapping docid
+  ranges), so the trade was a real regression for defense against an unreachable
+  bug. The fix restores the O(1) block-skip in the common single-segment /
+  few-term case while keeping the safe per-posting seek for the densely-
+  interleaved multi-segment case, so ranked exactness is fully preserved. After
+  the fix, common-term ranked latency is competitive with the fastest
+  block-max-WAND BM25 extensions again (`year` top-10 ~28ms, top-100 ~29ms), and
+  rare/mid terms lead. Anyone on 1.3.0 or 1.3.1 doing ranked (`<=>`) searches on
+  common terms should upgrade.
+
 ## 1.3.1
 
 Correctness bug-fix release. **No on-disk format change** from 1.3.0; no
