@@ -487,6 +487,126 @@ parse_or(ParseState *st)
 }
 
 /*
+ * Stopword-aware query normalization.
+ *
+ * to_ftsdoc() drops configuration stopwords from the document, so a query term
+ * that is a stopword can never match a stored lexeme.  Standard PostgreSQL FTS
+ * drops stopwords from BOTH sides (to_tsquery('english','the & x') -> 'x'), so
+ * a stopword conjunct must be ELIDED from the query, not left as an
+ * unsatisfiable term (which silently zeroes an AND).  We do that here by
+ * building a small tree from the parsed RPN, marking each plain term that
+ * normalizes away (fts_normalize_term returns NULL) as empty, and simplifying:
+ *
+ *   X & empty -> X      empty & X -> X       (AND drops the stopword side)
+ *   X | empty -> X      empty | X -> X       (OR likewise; matches to_tsquery)
+ *   !empty    -> empty                       (nothing to negate)
+ *   X <-> empty / empty <-> X -> X           (phrase keeps the real operand;
+ *                                             the adjacency gap is lost, but the
+ *                                             query never becomes unsatisfiable)
+ *   empty (op) empty -> empty
+ *
+ * A query that reduces entirely to empty yields a 0-item ftsquery, which
+ * matches nothing -- consistent with to_tsquery('english','the') = '' @@ ... .
+ * Prefix/fuzzy/regex terms are never stopwords (matched literally), so they are
+ * never marked empty.
+ */
+typedef struct QNode
+{
+	bool		empty;			/* subtree elided (all-stopword) */
+	int			item;			/* index into items[] for a VAL leaf, else -1 */
+	uint8		op;				/* FTS_OP_* for an internal node */
+	uint32		distance;		/* phrase gap */
+	struct QNode *left;
+	struct QNode *right;		/* NULL for NOT (unary, uses left) */
+} QNode;
+
+/* Pop the RPN in items[0..n) into a tree.  *pos walks from the end. */
+static QNode *
+qnode_build(ParsedItem *items, int *pos)
+{
+	QNode	   *n;
+
+	if (*pos < 0)
+		return NULL;
+	n = (QNode *) palloc0(sizeof(QNode));
+	n->item = -1;
+	if (items[*pos].type == FTS_QI_VAL)
+	{
+		n->item = *pos;
+		(*pos)--;
+		return n;
+	}
+	n->op = items[*pos].op;
+	n->distance = items[*pos].distance;
+	(*pos)--;
+	if (n->op == FTS_OP_NOT)
+		n->left = qnode_build(items, pos);		/* unary */
+	else
+	{
+		n->right = qnode_build(items, pos);		/* RPN top is the right operand */
+		n->left = qnode_build(items, pos);
+	}
+	return n;
+}
+
+/* Simplify a tree in place, folding away empty (stopword) subtrees. */
+static QNode *
+qnode_simplify(QNode *n)
+{
+	if (n == NULL)
+		return NULL;
+	if (n->item >= 0)
+		return n;					/* leaf: emptiness marked by the caller */
+	n->left = qnode_simplify(n->left);
+	n->right = qnode_simplify(n->right);
+	if (n->op == FTS_OP_NOT)
+	{
+		if (n->left == NULL || n->left->empty)
+			n->empty = true;
+		return n;
+	}
+	{
+		bool		le = (n->left == NULL || n->left->empty);
+		bool		re = (n->right == NULL || n->right->empty);
+
+		if (le && re)
+		{
+			n->empty = true;
+			return n;
+		}
+		if (le)
+			return n->right;
+		if (re)
+			return n->left;
+		return n;
+	}
+}
+
+/* Flatten a simplified tree back into RPN in out[]; advances *k. */
+static void
+qnode_flatten(QNode *n, ParsedItem *src, ParsedItem *out, int *k)
+{
+	if (n == NULL || n->empty)
+		return;
+	if (n->item >= 0)
+	{
+		out[*k] = src[n->item];
+		(*k)++;
+		return;
+	}
+	qnode_flatten(n->left, src, out, k);
+	if (n->op != FTS_OP_NOT)
+		qnode_flatten(n->right, src, out, k);
+	out[*k].type = FTS_QI_OPR;
+	out[*k].op = n->op;
+	out[*k].flags = 0;
+	out[*k].distance = n->distance;
+	out[*k].term = NULL;
+	out[*k].termlen = 0;
+	(*k)++;
+}
+
+/*
  * fts_parse_query -- parse query text into an FtsQuery varlena.
  * Raises an error on malformed input.  An input with no terms yields a valid
  * empty query (matches nothing).
@@ -537,6 +657,9 @@ fts_parse_query_cfg(const char *str, int len, Oid cfgId)
 	 */
 	if (OidIsValid(cfgId))
 	{
+		bool	   *stopword = (bool *) palloc0(sizeof(bool) * Max(st.nitems, 1));
+		bool		any_stop = false;
+
 		for (i = 0; i < st.nitems; i++)
 		{
 			if (st.items[i].type == FTS_QI_VAL &&
@@ -551,8 +674,51 @@ fts_parse_query_cfg(const char *str, int len, Oid cfgId)
 					st.items[i].term = norm;
 					st.items[i].termlen = nlen;
 				}
-				/* if the term normalized away (stopword), leave it as-is; it
-				 * simply won't match, which is the correct behavior */
+				else
+				{
+					/* stopword: mark for elision so it does not zero an AND */
+					stopword[i] = true;
+					any_stop = true;
+				}
+			}
+		}
+
+		/*
+		 * Elide stopword terms: build the RPN into a tree, mark stopword leaves
+		 * empty, simplify (drop empty operands + their operators), flatten back.
+		 */
+		if (any_stop && st.nitems > 0)
+		{
+			int			pos = st.nitems - 1;
+			QNode	   *root = qnode_build(st.items, &pos);
+			QNode	  **stack = (QNode **) palloc(sizeof(QNode *) * st.nitems);
+			int			sp = 0;
+
+			if (root)
+				stack[sp++] = root;
+			while (sp > 0)
+			{
+				QNode	   *nd = stack[--sp];
+
+				if (nd->item >= 0)
+					nd->empty = stopword[nd->item];
+				else
+				{
+					if (nd->left)
+						stack[sp++] = nd->left;
+					if (nd->right)
+						stack[sp++] = nd->right;
+				}
+			}
+			root = qnode_simplify(root);
+			{
+				ParsedItem *out = (ParsedItem *) palloc(sizeof(ParsedItem) * st.nitems);
+				int			k = 0;
+
+				qnode_flatten(root, st.items, out, &k);
+				for (i = 0; i < k; i++)
+					st.items[i] = out[i];
+				st.nitems = k;
 			}
 		}
 	}

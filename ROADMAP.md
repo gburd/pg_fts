@@ -165,6 +165,19 @@ they are not rediscovered. Ordered roughly by value.
 
 ## Correctness / robustness (lower urgency)
 
+12b. **Reserved query keywords cannot be searched as literal words.**
+    The query lexer recognizes `and`/`or`/`not`/`near` as operators
+    unconditionally, so `to_ftsquery('english','and & x')` errors and even a
+    phrase `"and"` fails (`pg_fts_query.c` keyword recognition runs before
+    phrase-term handling).  Standard `to_tsquery` treats a bare `and` as a
+    lexeme (then drops it as a stopword).  A fix would suppress keyword
+    recognition inside a phrase/NEAR operand context (a `lex_terms_as_words`
+    flag threaded into the lexer).  Low urgency: on natural-language corpora
+    these words are stopwords and are dropped anyway (v1.3.1 stopword fix), so
+    the only loss is searching for the literal token in a non-stopword config.
+    Reported alongside the stopword-asymmetry bug (fixed in 1.3.1) as a distinct,
+    minor issue.
+
 12. **Sparsemap error-path leaks.**
     `sm_create` / blob buffers are palloc/libc allocations; on an `ereport`
     between create and free they leak for the duration of the statement

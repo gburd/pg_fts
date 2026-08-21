@@ -172,8 +172,21 @@ SELECT id FROM docs
     <listitem>
      <para>
       Parse a query string.  With a <replaceable>config</replaceable>, query
-      terms are normalized through that configuration so they match the way
-      documents were analyzed.
+      terms are normalized through that configuration (case-folding, stemming,
+      and <emphasis>stopword removal</emphasis>) so they match the way documents
+      were analyzed by <function>to_ftsdoc</function>.  A term that the
+      configuration treats as a stopword is dropped from the query — for example
+      <literal>to_ftsquery('english', 'the &amp; postgres')</literal> reduces to
+      just <literal>postgres</literal>, and a query of only stopwords becomes
+      empty (matching nothing) — exactly as <function>to_tsquery</function>
+      behaves, so a stopword can never silently zero out a boolean query.
+      Prefix (<literal>term*</literal>), fuzzy (<literal>term~k</literal>), and
+      regex (<literal>/re/</literal>) terms are matched literally and are never
+      stopword-normalized.  Note that <literal>and</literal>,
+      <literal>or</literal>, <literal>not</literal>, and <literal>near</literal>
+      are reserved query operators and cannot currently be searched for as
+      literal words (even quoted); this is a rare limitation for natural-language
+      corpora, where they are stopwords anyway.
      </para>
     </listitem>
    </varlistentry>
