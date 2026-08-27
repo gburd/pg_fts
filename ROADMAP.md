@@ -139,11 +139,17 @@ they are not rediscovered. Ordered roughly by value.
 ## Sparsemap (vendored)
 
 9. **Exercise batch/cached sparsemap APIs under a delete-heavy workload.**
-   The batched tombstone filter (`sm_contains_many`) and MRU-cached membership
-   test (`sm_contains_cached`) are integrated into the WAND cursor and merge
-   paths. They only help the tombstone/merge paths, so a delete-free read
-   benchmark shows no effect. TODO: quantify the gain on a delete/update-churn
-   workload where they should help.
+   The batched tombstone filter (`sm_contains_many`) is integrated into the
+   merge path.  The WAND ranked cursor now uses the forward-resume cursor
+   (`sm_contains` with an `sm_cursor_t`) rather than the 8-way MRU cache
+   (`sm_contains_cached`): the ranked scan visits docids in monotonically
+   non-decreasing order against a read-only tombstone map, so a single-chunk
+   resume cursor is O(postings + chunks), whereas the MRU cache degenerated to
+   an O(chunks) head-walk per lookup once an ascending scan ran past its eight
+   cached chunks -- a segment with millions of tombstones turned a common-term
+   top-k into tens of seconds (fixed in 1.4.1, validated 24s -> 2.5ms at 2M
+   docs / ~4M tombstones).  TODO: quantify the merge-path `sm_contains_many`
+   gain on a delete/update-churn workload where it should help.
 
 ## Benchmark / competitive
 

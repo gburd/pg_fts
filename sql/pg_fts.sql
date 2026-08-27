@@ -1,4 +1,4 @@
-CREATE EXTENSION pg_fts VERSION '1.4.0';
+CREATE EXTENSION pg_fts VERSION '1.4.1';
 
 -- ftsdoc: analysis, output shows terms with term frequencies
 SELECT to_ftsdoc('The quick brown fox, the QUICK fox!');
@@ -422,6 +422,33 @@ RESET enable_seqscan;
 -- default-off index is no larger than the trigrams-on index (trigram tier omitted)
 SELECT pg_relation_size('trg_off') <= pg_relation_size('trg_on') AS off_not_larger;  -- t
 DROP TABLE trg_a, trg_b;
+
+-- Bounded universe: NOT and trigrams-off regex/fuzzy fall back to a whole-segment
+-- candidate scan.  When the vocabulary is small but every document repeats the
+-- same terms, the sum of df across the dictionary (the raw postings) far exceeds
+-- the document count; the fallback must fold duplicates as it collects so its
+-- scratch stays O(ndocs) rather than growing to O(sum df) (which reached a
+-- multi-gigabyte alloc on a real high-vocabulary corpus).  Correctness is
+-- unchanged -- these queries must return the exact id set.
+CREATE TABLE univ (id serial, d ftsdoc);
+INSERT INTO univ (d)
+  SELECT to_ftsdoc('english', 'alpha beta gamma delta alpha beta gamma delta ' ||
+                   CASE WHEN g % 5 = 0 THEN 'omega' ELSE 'sigma' END)
+  FROM generate_series(1, 500) g;
+CREATE INDEX univ_fts ON univ USING fts (d);   -- trigrams off (default)
+SET enable_seqscan = off;
+-- NOT drives bm25_universe_bounded: every doc has alpha; only g%5=0 have omega.
+SELECT count(*) FROM univ WHERE d @@@ 'alpha & !omega'::ftsquery;   -- 400
+-- trigrams-off regex also drives the fallback and must still be exact.
+SELECT count(*) FROM univ WHERE d @@@ '/^omeg/'::ftsquery;          -- 100
+-- the fallback answer equals the seqscan ground truth.
+RESET enable_seqscan;
+SELECT (SELECT count(*) FROM univ WHERE d @@@ 'alpha & !omega'::ftsquery)
+     = (SELECT count(*) FROM univ WHERE to_ftsdoc('english',
+           'alpha beta gamma delta alpha beta gamma delta ' ||
+           CASE WHEN id % 5 = 0 THEN 'omega' ELSE 'sigma' END) @@@ 'alpha & !omega'::ftsquery)
+       AS universe_matches_truth;                                   -- t
+DROP TABLE univ;
 
 -- BM25F: multi-field weighting.
 -- a term in the (heavily weighted) title scores higher than the same term in
