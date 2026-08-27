@@ -66,8 +66,9 @@ typedef struct FtsDocData
 
 typedef FtsDocData *FtsDoc;
 
-#define FTS_DOC_VERSION			3	/* wire format; v3 carries positions */
+#define FTS_DOC_VERSION			4	/* wire format; v3 carries positions, v4 adds weight labels in position high bits */
 #define FTS_DOCF_POSITIONS		0x0001	/* positions[] region is present */
+#define FTS_DOCF_WEIGHTS		0x0002	/* some position carries a non-D weight label (v4) */
 #define FTS_DOC_HAS_POS(d)		(((d)->flags & FTS_DOCF_POSITIONS) != 0)
 #define FTS_DOC_HDRSIZE			offsetof(FtsDocData, entries)
 #define FTS_DOC_ENTRIES(d)		((d)->entries)
@@ -122,7 +123,10 @@ typedef struct FtsQueryItem
 	uint8		type;			/* FtsQueryItemType */
 	uint8		op;				/* FtsQueryOp, valid when type == FTS_QI_OPR */
 	uint16		flags;			/* FTS_QF_* flags, valid for FTS_QI_VAL */
-	uint32		distance;		/* max token gap for FTS_OP_PHRASE (1 = adjacent) */
+	uint32		distance;		/* max token gap for FTS_OP_PHRASE (1 = adjacent);
+								 * on a FTS_QI_VAL with FTS_QF_WEIGHTED, instead holds
+								 * the weight-label mask (bit L set => match label L,
+								 * L in 0..3 for D,C,B,A) -- a VAL never uses the gap */
 	/* for FTS_QI_VAL: */
 	uint32		termoff;		/* offset of term text within the text region */
 	uint32		termlen;		/* length of term text */
@@ -131,6 +135,24 @@ typedef struct FtsQueryItem
 #define FTS_QF_PREFIX	0x0001	/* term is a prefix match (term*) */
 #define FTS_QF_FUZZY	0x0002	/* term is a fuzzy match (term~k); k in distance */
 #define FTS_QF_REGEX	0x0004	/* term text is a regular expression (/re/) */
+#define FTS_QF_WEIGHTED	0x0008	/* term is weight-restricted (term:ABCD);
+								 * the label mask is in `distance` (see above) */
+
+/*
+ * Weight labels (field zones), tsvector-compatible ordering D < C < B < A.
+ * A label is stored in the TOP TWO BITS of each uint32 token position; the
+ * low 30 bits are the 1-based token ordinal.  Label 0 = D (default/unlabeled),
+ * so a v3 (label-free) position reads as D and behaves as "unlabeled".
+ */
+#define FTS_POS_LABEL_BITS	2
+#define FTS_POS_LABEL_SHIFT	30
+#define FTS_POS_ORD_MASK	0x3FFFFFFFu		/* low 30 bits: token ordinal */
+#define FTS_POS_LABEL(p)	((uint8) ((p) >> FTS_POS_LABEL_SHIFT))	/* 0..3 */
+#define FTS_POS_ORD(p)		((p) & FTS_POS_ORD_MASK)
+#define FTS_POS_MAKE(ord, lbl)	(((uint32)(lbl) << FTS_POS_LABEL_SHIFT) | ((ord) & FTS_POS_ORD_MASK))
+/* Map a weight char A/B/C/D (any case) to its 0..3 label; D/unknown -> 0. */
+#define FTS_WEIGHT_LABEL(c) \
+	(((c)=='A'||(c)=='a') ? 3 : ((c)=='B'||(c)=='b') ? 2 : ((c)=='C'||(c)=='c') ? 1 : 0)
 
 typedef struct FtsQueryData
 {
@@ -144,7 +166,7 @@ typedef struct FtsQueryData
 
 typedef FtsQueryData *FtsQuery;
 
-#define FTS_QUERY_VERSION		1
+#define FTS_QUERY_VERSION		2	/* v2: FTS_QI_VAL may carry a weight mask */
 #define FTS_QUERY_HDRSIZE		offsetof(FtsQueryData, items)
 #define FTS_QUERY_TEXTBASE(q)	((char *) &(q)->items[(q)->nitems])
 #define FTS_QUERY_ITEMTEXT(q, it) (FTS_QUERY_TEXTBASE(q) + (it)->termoff)
@@ -158,7 +180,7 @@ extern FtsDoc fts_analyze_text(const char *str, int len);
 extern char *fold_token(const char *src, int len, int *outlen);
 
 /* pg_fts_tsanalyze.c -- analyzer reusing an installed TS configuration */
-extern FtsDoc fts_analyze_with_config(Oid cfgId, const char *str, int len);
+extern FtsDoc fts_analyze_with_config(Oid cfgId, const char *str, int len, uint8 label);
 #ifdef PG_FTS_TEST_HOOKS
 /* TEST-ONLY (see pg_fts_customscan.c _PG_init): advisory key a scan waits on
  * mid-collect to expose the scan-vs-merge recycle window; 0 = off. */

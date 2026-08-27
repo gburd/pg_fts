@@ -417,6 +417,68 @@ CREATE INDEX docs_bm25 ON docs USING fts (to_ftsdoc('english', body))
   </para>
  </sect2>
 
+ <sect2 id="pgfts-field-zones">
+  <title>Field-targeted search (weight zones)</title>
+
+  <para>
+   Like <type>tsvector</type>'s A/B/C/D weight labels, an
+   <type>ftsdoc</type> can carry per-field provenance so a query term restricts
+   itself to a field (zone).  Tag a sub-document with a weight and concatenate
+   the labelled parts:
+<programlisting>
+CREATE INDEX msg_fts ON messages USING fts ((
+    to_ftsdoc('english', subject, 'A') ||
+    to_ftsdoc('english', from_addr, 'B') ||
+    to_ftsdoc('english', body,    'C')
+  )) WITH (positions = on);
+
+SELECT * FROM messages
+ WHERE (to_ftsdoc('english', subject, 'A') || to_ftsdoc('english', from_addr, 'B')
+        || to_ftsdoc('english', body, 'C'))
+       @@@ to_ftsquery('english', 'vacuum:A &amp; tgl:B');   -- vacuum in subject, tgl in from
+</programlisting>
+   A query term followed by <literal>:</literal> and one or more of the labels
+   A, B, C, D (e.g. <literal>vacuum:A</literal> or <literal>x:AB</literal>)
+   matches only occurrences carrying one of those labels &mdash; exactly as
+   <function>to_tsquery('english', 'vacuum:A')</function> does.  A term with no
+   label matches any zone (unchanged behavior).  BM25 scoring stays document-
+   level: a zone filter changes which documents match, not how a matching one
+   scores.
+  </para>
+  <formalpara>
+   <title>API</title>
+   <para>
+    <function>to_ftsdoc(<replaceable>config</replaceable>, <replaceable>text</replaceable>, <replaceable>weight</replaceable> "char")</function>
+    tags every token with A/B/C/D;
+    <function>setftsweight(<replaceable>doc</replaceable> ftsdoc, <replaceable>weight</replaceable> "char")</function>
+    relabels an existing document (like <function>setweight</function>);
+    <literal>ftsdoc || ftsdoc</literal> concatenates labelled sub-documents,
+    re-basing token positions and preserving each side's labels.
+    <function>to_ftsdoc(<replaceable>tsvector</replaceable>)</function> also
+    carries the <type>tsvector</type>'s own weights.
+   </para>
+  </formalpara>
+  <para>
+   Field restriction needs the document to carry token positions (the labels
+   ride on positions), so build the index <literal>WITH (positions = on)</literal>
+   for field-restricted ranked or count queries.  Weight labels apply to plain
+   terms; combining a label with a prefix, fuzzy, or regex term
+   (<literal>vacuum:A*</literal>) is a syntax error.
+  </para>
+  <para>
+   This is <emphasis>not</emphasis> an on-disk index format change: labels live
+   only in the stored <type>ftsdoc</type> value, and a field-restricted query is
+   answered via the heap recheck.  An index built before weight support (or from
+   an unlabelled <function>to_ftsdoc</function>) keeps working with no
+   <command>REINDEX</command> &mdash; every position reads as label D, so
+   <literal>term:D</literal> matches it and <literal>term:A</literal> does not,
+   and unlabelled queries are unchanged.  To add field provenance, rebuild that
+   table's <type>ftsdoc</type> from labelled
+   <literal>to_ftsdoc(...,weight) || ...</literal> documents &mdash; opt-in per
+   table, never a forced global reindex.
+  </para>
+ </sect2>
+
  <sect2 id="pgfts-large-builds">
   <title>Building indexes on large or high-vocabulary corpora</title>
 

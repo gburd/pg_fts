@@ -2,6 +2,40 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.4.0
+
+Feature release: field-targeted (weight-zone) search.  **No index format change,
+no REINDEX** (`ALTER EXTENSION pg_fts UPDATE TO '1.4.0'`).
+
+- **Field zones via tsvector-style weight labels A/B/C/D.**  Tag a sub-document
+  with a weight and concatenate labelled parts so a query term can restrict
+  itself to a field:
+
+      CREATE INDEX ... USING fts ((
+        to_ftsdoc('english', subject, 'A') ||
+        to_ftsdoc('english', body,    'C'))) WITH (positions = on);
+      ... WHERE d @@@ to_ftsquery('english', 'vacuum:A & tgl:B')
+
+  New: `to_ftsdoc(regconfig, text, "char")`, `setftsweight(ftsdoc, "char")`,
+  the `ftsdoc || ftsdoc` concatenation operator, and the query syntax
+  `term:A` / `term:AB` (a term restricted to one or more zones), mirroring
+  standard `to_tsquery('english','term:A')`.  `to_ftsdoc(tsvector)` now also
+  carries the tsvector's own A/B/C/D weights.
+- **Upgrade is a no-op for existing indexes.**  Weight labels live only in the
+  ftsdoc VALUE (the top 2 bits of each token position); the on-disk index
+  posting format is unchanged.  A field-restricted query is answered via the
+  heap recheck (like fuzzy/regex), so existing indexes keep working and queries
+  without a `:label` behave exactly as before.  To get field provenance, rebuild
+  a table's ftsdoc from labelled `to_ftsdoc(...,weight) || ...` documents
+  (opt-in per table -- NOT a global reindex).  An unlabelled document reads as
+  label D, so `term:D` matches it and `term:A` does not.
+- Field restriction requires the ftsdoc to carry positions (the labels ride on
+  positions); build the index `WITH (positions = on)` for field-restricted
+  ranked/count queries.  BM25 scoring stays document-level -- a zone filter
+  changes which documents match, not how a matching document scores.
+- Limitation: weight labels apply to plain terms; `term:A*` / `term:A~k` (weight
+  + prefix/fuzzy/regex) are rejected as a syntax error.
+
 ## 1.3.2
 
 Performance bug-fix release. **No on-disk format change** from 1.3.1; no

@@ -66,7 +66,7 @@ cmp_word_idx(const void *a, const void *b, void *arg)
  * ParsedWord.pos.pos with a 1-based token ordinal.
  */
 static FtsDoc
-ftsdoc_from_parsed(ParsedText *prs)
+ftsdoc_from_parsed(ParsedText *prs, uint8 label)
 {
 	int			nw = prs->curwords;
 	ParsedWord *words = prs->words;
@@ -177,10 +177,12 @@ ftsdoc_from_parsed(ParsedText *prs)
 		off += w->len;
 		/* cmp_word_idx broke ties by pos, so this run is already ascending */
 		for (k = 0; k < run; k++)
-			positions[pidx++] = words[order[i + k]].pos.pos;
+			positions[pidx++] = FTS_POS_MAKE(words[order[i + k]].pos.pos, label);
 		ndistinct++;
 		i += run;
 	}
+	if (label != 0)
+		doc->flags |= FTS_DOCF_WEIGHTS;
 
 	return doc;
 }
@@ -189,7 +191,7 @@ ftsdoc_from_parsed(ParsedText *prs)
  * fts_analyze_with_config -- analyze text using a specific TS configuration.
  */
 FtsDoc
-fts_analyze_with_config(Oid cfgId, const char *str, int len)
+fts_analyze_with_config(Oid cfgId, const char *str, int len, uint8 label)
 {
 	ParsedText	prs;
 	FtsDoc		doc;
@@ -207,7 +209,7 @@ fts_analyze_with_config(Oid cfgId, const char *str, int len)
 
 	parsetext(cfgId, &prs, buf, len);
 
-	doc = ftsdoc_from_parsed(&prs);
+	doc = ftsdoc_from_parsed(&prs, label);
 
 	if (prs.words)
 		pfree(prs.words);
@@ -293,8 +295,10 @@ to_ftsdoc_from_tsvector(PG_FUNCTION_ARGS)
 				WordEntryPos *pv = POSDATAPTR(tsv, &we[i]);
 				int			k;
 
+				/* tsvector weight (0..3 = D,C,B,A) maps directly to our label */
 				for (k = 0; k < np; k++)
-					positions[p++] = WEP_GETPOS(pv[k]);
+					positions[p++] = FTS_POS_MAKE(WEP_GETPOS(pv[k]),
+												  WEP_GETWEIGHT(pv[k]));
 			}
 		}
 	}
@@ -314,7 +318,30 @@ to_ftsdoc_byid(PG_FUNCTION_ARGS)
 	FtsDoc		doc;
 
 	doc = fts_analyze_with_config(cfgId,
-								  VARDATA_ANY(in), VARSIZE_ANY_EXHDR(in));
+								  VARDATA_ANY(in), VARSIZE_ANY_EXHDR(in), 0);
+	PG_FREE_IF_COPY(in, 1);
+	PG_RETURN_FTSDOC(doc);
+}
+
+PG_FUNCTION_INFO_V1(to_ftsdoc_byid_weight);
+
+/* to_ftsdoc(regconfig, text, weight "char") -- tag every token position with
+ * the weight label A/B/C/D so a query term can restrict to this field (zone). */
+Datum
+to_ftsdoc_byid_weight(PG_FUNCTION_ARGS)
+{
+	Oid			cfgId = PG_GETARG_OID(0);
+	text	   *in = PG_GETARG_TEXT_PP(1);
+	char		w = PG_GETARG_CHAR(2);
+	FtsDoc		doc;
+
+	if (w != 'A' && w != 'B' && w != 'C' && w != 'D' &&
+		w != 'a' && w != 'b' && w != 'c' && w != 'd')
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("weight must be one of A, B, C, D")));
+	doc = fts_analyze_with_config(cfgId, VARDATA_ANY(in), VARSIZE_ANY_EXHDR(in),
+								  FTS_WEIGHT_LABEL(w));
 	PG_FREE_IF_COPY(in, 1);
 	PG_RETURN_FTSDOC(doc);
 }

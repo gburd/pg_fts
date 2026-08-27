@@ -1482,9 +1482,17 @@ bm25_write_postings(BM25PostWriter *pw, BuildTerm *bt,
 					for (t = 0; t < tf; t++)
 					{
 						/* positions are ascending within a posting; delta-code,
-						 * reset prev to 0 at each posting boundary */
-						posdeltas[j++] = (uint64) (pp[t] - prev);
-						prev = pp[t];
+						 * reset prev to 0 at each posting boundary.  The index posting
+						 * positions carry only the ORDINAL (low 30 bits); the weight
+						 * label lives in the heap ftsdoc value and a field-restricted
+						 * (term:LABEL) query applies the label filter via the heap
+						 * recheck path, so the on-disk posting format is UNCHANGED from
+						 * v3 (no reindex).  Mask the label defensively in case a v4
+						 * value ever reaches the build with labels set. */
+						uint32		ord = FTS_POS_ORD(pp[t]);
+
+						posdeltas[j++] = (uint64) (ord - prev);
+						prev = ord;
 					}
 				}
 				poslen = bm25_for_pack(posdeltas, (int) sumtf, posbuf);
