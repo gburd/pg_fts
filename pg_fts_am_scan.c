@@ -1129,16 +1129,40 @@ done:
 	return true;
 }
 
-/* Build the universe: all TIDs present in any posting list. We collect it from
- * the dictionary lazily only if a top-level NOT requires it. */
+/* Build the universe: the set of DISTINCT TIDs present in any posting list of
+ * the segment.  Used by top-level NOT and by the regex/fuzzy fallback when no
+ * trigram acceleration is available.
+ *
+ * The distinct TID count is bounded by the segment's live+dead doc count
+ * (ndocs), but the raw postings summed across every term total Sum(df) -- the
+ * whole expanded inverted index, often two orders of magnitude larger than
+ * ndocs.  Accumulating all of them before a single final sort_uniq made the
+ * scratch buffer grow to Sum(df) TIDs and could reach a multi-gigabyte
+ * "invalid memory alloc request size" on a high-vocabulary corpus.  We instead
+ * fold (sort_uniq) whenever the buffer grows past a small multiple of ndocs,
+ * so peak memory stays O(ndocs) regardless of Sum(df). */
 static TidSet
-bm25_universe(Relation index, BlockNumber dictstart)
+bm25_universe_bounded(Relation index, BlockNumber dictstart, double ndocs)
 {
 	TidSet		u;
 	BlockNumber blk = dictstart;
 	int			cap = 64;
 	int			n = 0;
 	ItemPointerData *tids = palloc(cap * sizeof(ItemPointerData));
+
+	/* Fold threshold: once the buffer holds more than fold_at raw TIDs,
+	 * sort_uniq collapses it back to the <= ndocs distinct ones.  A distinct
+	 * count can never exceed ndocs, so this keeps peak memory O(ndocs) instead
+	 * of O(Sum(df)).  Guard against a bogus/zero ndocs with a floor. */
+	int			fold_at;
+
+	{
+		double		f = ndocs * 2.0 + 1024.0;
+
+		if (f > (double) TIDSET_MAX_N)
+			f = (double) TIDSET_MAX_N;
+		fold_at = (f < 1024.0) ? 1024 : (int) f;
+	}
 
 	while (blk != InvalidBlockNumber)
 	{
@@ -1175,8 +1199,29 @@ bm25_universe(Relation index, BlockNumber dictstart)
 			{
 				if (n >= cap)
 				{
-					cap *= 2;
-					tids = repalloc(tids, cap * sizeof(ItemPointerData));
+					/* Fold before growing past the ndocs-relative threshold:
+					 * collapse duplicates so the buffer stays O(ndocs), never
+					 * O(Sum df).  After folding, either there is now room (the
+					 * common case -- fall through to store) or the distinct set
+					 * itself is genuinely near cap, in which case we grow. */
+					if (n >= fold_at)
+					{
+						u.tids = tids;
+						u.n = n;
+						tidset_sort_uniq(&u);
+						tids = u.tids;
+						n = u.n;
+					}
+					if (n >= cap)
+					{
+						if ((Size) cap * 2 * sizeof(ItemPointerData) > MaxAllocSize)
+							ereport(ERROR,
+									(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+									 errmsg("pg_fts: candidate set for this query is too large"),
+									 errhint("Build the index WITH (trigrams = on) so fuzzy/regex/NOT queries can be accelerated.")));
+						cap *= 2;
+						tids = repalloc(tids, cap * sizeof(ItemPointerData));
+					}
 				}
 				tids[n++] = post[k].tid;
 			}
@@ -1973,8 +2018,20 @@ collect_retry:
 			}
 			else
 			{
+				/*
+				 * No trigram acceleration for this fuzzy/regex term (index built
+				 * without trigrams, or the pattern is too short to yield the
+				 * minimum trigrams).  We fall back to rechecking every document
+				 * in the segment against the pattern -- correct, just slower, and
+				 * the documented behavior of a trigrams-off index (see the
+				 * "trigrams reloption" regression test).  bm25_universe_bounded
+				 * folds duplicates as it goes so the candidate scratch stays
+				 * O(ndocs); the older unbounded collect grew to Sum(df) and could
+				 * reach a multi-gigabyte "invalid memory alloc request size" on a
+				 * high-vocabulary corpus.
+				 */
 				need_recheck = true;
-				universe = bm25_universe(index, sg->dictstart);
+				universe = bm25_universe_bounded(index, sg->dictstart, sg->ndocs);
 				if (universe.n > 0)
 				{
 					bm25_filter_tombstoned_seg(&seg_tombs, s, &universe);
@@ -1986,7 +2043,7 @@ collect_retry:
 		}
 
 		if (has_not)
-			universe = bm25_universe(index, sg->dictstart);
+			universe = bm25_universe_bounded(index, sg->dictstart, sg->ndocs);
 		else
 		{
 			universe.tids = NULL;
@@ -2618,7 +2675,16 @@ typedef struct WandCursor
 	double		max_contrib;	/* term-wide upper bound (shortest-doc norm) */
 	BM25Tombstones *tombs;		/* loaded per-segment tombstones (or NULL) */
 	uint32		segidx;			/* which segment this cursor's postings belong to */
-	sm_cursor_cached_t tombcache;	/* stack MRU chunk cache for tombstone lookups */
+	sm_cursor_t tombcursor;		/* forward-resume cursor for tombstone lookups.
+								 * The WAND scan visits this cursor's docids in
+								 * monotonically non-decreasing order and the
+								 * tombstone map is read-only for the scan's
+								 * lifetime, so a single-chunk resume cursor turns
+								 * the otherwise O(postings x chunks) head-walk
+								 * into O(postings + chunks).  (An 8-way MRU cache
+								 * degenerates to a per-lookup head-walk once an
+								 * ascending scan runs past its 8 cached chunks --
+								 * the cause of the tombstone-bloat blowup.) */
 	/*
 	 * Optional docid range [docid_lo, docid_hi) for a parallel worker's slice.
 	 * docid_lo = 0 and docid_hi = UINT64_MAX means "whole term" (the serial
@@ -2833,11 +2899,13 @@ wand_cur_own_tombstoned(WandCursor *c)
 		return false;
 	if (c->segidx >= c->tombs->nseg || !c->tombs->present[c->segidx])
 		return false;
-	/* Cached MRU chunk cache (stack-allocated on the cursor): a cursor scans
-	 * docids in ascending order into a small working set of chunks, so the
-	 * cache turns repeated head-walks into O(1) hits. */
-	return sm_contains_cached(&c->tombs->maps[c->segidx], c->docid,
-							  &c->tombcache);
+	/* Forward-resume cursor: the WAND scan feeds this cursor docids in
+	 * monotonically non-decreasing order, so sm_contains resumes the chunk
+	 * walk from the last located chunk instead of head-walking from chunk 0.
+	 * This is O(1) amortized even when the segment carries millions of
+	 * tombstones (the tombstone-bloat pathology). */
+	return sm_contains(&c->tombs->maps[c->segidx], c->docid,
+					   &c->tombcursor);
 }
 
 /* After the current docid is (re)positioned, skip forward over any docids
@@ -3852,9 +3920,9 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 			cursors[nactive].docid_lo = docid_lo;
 			cursors[nactive].docid_hi = docid_hi;
 			{
-				sm_cursor_cached_t ini = SM_CURSOR_CACHED_INIT;
+				sm_cursor_t ini = SM_CURSOR_INIT;
 
-				cursors[nactive].tombcache = ini;
+				cursors[nactive].tombcursor = ini;
 			}
 			nactive++;
 		}

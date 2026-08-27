@@ -2,6 +2,34 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.4.1
+
+Bug-fix release: two field-reported robustness fixes on high-vocabulary corpora
+under heavy churn.  C-only, no index format change, no REINDEX
+(`ALTER EXTENSION pg_fts UPDATE TO '1.4.1'`).
+
+- **Ranked scan no longer degrades under tombstone bloat.**  A ranked
+  (`ORDER BY d <=> query`) scan checks each candidate docid against the
+  segment's deleted-doc (tombstone) map.  That check used an 8-way MRU chunk
+  cache which degenerates to an O(chunks) head-walk per lookup once an
+  ascending scan runs past its eight cached chunks -- so a segment carrying
+  millions of tombstones (e.g. after a full-table `UPDATE` + `VACUUM`) turned a
+  common-term top-k from ~30 ms into tens of *seconds* (measured 24 s for a
+  735k-df term at 2.2M docs; ~99.9% of the time was in the sparsemap walk).
+  The tombstone check now uses a forward-resume cursor (`sm_cursor_t`) that
+  resumes the walk from the last located chunk, restoring O(postings + chunks).
+  Validated at 2M docs with ~4M tombstones: 24 s -> 2.5 ms.
+
+- **Fuzzy/regex/NOT candidate scan is memory-bounded.**  When no trigram
+  acceleration is available (`trigrams = off`, the default, or a pattern too
+  short to yield trigrams), fuzzy/regex/NOT queries fall back to a whole-segment
+  candidate scan.  That fallback accumulated every posting (Sum of df across the
+  dictionary -- the whole expanded inverted index) before de-duplicating, so on
+  a high-vocabulary corpus it could attempt a multi-gigabyte allocation and fail
+  with "invalid memory alloc request size".  It now folds duplicates as it
+  collects, keeping peak memory O(ndocs) regardless of Sum(df).  Results are
+  unchanged (the fallback still returns the exact set).
+
 ## 1.4.0
 
 Feature release: field-targeted (weight-zone) search.  **No index format change,
