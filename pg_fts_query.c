@@ -67,6 +67,7 @@ typedef struct Token
 	bool		prefix;			/* TOK_TERM followed by '*' */
 	int			fuzzy_k;		/* TOK_TERM followed by ~k (0 = not fuzzy) */
 	bool		regex;			/* TOK_TERM holds a regex (from /.../ ) */
+	uint32		weightmask;		/* TOK_TERM followed by :ABCD -> label mask (0 = none) */
 } Token;
 
 typedef struct ParseState
@@ -261,6 +262,56 @@ lex_raw(ParseState *st)
 			}
 			tok.fuzzy_k = havedigit ? Max(k, 1) : 2;
 		}
+		/*
+		 * A trailing ':' followed by a run of weight labels A/B/C/D (any case)
+		 * restricts the term to those field zones (tsquery-style term:A).  Sets
+		 * a 4-bit mask (bit L for label L in 0..3 = D,C,B,A).  Applies to plain,
+		 * prefix, and fuzzy terms; a regex term already consumed its slashes.
+		 */
+		if (st->pos < st->len && st->buf[st->pos] == ':')
+		{
+			int			p = st->pos + 1;
+			uint32		mask = 0;
+
+			while (p < st->len)
+			{
+				char		c = st->buf[p];
+
+				if (c == 'A' || c == 'a')
+					mask |= 1u << 3;
+				else if (c == 'B' || c == 'b')
+					mask |= 1u << 2;
+				else if (c == 'C' || c == 'c')
+					mask |= 1u << 1;
+				else if (c == 'D' || c == 'd')
+					mask |= 1u << 0;
+				else
+					break;
+				p++;
+			}
+			/* only consume the ':LABELS' if it was a valid non-empty label run */
+			if (mask != 0)
+			{
+				/* A weight label cannot combine with a prefix/fuzzy suffix in this
+				 * release (those are presence-only, no per-occurrence positions to
+				 * zone-filter).  Reject term:A* / term:A~k as a syntax error rather
+				 * than silently dropping the * / ~k. */
+				if (p < st->len && (st->buf[p] == '*' || st->buf[p] == '~'))
+				{
+					tok.kind = TOK_TERM;
+					tok.term = folded;
+					tok.termlen = flen;
+					tok.weightmask = mask;
+					tok.prefix = (st->buf[p] == '*');
+					tok.fuzzy_k = (st->buf[p] == '~') ? 2 : 0;
+					st->pos = p + 1;
+					/* parser sees weightmask + prefix/fuzzy flag together -> error */
+					return tok;
+				}
+				tok.weightmask = mask;
+				st->pos = p;
+			}
+		}
 	}
 	return tok;
 }
@@ -406,6 +457,7 @@ parse_primary(ParseState *st)
 	else if (tok.kind == TOK_TERM)
 	{
 		uint16		f = 0;
+		uint32		dist;
 
 		if (tok.regex)
 			f = FTS_QF_REGEX;
@@ -413,8 +465,23 @@ parse_primary(ParseState *st)
 			f = FTS_QF_FUZZY;
 		else if (tok.prefix)
 			f = FTS_QF_PREFIX;
-		emit_dist(st, FTS_QI_VAL, 0, tok.term, tok.termlen, f,
-				  tok.fuzzy_k > 0 ? (uint32) tok.fuzzy_k : 0);
+		dist = (tok.fuzzy_k > 0) ? (uint32) tok.fuzzy_k : 0;
+		if (tok.weightmask != 0)
+		{
+			/* Weight (field-zone) restriction is supported on PLAIN terms only in
+			 * this release: a plain VAL never uses `distance` for a gap, so the
+			 * label mask rides there.  prefix/fuzzy/regex are presence-only in the
+			 * matcher (no per-occurrence positions), so a weight on them cannot be
+			 * enforced -- reject rather than silently ignore the label. */
+			if (f != 0)
+			{
+				st->error = true;
+				return;
+			}
+			f = FTS_QF_WEIGHTED;
+			dist = tok.weightmask;
+		}
+		emit_dist(st, FTS_QI_VAL, 0, tok.term, tok.termlen, f, dist);
 	}
 	else
 	{
@@ -861,6 +928,15 @@ ftsquery_out(PG_FUNCTION_ARGS)
 				appendStringInfoChar(&s, '*');
 			else if (it->flags & FTS_QF_FUZZY)
 				appendStringInfo(&s, "~%u", it->distance);
+			else if (it->flags & FTS_QF_WEIGHTED)
+			{
+				/* render the weight mask as :A/B/C/D (high labels first) */
+				appendStringInfoChar(&s, ':');
+				if (it->distance & (1u << 3)) appendStringInfoChar(&s, 'A');
+				if (it->distance & (1u << 2)) appendStringInfoChar(&s, 'B');
+				if (it->distance & (1u << 1)) appendStringInfoChar(&s, 'C');
+				if (it->distance & (1u << 0)) appendStringInfoChar(&s, 'D');
+			}
 			stack[top++] = s;
 		}
 		else if (it->op == FTS_OP_NOT)

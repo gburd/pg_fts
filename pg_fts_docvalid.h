@@ -40,7 +40,7 @@
 #endif
 
 /* Layout constants, kept identical to pg_fts.h. */
-#define FTS_DV_VERSION			3
+#define FTS_DV_VERSION			4
 #define FTS_DV_FLAG_POSITIONS	0x0001
 
 /*
@@ -100,7 +100,13 @@ fts_doc_check(const void *base, size_t sz, uint32_t varsize)
 		return 0;
 	sz = varsize;				/* trust the smaller of the two from here */
 
-	if (doc->version != FTS_DV_VERSION)
+	/*
+	 * Accept v4 (current: weight labels in position high bits) and v3 (positions,
+	 * no labels).  A v3 image is byte-identical to a v4 image with all-D labels
+	 * (the label bits were simply always 0), so the same validation applies to
+	 * both -- an existing v3 index needs no re-index.
+	 */
+	if (doc->version != FTS_DV_VERSION && doc->version != 3)
 		return 0;
 
 	/* header + entries[nterms] + lexbytes must fit */

@@ -170,7 +170,7 @@ fts_doc_build(uint32 nterms, char **terms, const int *lens, const uint32 *tfs,
 
 			for (k = 0; k < tfs[i]; k++, p++)
 			{
-				if (k > 0 && positions[p] <= positions[p - 1])
+				if (k > 0 && FTS_POS_ORD(positions[p]) <= FTS_POS_ORD(positions[p - 1]))
 					ereport(ERROR,
 							(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 							 errmsg("invalid %s: positions must be ascending within a term", errctx)));
@@ -214,8 +214,16 @@ fts_doc_build(uint32 nterms, char **terms, const int *lens, const uint32 *tfs,
 	if (has_pos)
 	{
 		uint32	   *dst = FTS_DOC_POSITIONS(doc);
+		uint32		j;
 
 		memcpy(dst, positions, (Size) npos * sizeof(uint32));
+		/* record whether any position carries a non-D weight label (v4) */
+		for (j = 0; j < (uint32) npos; j++)
+			if (FTS_POS_LABEL(dst[j]) != 0)
+			{
+				doc->flags |= FTS_DOCF_WEIGHTS;
+				break;
+			}
 	}
 	return doc;
 }
@@ -392,11 +400,18 @@ fts_doc_parse_canonical(const char *in)
 				{
 					uint64		next = (uint64) v * 10 + (*p - '0');
 
-					if (next > 0x7fffffff)
+					if (next > 0x3fffffff)
 						ereport(ERROR,
 								(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 								 errmsg("ftsdoc position out of range")));
 					v = (uint32) next;
+					p++;
+				}
+				/* optional weight-label char A/B/C/D after the position (v4);
+				 * absent = D (unlabeled), matching v3 rendering */
+				if (*p == 'A' || *p == 'B' || *p == 'C' || *p == 'D')
+				{
+					v = FTS_POS_MAKE(v, FTS_WEIGHT_LABEL(*p));
 					p++;
 				}
 				if (npos == poscap)
@@ -488,9 +503,18 @@ ftsdoc_out(PG_FUNCTION_ARGS)
 		{
 			const uint32 *pos = FTS_DOC_TERMPOS(doc, &entries[i]);
 			uint32		k;
+			static const char lblch[4] = {'D', 'C', 'B', 'A'};
 
 			for (k = 0; k < entries[i].tf; k++)
-				appendStringInfo(&buf, k == 0 ? "@%u" : ",%u", pos[k]);
+			{
+				uint8		lbl = FTS_POS_LABEL(pos[k]);
+
+				appendStringInfo(&buf, k == 0 ? "@%u" : ",%u", FTS_POS_ORD(pos[k]));
+				/* append the weight-label char (A/B/C) when present; label D
+				 * (unlabeled) renders as before so v3 output is byte-identical */
+				if (lbl != 0)
+					appendStringInfoChar(&buf, lblch[lbl]);
+			}
 		}
 	}
 
@@ -527,7 +551,14 @@ ftsdoc_recv(PG_FUNCTION_ARGS)
 	 * older pg_fts restores into this version.  A v2 message has no has_pos
 	 * byte and no positions region.
 	 */
-	if (version != FTS_DOC_VERSION && version != 2)
+	/*
+	 * Accept the current wire version (4: positions + weight labels), v3
+	 * (positions, no labels -- byte-identical to a v4 all-D document), and v2
+	 * (position-free) so a binary dump (pg_dump -Fc) taken under an older pg_fts
+	 * restores into this version.  A v2 message has no has_pos byte and no
+	 * positions region; a v3 message's positions have no label bits (all D).
+	 */
+	if (version != FTS_DOC_VERSION && version != 3 && version != 2)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_BINARY_REPRESENTATION),
 				 errmsg("unsupported ftsdoc version number %u", version)));
@@ -801,4 +832,172 @@ fts_doc_has_regex(FtsDoc doc, const char *re, int relen)
 	}
 	pfree(repat);
 	return found;
+}
+
+PG_FUNCTION_INFO_V1(setftsweight);
+
+/*
+ * setftsweight(ftsdoc, "char") -> ftsdoc
+ * Relabel every token position of the document with the weight label
+ * A/B/C/D (mirrors setweight(tsvector,"char")).  A position's ordinal is
+ * unchanged; only its label bits are replaced.  A position-free document is
+ * returned unchanged (nothing to label; matches tsvector, where weights live
+ * on positions).
+ */
+Datum
+setftsweight(PG_FUNCTION_ARGS)
+{
+	FtsDoc		in = PG_GETARG_FTSDOC(0);
+	char		w = PG_GETARG_CHAR(1);
+	uint8		lbl;
+	Size		sz;
+	FtsDoc		out;
+
+	if (w != 'A' && w != 'B' && w != 'C' && w != 'D' &&
+		w != 'a' && w != 'b' && w != 'c' && w != 'd')
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("weight must be one of A, B, C, D")));
+	lbl = FTS_WEIGHT_LABEL(w);
+
+	sz = VARSIZE(in);
+	out = (FtsDoc) palloc(sz);
+	memcpy(out, in, sz);
+	if (FTS_DOC_HAS_POS(out))
+	{
+		uint32	   *pos = FTS_DOC_POSITIONS(out);
+		uint32		total = 0;
+		uint32		i;
+
+		for (i = 0; i < out->nterms; i++)
+			total += FTS_DOC_ENTRIES(out)[i].tf;
+		for (i = 0; i < total; i++)
+			pos[i] = FTS_POS_MAKE(FTS_POS_ORD(pos[i]), lbl);
+		if (lbl != 0)
+			out->flags |= FTS_DOCF_WEIGHTS;
+		else
+			out->flags &= ~FTS_DOCF_WEIGHTS;
+	}
+	out->version = FTS_DOC_VERSION;
+	PG_FREE_IF_COPY(in, 0);
+	PG_RETURN_FTSDOC(out);
+}
+
+PG_FUNCTION_INFO_V1(ftsdoc_concat);
+
+/*
+ * ftsdoc || ftsdoc -> ftsdoc
+ * Concatenate two documents into one, as though their source texts were joined
+ * (right after left).  The right operand's token ordinals are re-based by the
+ * left operand's doclen so positions stay globally ascending; each side keeps
+ * its own weight labels.  Terms are merged (a term in both sides sums its tf
+ * and interleaves positions).  Used to build a multi-field document, e.g.
+ *   to_ftsdoc('english', subject, 'A') || to_ftsdoc('english', body, 'C')
+ * so a query term can restrict to a field zone (term:A).  If either side lacks
+ * positions the result is position-free (labels require positions).
+ */
+Datum
+ftsdoc_concat(PG_FUNCTION_ARGS)
+{
+	FtsDoc		a = PG_GETARG_FTSDOC(0);
+	FtsDoc		b = PG_GETARG_FTSDOC(1);
+	bool		has_pos = FTS_DOC_HAS_POS(a) && FTS_DOC_HAS_POS(b);
+	uint32		abase = a->doclen;		/* right ordinals shift past the left doc */
+	uint32		na = a->nterms,
+				nb = b->nterms;
+	uint32		ntot = na + nb;
+	char	  **terms;
+	int		   *lens;
+	uint32	   *tfs;
+	uint32	   *positions = NULL;
+	uint32		pc = 0;
+	FtsDoc		out;
+
+	/* Both operands' entries are already sorted+distinct by term text.  Merge
+	 * them (sum tf and interleave positions for a shared term) so the arrays fed
+	 * to fts_doc_build are strictly ascending + distinct, as it requires. */
+	terms = (char **) palloc(sizeof(char *) * Max(ntot, 1));
+	lens = (int *) palloc(sizeof(int) * Max(ntot, 1));
+	tfs = (uint32 *) palloc(sizeof(uint32) * Max(ntot, 1));
+	if (has_pos)
+		positions = (uint32 *) palloc(sizeof(uint32) *
+									  Max(a->doclen + b->doclen, 1u));
+	{
+		uint32		ia = 0,
+					ib = 0,
+					nout = 0;
+		FtsTermEntry *ea = FTS_DOC_ENTRIES(a);
+		FtsTermEntry *eb = FTS_DOC_ENTRIES(b);
+
+#define ATERM(x) FTS_DOC_TERMTEXT(a, &ea[x])
+#define BTERM(x) FTS_DOC_TERMTEXT(b, &eb[x])
+		while (ia < na || ib < nb)
+		{
+			int			cmp;
+
+			if (ia >= na)
+				cmp = 1;
+			else if (ib >= nb)
+				cmp = -1;
+			else
+			{
+				int			mn = Min(ea[ia].len, eb[ib].len);
+
+				cmp = memcmp(ATERM(ia), BTERM(ib), mn);
+				if (cmp == 0)
+					cmp = (int) ea[ia].len - (int) eb[ib].len;
+			}
+			if (cmp < 0)			/* term only in A */
+			{
+				const uint32 *ap = FTS_DOC_TERMPOS(a, &ea[ia]);
+				uint32		k;
+
+				terms[nout] = ATERM(ia); lens[nout] = (int) ea[ia].len;
+				tfs[nout] = ea[ia].tf;
+				if (has_pos)
+					for (k = 0; k < ea[ia].tf; k++)
+						positions[pc++] = ap[k];
+				nout++; ia++;
+			}
+			else if (cmp > 0)		/* term only in B (re-based ordinal) */
+			{
+				const uint32 *bp = FTS_DOC_TERMPOS(b, &eb[ib]);
+				uint32		k;
+
+				terms[nout] = BTERM(ib); lens[nout] = (int) eb[ib].len;
+				tfs[nout] = eb[ib].tf;
+				if (has_pos)
+					for (k = 0; k < eb[ib].tf; k++)
+						positions[pc++] = FTS_POS_MAKE(FTS_POS_ORD(bp[k]) + abase,
+													   FTS_POS_LABEL(bp[k]));
+				nout++; ib++;
+			}
+			else					/* term in BOTH: sum tf, positions A then re-based B */
+			{
+				const uint32 *ap = FTS_DOC_TERMPOS(a, &ea[ia]);
+				const uint32 *bp = FTS_DOC_TERMPOS(b, &eb[ib]);
+				uint32		k;
+
+				terms[nout] = ATERM(ia); lens[nout] = (int) ea[ia].len;
+				tfs[nout] = ea[ia].tf + eb[ib].tf;
+				if (has_pos)
+				{
+					for (k = 0; k < ea[ia].tf; k++)
+						positions[pc++] = ap[k];
+					for (k = 0; k < eb[ib].tf; k++)
+						positions[pc++] = FTS_POS_MAKE(FTS_POS_ORD(bp[k]) + abase,
+													   FTS_POS_LABEL(bp[k]));
+				}
+				nout++; ia++; ib++;
+			}
+		}
+#undef ATERM
+#undef BTERM
+		ntot = nout;
+	}
+
+	out = fts_doc_build(ntot, terms, lens, tfs, has_pos, positions, "ftsdoc ||");
+	PG_FREE_IF_COPY(a, 0);
+	PG_FREE_IF_COPY(b, 1);
+	PG_RETURN_FTSDOC(out);
 }

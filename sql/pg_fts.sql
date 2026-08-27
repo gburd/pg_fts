@@ -1,4 +1,4 @@
-CREATE EXTENSION pg_fts VERSION '1.3.2';
+CREATE EXTENSION pg_fts VERSION '1.4.0';
 
 -- ftsdoc: analysis, output shows terms with term frequencies
 SELECT to_ftsdoc('The quick brown fox, the QUICK fox!');
@@ -2690,3 +2690,73 @@ SET enable_seqscan = off;
 SELECT count(*) = 1 AS one_hit FROM dv WHERE d @@@ 'one'::ftsquery;
 RESET enable_seqscan;
 DROP TABLE dv;
+
+-- ============================================================================
+-- Field-targeted (weight-zone) search (v1.4.0): to_ftsdoc(cfg,text,weight),
+-- setftsweight, ftsdoc || ftsdoc, and term:LABEL query restriction.
+-- ============================================================================
+-- labelled analysis renders with the label; concat re-bases + preserves labels
+SELECT to_ftsdoc('english','Vacuum contention','A')::text AS subj_A;
+SELECT (to_ftsdoc('english','vacuum lock','A') || to_ftsdoc('english','the vacuum runs','C'))::text AS concat_shared;
+SELECT setftsweight(to_ftsdoc('english','vacuum'),'B')::text AS relabelled;
+-- render round-trips through the input parser
+SELECT (to_ftsdoc('english','vacuum','A')::text)::ftsdoc::text = to_ftsdoc('english','vacuum','A')::text AS roundtrip;
+-- ftsquery renders the weight mask (tsquery-style term:A)
+SELECT to_ftsquery('english','vacuum:A')::text AS q_wa, to_ftsquery('english','x:AB')::text AS q_ab;
+-- value-path matching: subject-zone vacuum vs body-zone vacuum
+SELECT fts_match(to_ftsdoc('english','vacuum problem','A') || to_ftsdoc('english','lock contention','C'),
+                 to_ftsquery('english','vacuum:A')) AS subj_hit;                              -- t
+SELECT fts_match(to_ftsdoc('english','lock','A') || to_ftsdoc('english','run vacuum','C'),
+                 to_ftsquery('english','vacuum:A')) AS body_no_subj;                          -- f
+SELECT fts_match(to_ftsdoc('english','lock','A') || to_ftsdoc('english','run vacuum','C'),
+                 to_ftsquery('english','vacuum')) AS unrestricted;                            -- t
+-- multi-zone AND + multi-label mask
+SELECT fts_match(to_ftsdoc('english','vacuum','A') || to_ftsdoc('english','tgl','B'),
+                 to_ftsquery('english','vacuum:A & tgl:B')) AS multi_zone;                    -- t
+SELECT fts_match(to_ftsdoc('english','x','A') || to_ftsdoc('english','vacuum','B'),
+                 to_ftsquery('english','vacuum:AB')) AS mask_ab;                              -- t
+-- unlabelled (v3-style) doc: label D matches, others do not
+SELECT fts_match(to_ftsdoc('english','vacuum'), to_ftsquery('english','vacuum:A')) AS plain_a;  -- f
+SELECT fts_match(to_ftsdoc('english','vacuum'), to_ftsquery('english','vacuum:D')) AS plain_d;  -- t
+-- weighted prefix / fuzzy / regex are rejected
+SELECT to_ftsquery('english','vac:A*');       -- error
+SELECT to_ftsquery('english','vac:A~1');      -- error
+-- index-path parity: field restriction through the fts index == seqscan truth,
+-- for count(*), fts_count, and a scan.
+CREATE TABLE zmsg (id serial, subject text, body text, d ftsdoc);
+INSERT INTO zmsg(subject, body) VALUES
+ ('vacuum tuning', 'locks and contention'),
+ ('lock contention', 'run vacuum often'),
+ ('checkpoint', 'vacuum and checkpoint');
+UPDATE zmsg SET d = to_ftsdoc('english', subject, 'A') || to_ftsdoc('english', body, 'C');
+CREATE INDEX zmsg_fts ON zmsg USING fts (d) WITH (positions = on);
+SET enable_seqscan = off;
+SELECT array_agg(id ORDER BY id) AS idx_subjA FROM zmsg WHERE d @@@ to_ftsquery('english','vacuum:A');  -- {1}
+SELECT fts_count('zmsg_fts', to_ftsquery('english','vacuum:A')) AS cnt_subjA;                           -- 1
+SELECT fts_count('zmsg_fts', to_ftsquery('english','vacuum')) AS cnt_any;                               -- 3
+SET enable_indexscan = off; SET enable_bitmapscan = off;
+SELECT array_agg(id ORDER BY id) AS seq_subjA FROM zmsg WHERE d @@@ to_ftsquery('english','vacuum:A');  -- {1}
+RESET enable_indexscan; RESET enable_bitmapscan; RESET enable_seqscan;
+DROP TABLE zmsg;
+
+-- ============================================================================
+-- Upgrade compatibility: an index/value built WITHOUT weight labels (as by
+-- pre-1.4.0, and by the 2-arg to_ftsdoc) reads correctly under 1.4.0 -- every
+-- position is label D, so unrestricted queries are unchanged, term:D matches,
+-- and term:A/B/C does not.  This is the "no REINDEX" guarantee: existing
+-- unlabelled indexes keep working; only rebuilding from labelled docs adds
+-- field provenance.
+CREATE TABLE zold (id serial, d ftsdoc);
+INSERT INTO zold(d) SELECT to_ftsdoc('english','vacuum lock number '||g) FROM generate_series(1,200) g;
+CREATE INDEX zold_fts ON zold USING fts (d) WITH (positions = on);
+SET enable_seqscan = off;
+-- unrestricted query unchanged (all 200 rows contain vacuum)
+SELECT count(*) = 200 AS unrestricted_ok FROM zold WHERE d @@@ to_ftsquery('english','vacuum');
+-- term:D matches unlabelled data (unlabelled == D)
+SELECT count(*) = 200 AS labelD_matches FROM zold WHERE d @@@ to_ftsquery('english','vacuum:D');
+-- term:A does NOT match unlabelled data
+SELECT count(*) = 0 AS labelA_no_match FROM zold WHERE d @@@ to_ftsquery('english','vacuum:A');
+-- phrase still works on the unlabelled positions index
+SELECT count(*) = 200 AS phrase_ok FROM zold WHERE d @@@ '"vacuum lock"'::ftsquery;
+RESET enable_seqscan;
+DROP TABLE zold;

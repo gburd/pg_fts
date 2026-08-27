@@ -46,6 +46,7 @@ term_positions(FtsDoc doc, const char *term, int termlen, uint16 flags,
 			   uint32 distance)
 {
 	MatchVal	v;
+	uint32		wmask = (flags & FTS_QF_WEIGHTED) ? distance : 0;
 
 	v.present = false;
 	v.pos = NULL;
@@ -79,6 +80,49 @@ term_positions(FtsDoc doc, const char *term, int termlen, uint16 flags,
 			v.pos = FTS_DOC_TERMPOS(doc, e);
 			v.npos = (int) e->tf;
 		}
+		/*
+		 * Weight (field-zone) restriction: the term counts as present only if
+		 * it occurs at >= 1 position whose label is in wmask.  A doc with no
+		 * positions cannot be zone-filtered -- treat every position as label D
+		 * (bit 0), i.e. matches iff the mask includes D.  When positions are
+		 * present, narrow v.pos to the in-zone positions (kept as label-bearing
+		 * words; phrase_step masks the ordinal) so a weighted phrase still
+		 * enforces adjacency over only the in-zone occurrences.
+		 */
+		if (wmask != 0)
+		{
+			if (!FTS_DOC_HAS_POS(doc))
+			{
+				v.present = (wmask & 1u) != 0;	/* unlabeled == label D */
+			}
+			else
+			{
+				int			j,
+							n = 0;
+				bool		any = false;
+
+				for (j = 0; j < v.npos; j++)
+					if ((wmask & (1u << FTS_POS_LABEL(v.pos[j]))) != 0)
+						any = true;
+				v.present = any;
+				/* compact in-zone positions in place (order preserved) */
+				if (any)
+				{
+					uint32	   *keep = (uint32 *) palloc((Size) v.npos * sizeof(uint32));
+
+					for (j = 0; j < v.npos; j++)
+						if ((wmask & (1u << FTS_POS_LABEL(v.pos[j]))) != 0)
+							keep[n++] = v.pos[j];
+					v.pos = keep;
+					v.npos = n;
+				}
+				else
+				{
+					v.pos = NULL;
+					v.npos = 0;
+				}
+			}
+		}
 		return v;
 	}
 }
@@ -102,14 +146,14 @@ fts_phrase_step_pos(const uint32 *left, int nleft,
 
 	for (ri = 0; ri < nright; ri++)
 	{
-		uint32		p = right[ri];
+		uint32		p = FTS_POS_ORD(right[ri]);	/* ordinal only; ignore label bits */
 
 		/* advance li to the first left position that could be in range */
-		while (li < nleft && left[li] + distance < p)
+		while (li < nleft && FTS_POS_ORD(left[li]) + distance < p)
 			li++;
 		/* any left position L with p-distance <= L < p works */
-		if (li < nleft && left[li] < p && p - left[li] <= distance)
-			out[k++] = p;
+		if (li < nleft && FTS_POS_ORD(left[li]) < p && p - FTS_POS_ORD(left[li]) <= distance)
+			out[k++] = right[ri];	/* keep the original (label-bearing) word */
 	}
 	*nout = k;
 }

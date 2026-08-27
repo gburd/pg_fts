@@ -1809,6 +1809,7 @@ bm25_collect_matches(Relation index, FtsQuery query, TidSet *out, bool *recheck)
 	bool		has_fuzzy_regex = false;
 	bool		has_not = false;
 	bool		has_phrase = false;
+	bool		has_weighted = false;
 	bool		need_recheck = false;
 	bool		use_pos_phrase = false;	/* positional phrase fast path applies */
 	int			pterm[FTS_QUERY_MAX_PHRASE_TERMS];
@@ -1869,7 +1870,19 @@ collect_retry:
 			has_phrase = true;
 		if (it->type == FTS_QI_VAL && (it->flags & (FTS_QF_FUZZY | FTS_QF_REGEX)))
 			has_fuzzy_regex = true;
+		if (it->type == FTS_QI_VAL && (it->flags & FTS_QF_WEIGHTED))
+			has_weighted = true;
 	}
+
+	/*
+	 * A weight-restricted (term:LABEL) query cannot be answered from the index
+	 * alone -- the posting positions carry only the ordinal, not the field
+	 * label (labels live in the heap ftsdoc value).  So the index over-generates
+	 * (every doc containing the term) and the heap recheck applies the label
+	 * filter, exactly as it does for fuzzy/regex.  Force recheck.
+	 */
+	if (has_weighted)
+		need_recheck = true;
 
 	/*
 	 * Positional phrase fast path: if the index carries token positions
@@ -1880,7 +1893,7 @@ collect_retry:
 	 * boolean operators, we keep the AND + heap-recheck path below (correct,
 	 * slower).
 	 */
-	if (has_phrase && !has_fuzzy_regex && !has_not &&
+	if (has_phrase && !has_fuzzy_regex && !has_not && !has_weighted &&
 		bm25_index_wants_positions(index) &&
 		bm25_phrase_chain(query, pterm, pstep, &npterm))
 		use_pos_phrase = true;
@@ -4015,8 +4028,8 @@ bm25_count_dictdf_fastpath(Relation index, FtsQuery q)
 		return -1;
 	it = &q->items[0];
 	if (it->type != FTS_QI_VAL ||
-		(it->flags & (FTS_QF_PREFIX | FTS_QF_FUZZY | FTS_QF_REGEX)) != 0)
-		return -1;
+		(it->flags & (FTS_QF_PREFIX | FTS_QF_FUZZY | FTS_QF_REGEX | FTS_QF_WEIGHTED)) != 0)
+		return -1;				/* weighted (term:LABEL) needs the heap recheck, not Sum(df) */
 
 	bm25_read_meta(index, &meta);
 	gen0 = meta.generation;
