@@ -26,6 +26,7 @@
 										 * column; v3 (inline doclen) still read.  v3:
 										 * segmented layout + optional token positions. */
 #define BM25_VERSION_DOCLEN_INLINE 3	/* oldest format we dual-read */
+#define BM25_VERSION_DOCLEN_SIDECAR 4	/* first version with the doclen sidecar */
 #define BM25_METAPAGE_BLKNO	0
 
 /* page opaque flags */

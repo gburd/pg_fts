@@ -284,7 +284,7 @@ bm25_read_meta(Relation index, BM25MetaPageData *out)
 	LockBuffer(buffer, BUFFER_LOCK_SHARE);
 	page = BufferGetPage(buffer);
 	bm25_check_meta(page, index);
-	memcpy(out, BM25PageGetMeta(page), sizeof(BM25MetaPageData));
+	bm25_meta_from_page(page, out);	/* version-aware: expands a v3 metapage */
 	UnlockReleaseBuffer(buffer);
 }
 
@@ -302,7 +302,14 @@ bm25_read_meta_generation(Relation index)
 	uint32		gen;
 
 	LockBuffer(buffer, BUFFER_LOCK_SHARE);
-	gen = BM25PageGetMeta(BufferGetPage(buffer))->generation;
+	/* generation is at the SAME offset only within one format version; read it
+	 * version-aware so a v3 metapage's generation (at the v3 offset) is correct. */
+	{
+		BM25MetaPageData m;
+
+		bm25_meta_from_page(BufferGetPage(buffer), &m);
+		gen = m.generation;
+	}
 	UnlockReleaseBuffer(buffer);
 	return gen;
 }
@@ -2673,8 +2680,10 @@ typedef struct WandCursor
 	uint32		dloff;			/* offset of doclen column within blkbuf (v3 only) */
 	bool		has_doclen_col;	/* v3 segment: doclen inline in the block (read at
 								 * dloff).  v4 segment: false -- doclen comes from
-								 * *doclens (the per-segment sidecar). */
-	const BM25Doclens *doclens; /* v4 sidecar for this cursor's segment, or NULL */
+								 * the doclen sidecar cursor. */
+	BM25DoclenCursor doclenc;	/* v4: forward-cursored sidecar reader (reads only
+								 * the pages covering scored docids, not the whole
+								 * segment sidecar up front). */
 	int			blkcount;		/* postings in the current block */
 	uint32		blk_max_tf;		/* block-max tf (from header) */
 	uint32		blk_min_dl;		/* block-min |D| (from header) */
@@ -2963,7 +2972,7 @@ wand_contrib_cur(WandCursor *c)
 	double		tf = (double) bm25_for_get(c->blkbuf + c->tfoff, c->cur);
 	double		dl = c->has_doclen_col
 		? (double) bm25_for_get(c->blkbuf + c->dloff, c->cur)	/* v3: inline */
-		: (double) bm25_doclen_lookup(c->doclens, c->docid);		/* v4: sidecar */
+		: (double) bm25_doclen_cursor_lookup(&c->doclenc, c->docid);	/* v4: sidecar */
 	double		norm = tf + c->k1_1mb + c->k1b_inv_avgdl * dl;
 
 	return c->idf_k1p1 * tf / norm;
@@ -3777,7 +3786,6 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 	WandCursor *cursors;
 	ScoredTid  *cand;
 	BM25Tombstones tombs;
-	BM25Doclens *seg_doclens;	/* per-segment doclen sidecars (v4), or empty (v3) */
 	DocidFilter filter;
 	DocidFilter *filterp = NULL;
 	uint64	   *filter_docids = NULL;
@@ -3880,16 +3888,10 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 	 * segment, so reused heap TIDs live in another segment still rank */
 	bm25_tombstones_load(index, &meta, &tombs);
 
-	/* per-segment doclen sidecars (v4): loaded once, shared by every cursor in
-	 * the segment, freed after the scan.  A v3 segment (doclenstart == Invalid)
-	 * loads an empty map and its cursors read doclen inline from the block. */
-	{
-		uint32		si;
-
-		seg_doclens = (BM25Doclens *) palloc0(Max((int) meta.nsegments, 1) * sizeof(BM25Doclens));
-		for (si = 0; si < meta.nsegments; si++)
-			bm25_doclens_load(index, meta.segs[si].doclenstart, &seg_doclens[si]);
-	}
+	/* v4 doclen sidecar: each cursor gets a FORWARD cursor over its segment's
+	 * sidecar chain (initialised per cursor below), reading only the pages that
+	 * cover the docids it actually scores -- NOT a whole-segment preload, which
+	 * on a many-segment index dominated the scan (the 1.5.0 slowdown report). */
 
 	for (t = 0; t < nterms; t++)
 	{
@@ -3947,7 +3949,8 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 			cursors[nactive].segidx = s;
 			cursors[nactive].has_doclen_col =
 				(meta.segs[s].doclenstart == InvalidBlockNumber);
-			cursors[nactive].doclens = &seg_doclens[s];
+			bm25_doclen_cursor_init(&cursors[nactive].doclenc, index,
+									meta.segs[s].doclenstart);
 			cursors[nactive].docid_lo = docid_lo;
 			cursors[nactive].docid_hi = docid_hi;
 			{
@@ -3970,13 +3973,6 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 
 	ncand = fts_search_wand(cursors, nactive, wantk, filterp, gatep, &cand);
 	bm25_tombstones_free(&tombs);
-	{
-		uint32		si;
-
-		for (si = 0; si < meta.nsegments; si++)
-			bm25_doclens_free(&seg_doclens[si]);
-		pfree(seg_doclens);
-	}
 	if (filter_docids)
 		pfree(filter_docids);
 	if (gatep != NULL)

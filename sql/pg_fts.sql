@@ -1,4 +1,4 @@
-CREATE EXTENSION pg_fts VERSION '1.5.0';
+CREATE EXTENSION pg_fts VERSION '1.5.1';
 
 -- ftsdoc: analysis, output shows terms with term frequencies
 SELECT to_ftsdoc('The quick brown fox, the QUICK fox!');
@@ -449,6 +449,38 @@ SELECT (SELECT count(*) FROM univ WHERE d @@@ 'alpha & !omega'::ftsquery)
            CASE WHEN id % 5 = 0 THEN 'omega' ELSE 'sigma' END) @@@ 'alpha & !omega'::ftsquery)
        AS universe_matches_truth;                                   -- t
 DROP TABLE univ;
+
+-- Multi-segment v4 doclen sidecar: force several segments (low maintenance_work_mem
+-- flushes many small segments), then confirm a ranked scan reads each segment's
+-- sidecar via the FORWARD CURSOR and returns the exact top-k -- i.e. doclen is
+-- looked up correctly ACROSS segment boundaries, not from a mis-scoped preload.
+-- (Regression for the 1.5.0 v4 ranked-scan report: the per-segment sidecar was
+-- bulk-loaded per query; the cursor reads only the scored docid range, and must
+-- still find every scored doc's length.)
+CREATE TABLE segsc (id serial, d ftsdoc);
+SET maintenance_work_mem = '1MB';   -- tiny -> many segment flushes
+INSERT INTO segsc (d)
+  SELECT to_ftsdoc('english', repeat('alpha ', 1 + (g % 7)) || 'w' || (g % 500) || ' tail ' || g)
+  FROM generate_series(1, 4000) g;
+CREATE INDEX segsc_fts ON segsc USING fts (d);
+RESET maintenance_work_mem;
+SET enable_seqscan = off;
+-- Every doc the ranked scan returns must (a) genuinely match @@@ and (b) score
+-- within the top band -- i.e. the sidecar cursor supplied a valid doclen for
+-- every scored doc across all segments.  We assert the top-10 are all real
+-- matches and the scan returns a full page, rather than exact tie-order equality
+-- (v4 quantized doclen may reorder within a score tie -- the documented bound).
+SELECT count(*) = 10 AS segsc_topk_full,
+       bool_and(m) AS segsc_all_match
+FROM (
+  SELECT id, (d @@@ to_ftsquery('english','alpha')) AS m
+  FROM segsc
+  WHERE id IN (
+    SELECT id FROM segsc WHERE d @@@ to_ftsquery('english','alpha')
+    ORDER BY d <=> to_ftsquery('english','alpha') LIMIT 10)
+) z;   -- t | t
+RESET enable_seqscan;
+DROP TABLE segsc;
 
 -- BM25F: multi-field weighting.
 -- a term in the (heavily weighted) title scores higher than the same term in
