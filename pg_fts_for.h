@@ -203,4 +203,55 @@ bm25_for_get(const unsigned char *buf, int i)
 	return v;
 }
 
+/*
+ * doclen quantization (Lucene/Tantivy "fieldnorm"): map an integer document
+ * length to a single byte and back.  Used by the per-segment doclen sidecar
+ * (format v4) so BM25 length-normalization is a byte, not a per-posting uint32.
+ *
+ * Encoding is a mini 8-bit float: a 5-bit exponent and a 3-bit mantissa
+ * (SmallFloat.intToByte4 / byte4ToInt).  It is monotonic (a longer doc never
+ * encodes to a smaller byte after decode), exact for the smallest lengths, and
+ * increasingly coarse for large lengths -- exactly right for BM25, where length
+ * enters only through the normalization denominator, so a few-percent error on a
+ * long document is invisible in the score ORDERING.  avgdl stays EXACT (from
+ * BM25SegMeta.sumdoclen/ndocs); only the per-doc denominator is quantized.
+ *
+ * Decode is total (every one of the 256 bytes maps to a length), so a scorer
+ * can precompute a 256-entry length-norm factor table and index it by the byte.
+ */
+static inline uint8
+fts_doclen_to_byte(uint32 len)
+{
+	uint32		exp;
+	uint32		mant;
+	uint32		e;
+	uint32		hb;
+
+	if (len == 0)
+		return 0;
+	if (len <= 7)
+		return (uint8) len;		/* 0..7 exact (exponent field 0) */
+	hb = 31 - (uint32) __builtin_clz(len);	/* highest set bit */
+	exp = hb - 3;						/* keep 4 significant bits: 1 + 3 mantissa */
+	mant = (len >> exp) & 0x07;
+	e = exp + 1;						/* exponent field (>=1 for len>=8) */
+	if (e > 31)
+	{
+		e = 31;
+		mant = 7;
+	}
+	return (uint8) ((e << 3) | mant);
+}
+
+static inline uint32
+fts_byte_to_doclen(uint8 b)
+{
+	uint32		mant = b & 0x07;
+	uint32		e = (b >> 3) & 0x1F;
+
+	if (e == 0)
+		return mant;					/* 0..7 exact */
+	return (0x08u | mant) << (e - 1);	/* implicit leading 1, shift back */
+}
+
 #endif							/* PG_FTS_FOR_H */
