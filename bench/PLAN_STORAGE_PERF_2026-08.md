@@ -50,6 +50,14 @@ parallelism. So the win is a **codec** change (Phase 2/3), not a skip structure.
 
 ---
 
+# STATUS (2026-08-28): Phases 0-2 DONE. Phase 1 was a measured no-op (gains
+# already banked in 1.0.x-1.2.x). Phase 2 (doclen sidecar) SHIPPED as v1.5.0:
+# index 40% smaller AND common-term ranked 7.7x faster -- the sidecar delivered
+# most of the Phase 3 common-term win early. Remaining: Phase 3 (now largely
+# banked; re-baseline the common-term gap vs competitors before doing more) and
+# Phase 4 (parallel build already exists; the gap is worker count/merge, minor).
+# See bench/phases/README.md for the measured results.
+
 ## Phase 0 — pin the safety net (no format change, do FIRST)
 
 Before touching any byte layout, lock down what "unchanged" means so every later
