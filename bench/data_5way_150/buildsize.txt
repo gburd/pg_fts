@@ -1,0 +1,5 @@
+# pg_fts 1.5.0 5-way, same Wikipedia 2.19M corpus, r6id.4xlarge
+pg_fts 1.5.0    179s   1414 MB   (was 2089 MB at 1.4.0: 32% smaller)
+pg_textsearch   263s   1885 MB   ranking-only
+pg_search       45s    2332 MB   ParadeDB/Tantivy
+vchord          41s    2906 MB   VectorChord-bm25 (tsvector bm25_ops)
