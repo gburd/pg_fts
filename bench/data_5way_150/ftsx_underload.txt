@@ -1,0 +1,3 @@
+rare_k10:      1:369.3tps/2.71ms   8:2889.9tps/2.77ms  16:3426.1tps/4.67ms  32:3471.3tps/9.22ms
+common_k10:    1:80.4tps/12.43ms   8:639.5tps/12.51ms  16:588.3tps/27.20ms  32:596.1tps/53.68ms
+count_common:  1:477.4tps/2.10ms   8:3697.2tps/2.16ms  16:2732.4tps/5.86ms  32:2745.0tps/11.66ms
