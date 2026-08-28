@@ -1,4 +1,4 @@
-CREATE EXTENSION pg_fts VERSION '1.4.1';
+CREATE EXTENSION pg_fts VERSION '1.5.0';
 
 -- ftsdoc: analysis, output shows terms with term frequencies
 SELECT to_ftsdoc('The quick brown fox, the QUICK fox!');
@@ -1599,14 +1599,24 @@ BEGIN
     RAISE EXCEPTION 'rank parity test corpus has % score ties for %', ntie, qtext;
   END IF;
   SET LOCAL enable_seqscan = off; SET LOCAL enable_bitmapscan = off;
+  -- A genuine miss is an index-returned doc whose EXACT score (fts_bm25 with the
+  -- true stored doclen) is more than 1% below the exact k-th score.  v4 scores
+  -- with a quantized doclen, so at a score boundary the index may return an
+  -- equivalently-scored doc; that is the documented fieldnorm tradeoff, not a
+  -- recall error.  (For a v3 index the quantization is absent and this is exact.)
   EXECUTE format($f$
-    SELECT count(*) FROM (
-      SELECT id FROM rankparity WHERE d @@@ %L::ftsquery
-      ORDER BY d <=> %L::ftsquery LIMIT %s) ix
-    WHERE ix.id NOT IN (
-      SELECT id FROM rankparity WHERE d @@@ %L::ftsquery
-      ORDER BY fts_bm25(d,%L::ftsquery,%s,%s,%L) DESC, id LIMIT %s)$f$,
-    qtext, qtext, kk, qtext, qtext, nd, ad, dfs, kk) INTO nmiss;
+    WITH ix AS (
+      SELECT fts_bm25(d,%L::ftsquery,%s,%s,%L) AS sc
+      FROM rankparity WHERE d @@@ %L::ftsquery
+      ORDER BY d <=> %L::ftsquery LIMIT %s),
+    cut AS (
+      SELECT min(sc) AS kth FROM (
+        SELECT fts_bm25(d,%L::ftsquery,%s,%s,%L) AS sc
+        FROM rankparity WHERE d @@@ %L::ftsquery
+        ORDER BY sc DESC LIMIT %s) z)
+    SELECT count(*) FROM ix, cut WHERE ix.sc < cut.kth * 0.99 - 1e-9$f$,
+    qtext, nd, ad, dfs, qtext, qtext, kk,
+    qtext, nd, ad, dfs, qtext, kk) INTO nmiss;
   RETURN nmiss;
 END $$;
 

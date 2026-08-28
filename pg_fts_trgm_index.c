@@ -340,7 +340,7 @@ static bool
 bm25_trgm_candidates(Relation index, BlockNumber trgmstart,
 					 BlockNumber dictstart,
 					 const char *term, int termlen, int min_trigrams,
-					 bool is_regex, TidSet *out)
+					 bool is_regex, bool has_doclen_col, TidSet *out)
 {
 	uint32		qtrg[FTS_MAX_TRIGRAMS];
 	int			nqtrg;
@@ -486,7 +486,8 @@ bm25_trgm_candidates(Relation index, BlockNumber trgmstart,
 				BM25Posting *post;
 				int			np = bm25_decode_term(index, de->firstposting,
 												  de->firstoffset, de->df,
-												  &post, NULL, false, NULL, true);
+												  &post, NULL, false, NULL, true,
+												  has_doclen_col);
 				int			k;
 
 				for (k = 0; k < np; k++)

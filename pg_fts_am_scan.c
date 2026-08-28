@@ -31,7 +31,8 @@ typedef struct TidSet
 static bool bm25_trgm_candidates(Relation index, BlockNumber trgmstart,
 								 BlockNumber dictstart,
 								 const char *term, int termlen,
-								 int min_trigrams, bool is_regex, TidSet *out);
+								 int min_trigrams, bool is_regex, bool has_doclen_col,
+								 TidSet *out);
 static void bm25_collect_matches(Relation index, FtsQuery query, TidSet *out, bool *recheck);
 static void bm25_recheck_exact(Relation index, FtsQuery query, TidSet *set);
 static double bm25_query_maxhits(Relation index, FtsQuery q, double N);
@@ -424,7 +425,8 @@ bm25_lookup_term(Relation index, const BM25SegMeta *seg,
 			/* read exactly this term's df postings from the shared chain */
 			BM25Posting *post;
 			int			np = bm25_decode_term(index, firstposting, firstoffset,
-										  df, &post, NULL, false, NULL, true);
+										  df, &post, NULL, false, NULL, true,
+										  seg->doclenstart == InvalidBlockNumber);
 			ItemPointerData *tids = palloc(Max(np, 1) * sizeof(ItemPointerData));
 			int			n = 0;
 			int			i;
@@ -696,7 +698,8 @@ bm25_lookup_prefix(Relation index, const BM25SegMeta *seg,
 				BM25Posting *post;
 				int			np = bm25_decode_term(index, de->firstposting,
 												  de->firstoffset, de->df,
-												  &post, NULL, false, NULL, true);
+												  &post, NULL, false, NULL, true,
+												  seg->doclenstart == InvalidBlockNumber);
 				int			k;
 
 				for (k = 0; k < np; k++)
@@ -942,7 +945,8 @@ bm25_fuzzy_terms(Relation index, const BM25SegMeta *seg,
 				BM25Posting *post;
 				int			np = bm25_decode_term(index, de->firstposting,
 												  de->firstoffset, de->df,
-												  &post, NULL, false, NULL, true);
+												  &post, NULL, false, NULL, true,
+												  seg->doclenstart == InvalidBlockNumber);
 
 				/* keep this term's docid-sorted TIDs as a run for k-way merge */
 				if (np > 0)
@@ -1142,7 +1146,8 @@ done:
  * fold (sort_uniq) whenever the buffer grows past a small multiple of ndocs,
  * so peak memory stays O(ndocs) regardless of Sum(df). */
 static TidSet
-bm25_universe_bounded(Relation index, BlockNumber dictstart, double ndocs)
+bm25_universe_bounded(Relation index, BlockNumber dictstart, double ndocs,
+					  bool has_doclen_col)
 {
 	TidSet		u;
 	BlockNumber blk = dictstart;
@@ -1193,7 +1198,8 @@ bm25_universe_bounded(Relation index, BlockNumber dictstart, double ndocs)
 			esize = MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
 			np = bm25_decode_term(index, de->firstposting,
 								  de->firstoffset, de->df,
-								  &post, NULL, false, NULL, true);
+								  &post, NULL, false, NULL, true,
+								  has_doclen_col);
 
 			for (k = 0; k < np; k++)
 			{
@@ -1664,7 +1670,8 @@ bm25_lookup_term_pos(Relation index, const BM25SegMeta *seg,
 			BM25Posting *post;
 			uint32	   *arena = NULL;
 			int			np = bm25_decode_term(index, firstposting, firstoffset,
-											  df, &post, NULL, true, &arena, false);
+											  df, &post, NULL, true, &arena, false,
+										  seg->doclenstart == InvalidBlockNumber);
 			PosPosting *pp = (PosPosting *) palloc(Max(np, 1) * sizeof(PosPosting));
 			int			k;
 
@@ -1994,7 +2001,8 @@ collect_retry:
 										 sg->dictstart,
 										 FTS_QUERY_ITEMTEXT(query, it),
 										 it->termlen, 3,
-										 (it->flags & FTS_QF_REGEX) != 0, &ts))
+										 (it->flags & FTS_QF_REGEX) != 0,
+										 sg->doclenstart == InvalidBlockNumber, &ts))
 				{
 					cands = tidset_or(cands, ts);
 					any_trgm = true;
@@ -2031,7 +2039,8 @@ collect_retry:
 				 * high-vocabulary corpus.
 				 */
 				need_recheck = true;
-				universe = bm25_universe_bounded(index, sg->dictstart, sg->ndocs);
+				universe = bm25_universe_bounded(index, sg->dictstart, sg->ndocs,
+												 sg->doclenstart == InvalidBlockNumber);
 				if (universe.n > 0)
 				{
 					bm25_filter_tombstoned_seg(&seg_tombs, s, &universe);
@@ -2043,7 +2052,8 @@ collect_retry:
 		}
 
 		if (has_not)
-			universe = bm25_universe_bounded(index, sg->dictstart, sg->ndocs);
+			universe = bm25_universe_bounded(index, sg->dictstart, sg->ndocs,
+											 sg->doclenstart == InvalidBlockNumber);
 		else
 		{
 			universe.tids = NULL;
@@ -2660,7 +2670,11 @@ typedef struct WandCursor
 	unsigned char *blkbuf;		/* copy of the current block's FOR payload */
 	uint64		docids[BM25_BLOCK_SIZE];	/* decoded docids of current block */
 	uint32		tfoff;			/* offset of tf column within blkbuf */
-	uint32		dloff;			/* offset of doclen column within blkbuf */
+	uint32		dloff;			/* offset of doclen column within blkbuf (v3 only) */
+	bool		has_doclen_col;	/* v3 segment: doclen inline in the block (read at
+								 * dloff).  v4 segment: false -- doclen comes from
+								 * *doclens (the per-segment sidecar). */
+	const BM25Doclens *doclens; /* v4 sidecar for this cursor's segment, or NULL */
 	int			blkcount;		/* postings in the current block */
 	uint32		blk_max_tf;		/* block-max tf (from header) */
 	uint32		blk_min_dl;		/* block-min |D| (from header) */
@@ -2816,7 +2830,7 @@ wand_load_block(WandCursor *c)
 	glen = bm25_for_unpack(c->blkbuf, cnt, gaps);
 	tflen = bm25_for_bytelen(c->blkbuf + glen, cnt);
 	c->tfoff = (uint32) glen;
-	c->dloff = (uint32) (glen + tflen);
+	c->dloff = (uint32) (glen + tflen);	/* v3: doclen column follows tf; unused for v4 */
 
 	base = ((uint64) bh->first_docid_hi << 32) | bh->first_docid_lo;
 	for (i = 0; i < cnt; i++)
@@ -2947,7 +2961,9 @@ static inline double
 wand_contrib_cur(WandCursor *c)
 {
 	double		tf = (double) bm25_for_get(c->blkbuf + c->tfoff, c->cur);
-	double		dl = (double) bm25_for_get(c->blkbuf + c->dloff, c->cur);
+	double		dl = c->has_doclen_col
+		? (double) bm25_for_get(c->blkbuf + c->dloff, c->cur)	/* v3: inline */
+		: (double) bm25_doclen_lookup(c->doclens, c->docid);		/* v4: sidecar */
 	double		norm = tf + c->k1_1mb + c->k1b_inv_avgdl * dl;
 
 	return c->idf_k1p1 * tf / norm;
@@ -3761,6 +3777,7 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 	WandCursor *cursors;
 	ScoredTid  *cand;
 	BM25Tombstones tombs;
+	BM25Doclens *seg_doclens;	/* per-segment doclen sidecars (v4), or empty (v3) */
 	DocidFilter filter;
 	DocidFilter *filterp = NULL;
 	uint64	   *filter_docids = NULL;
@@ -3863,6 +3880,17 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 	 * segment, so reused heap TIDs live in another segment still rank */
 	bm25_tombstones_load(index, &meta, &tombs);
 
+	/* per-segment doclen sidecars (v4): loaded once, shared by every cursor in
+	 * the segment, freed after the scan.  A v3 segment (doclenstart == Invalid)
+	 * loads an empty map and its cursors read doclen inline from the block. */
+	{
+		uint32		si;
+
+		seg_doclens = (BM25Doclens *) palloc0(Max((int) meta.nsegments, 1) * sizeof(BM25Doclens));
+		for (si = 0; si < meta.nsegments; si++)
+			bm25_doclens_load(index, meta.segs[si].doclenstart, &seg_doclens[si]);
+	}
+
 	for (t = 0; t < nterms; t++)
 	{
 		uint64		gdf = 0;	/* summed across segments; uint64 (feeds IDF as double) */
@@ -3917,6 +3945,9 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 				idf * mtf * (k1 + 1.0) / (mtf + k1 * (1.0 - b));
 			cursors[nactive].tombs = &tombs;
 			cursors[nactive].segidx = s;
+			cursors[nactive].has_doclen_col =
+				(meta.segs[s].doclenstart == InvalidBlockNumber);
+			cursors[nactive].doclens = &seg_doclens[s];
 			cursors[nactive].docid_lo = docid_lo;
 			cursors[nactive].docid_hi = docid_hi;
 			{
@@ -3939,6 +3970,13 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 
 	ncand = fts_search_wand(cursors, nactive, wantk, filterp, gatep, &cand);
 	bm25_tombstones_free(&tombs);
+	{
+		uint32		si;
+
+		for (si = 0; si < meta.nsegments; si++)
+			bm25_doclens_free(&seg_doclens[si]);
+		pfree(seg_doclens);
+	}
 	if (filter_docids)
 		pfree(filter_docids);
 	if (gatep != NULL)
@@ -4641,7 +4679,8 @@ fts_anomalous_docs(PG_FUNCTION_ARGS)
 
 					np = bm25_decode_term(index, de->firstposting,
 										  de->firstoffset, de->df,
-										  &post, NULL, false, NULL, true);
+										  &post, NULL, false, NULL, true,
+										  meta.segs[s].doclenstart == InvalidBlockNumber);
 					for (j = 0; j < np; j++)
 					{
 						uint64		docid = bm25_tid_to_docid(&post[j].tid);
