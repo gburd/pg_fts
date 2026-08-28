@@ -100,15 +100,20 @@ they are not rediscovered. Ordered roughly by value.
      the 1.0.x-1.2.x line (rare/mid are 1.9/1.7 ms).  An A/B of the over-fetch
      (k*4 -> k*2) and metapage caching moved nothing measurable; not shipped.
      See bench/PLAN_STORAGE_PERF_2026-08.md and bench/phases/.
-   - **P4 — impact-quantized postings + hard top-k WeakAND (format change).**
-     The only lever that makes common-term latency *flat* like VectorChord.
-     Distinct from the reverted impact-*directory* (`NOTE_IMPACT_ORDERING.md`,
-     which ordered docid blocks whose bounds clustered too tightly): quantize
-     *postings* into impact tiers stored highest-first, so a moving threshold
-     genuinely skips low-impact tiers. Sequence after P1.
+   - **P4 — impact-quantized postings (NOT PURSUED; premise resolved by P1).**
+     Was scoped as the lever to make common-term latency flat.  After the P1
+     doclen sidecar shipped (1.5.0), common-term ranked is 2.3 ms warm (was 28
+     ms) and touches 30x fewer index buffers -- at/below every competitor's own
+     common-term number.  The impact-*directory* variant was already proven not
+     to prune real text (`NOTE_IMPACT_ORDERING.md`), and P4's decode-cost win is
+     now largely captured by v4's ~56%-smaller blocks.  Deferred unless a field
+     report shows a common-term need v4 does not meet.  See
+     bench/PLAN_STORAGE_PERF_2026-08.md + bench/phases/.
 
-   Do P2/P3 first (cheap, whole-distribution win), then P1 (size + decode), then
-   P4 (flat common-term latency) if that is a must-win.
+   Storage/perf plan OUTCOME: P1 (doclen sidecar, 1.5.0) delivered BOTH the size
+   win (40% smaller) and the common-term latency win (7.7x warm) that P1+P4 were
+   scoped to achieve together.  P2/P3 were a measured no-op (already banked in
+   1.0.x-1.2.x).  Plan complete.
 
 5. **`WITH (positions=off)` — heap-side only.**
    An option to omit token positions from the heap `ftsdoc` for phrase-free
