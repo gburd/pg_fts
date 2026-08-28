@@ -2,6 +2,42 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.5.1
+
+Bug-fix release: three field-reported regressions in the 1.5.0 v3->v4 doclen
+sidecar upgrade (one caused a production search outage).  C-only, no SQL change,
+no REINDEX (`ALTER EXTENSION pg_fts UPDATE TO '1.5.1'`).  **A 1.5.0 index --
+whether an upgraded-in-place v3 or a native v4 -- is read correctly by 1.5.1
+with no REINDEX.**
+
+- **Fixed corrupt dual-read of a pre-existing v3 index (the outage).**  1.5.0
+  added `doclenstart` INSIDE `BM25SegMeta`, which grew that struct (48->56
+  bytes).  Because segment descriptors are stored inline in the metapage's
+  `segs[]` array, a v3 metapage laid them out at the old 48-byte stride; the
+  1.5.0 reader cast the page straight to the larger v4 struct and read every
+  `segs[1..]` field (and `generation`) from the wrong offset -> a garbage
+  `livedocslen` became `palloc(4294967295)` and a garbage `dictstart` became an
+  out-of-range block seek.  The metapage read is now VERSION-AWARE: a v3
+  metapage is deserialized at the v3 stride into the in-memory v4 struct
+  (`doclenstart` = Invalid, i.e. inline doclen), and a v3 metapage is upcast to
+  v4 in place on the first metapage mutation.  A compile-time assert now pins
+  the v3/v4 head-layout contract so a future field insertion cannot silently
+  reintroduce this.
+- **Fixed the v4 ranked-scan slowdown on many-segment indexes.**  The
+  per-segment doclen sidecar was BULK-LOADED (whole segment) at scan start, so a
+  ranked/@@@ scan was O(segment docs) per query regardless of matches -- on an
+  index with a long merge history (many segments) this read tens of thousands of
+  buffers for a small top-k.  Scoring now reads the sidecar through a FORWARD
+  CURSOR that touches only the pages covering the docids actually scored
+  (bounded by the WAND's ascending docid walk), matching the posting scan's own
+  block-skip.
+- **Note on high-df ranked latency.**  Block-max WAND does not early-terminate a
+  high-frequency term whose per-block score bounds cluster near the top-k
+  threshold; this is a pre-existing property of the docid-ordered index (present
+  in 1.4.x, not introduced by v4 -- measured v4 is faster than v3 on the same
+  high-df term).  It is unchanged here; a future impact-ordered format is the
+  only lever and is not in this release.
+
 ## 1.5.0
 
 Storage + performance release: per-document length moves out of the posting

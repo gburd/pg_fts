@@ -395,6 +395,8 @@ add_posting(BM25BuildState *bs, const char *term, int len,
 
 /* forward decls: segment writers are defined later; the build flush uses them */
 static void bm25_write_segment(Relation index, BM25BuildState *bs, BM25SegMeta *seg);
+static void bm25_meta_from_page(Page page, BM25MetaPageData *out);
+static void bm25_meta_upcast_page(Page page);
 static bool bm25_meta_add_segment(Relation index, const BM25SegMeta *seg);
 static void bm25_add_segment_with_room(Relation index, const BM25SegMeta *seg);
 static void bm25_free_page(Relation index, BlockNumber blk);
@@ -777,7 +779,7 @@ bm25_decode_term(Relation index, BlockNumber firstblk, uint32 firstoff,
 		Buffer		mb = ReadBuffer(index, BM25_METAPAGE_BLKNO);
 
 		LockBuffer(mb, BUFFER_LOCK_SHARE);
-		memcpy(&cmeta, BM25PageGetMeta(BufferGetPage(mb)), sizeof(cmeta));
+		bm25_meta_from_page(BufferGetPage(mb), &cmeta);
 		UnlockReleaseBuffer(mb);
 		for (s = 0; s < cmeta.nsegments && s < BM25_MAX_SEGMENTS; s++)
 			total += cmeta.segs[s].ndocs;	/* incl. tombstoned */
@@ -1240,6 +1242,133 @@ bm25_init_page(Page page, uint16 flags)
 	opaque->nextblk = InvalidBlockNumber;
 	/* start item area at the (MAXALIGN'd) contents offset used by readers */
 	((PageHeader) page)->pd_lower = (char *) PageGetContents(page) - (char *) page;
+}
+
+/*
+ * Version-aware metapage read (the 1.5.0 dual-read fix).
+ *
+ * 1.5.0 added BlockNumber doclenstart to BM25SegMeta, which GREW the struct
+ * (v3 48 bytes -> v4 56 bytes with padding).  BM25SegMeta is stored INLINE in
+ * the metapage's segs[] array, so a v3 metapage lays segs[] out at the 48-byte
+ * stride and places `generation` right after segs[128] at the v3 offset.  A v4
+ * build that cast the page straight to BM25MetaPageData read segs[1..] and
+ * generation from the wrong offsets -> garbage livedocslen (palloc(-1)) and
+ * garbage dictstart (wild block seek): the two upgrade regressions.
+ *
+ * This deserializes EITHER version into an in-memory v4 BM25MetaPageData.  For
+ * a v3 page it copies the fixed head, then expands each v3-stride segmeta into
+ * the v4 struct and sets doclenstart = InvalidBlockNumber (segment carries
+ * inline doclen), and reads `generation` from the v3 offset.  A v4 page is a
+ * straight copy.  ALL readers use this instead of casting the page directly.
+ */
+typedef struct BM25SegMetaV3
+{
+	BlockNumber dictstart;
+	BlockNumber trgmstart;
+	BlockNumber livedocs;
+	double		ndocs;
+	double		sumdoclen;
+	uint32		nterms;
+	uint32		ndeleted;
+	uint32		livedocslen;
+	BlockNumber dictindexstart;
+} BM25SegMetaV3;
+
+/* v3 metapage layout: same head as v4 up to segs[], then v3-stride segs[], then
+ * generation.  We only need the head fields + segs[] + generation. */
+typedef struct BM25MetaPageDataV3
+{
+	uint32		magic;
+	uint32		version;
+	double		ndocs;
+	double		sumdoclen;
+	uint32		nsegments;
+	BlockNumber pendinghead;
+	BlockNumber pendingtail;
+	uint32		npending;
+	BM25SegMetaV3 segs[BM25_MAX_SEGMENTS];
+	uint32		generation;
+} BM25MetaPageDataV3;
+
+static void
+bm25_meta_from_page(Page page, BM25MetaPageData *out)
+{
+	const BM25MetaPageData *raw = BM25PageGetMeta(page);
+
+	/*
+	 * Layout contract (the 1.5.0 dual-read fix): the v3 read-struct and the
+	 * live v4 struct MUST agree on every field up to and including segs[0], so a
+	 * v3 metapage's head + first segment are read at identical offsets; only the
+	 * segs[] STRIDE (48 vs 56 bytes) and the position of `generation` differ,
+	 * which bm25_meta_from_page handles explicitly.  These asserts fail the build
+	 * if a future field insertion silently breaks that contract again.
+	 */
+	StaticAssertStmt(offsetof(BM25MetaPageDataV3, segs) == offsetof(BM25MetaPageData, segs),
+					 "v3/v4 metapage head layout diverged");
+	StaticAssertStmt(offsetof(BM25SegMetaV3, dictindexstart) == offsetof(BM25SegMeta, dictindexstart),
+					 "v3/v4 segmeta head layout diverged");
+
+	if (raw->version >= BM25_VERSION_DOCLEN_SIDECAR)
+	{
+		memcpy(out, raw, sizeof(BM25MetaPageData));
+		return;
+	}
+
+	/* v3 page: expand v3-stride segs[] into the v4 in-memory struct */
+	{
+		const BM25MetaPageDataV3 *v3 = (const BM25MetaPageDataV3 *) raw;
+		uint32		s;
+
+		MemSet(out, 0, sizeof(BM25MetaPageData));
+		out->magic = v3->magic;
+		out->version = v3->version;
+		out->ndocs = v3->ndocs;
+		out->sumdoclen = v3->sumdoclen;
+		out->nsegments = v3->nsegments;
+		out->pendinghead = v3->pendinghead;
+		out->pendingtail = v3->pendingtail;
+		out->npending = v3->npending;
+		out->generation = v3->generation;
+		for (s = 0; s < v3->nsegments && s < BM25_MAX_SEGMENTS; s++)
+		{
+			out->segs[s].dictstart = v3->segs[s].dictstart;
+			out->segs[s].trgmstart = v3->segs[s].trgmstart;
+			out->segs[s].livedocs = v3->segs[s].livedocs;
+			out->segs[s].ndocs = v3->segs[s].ndocs;
+			out->segs[s].sumdoclen = v3->segs[s].sumdoclen;
+			out->segs[s].nterms = v3->segs[s].nterms;
+			out->segs[s].ndeleted = v3->segs[s].ndeleted;
+			out->segs[s].livedocslen = v3->segs[s].livedocslen;
+			out->segs[s].dictindexstart = v3->segs[s].dictindexstart;
+			out->segs[s].doclenstart = InvalidBlockNumber;	/* v3: inline doclen */
+		}
+	}
+}
+
+/*
+ * Upcast a v3 metapage to the v4 in-place layout under the caller's exclusive
+ * lock, via GenericXLog, so subsequent in-place struct writes are correct.
+ * Idempotent: a no-op if the page is already v4.  MUST be called (under the
+ * metapage's exclusive lock, before read-modify-writing it) by every path that
+ * mutates the metapage in place (add-segment, merge, bulkdelete livedocs swap).
+ * `page` is a GenericXLog-registered writable copy.
+ */
+static void
+bm25_meta_upcast_page(Page page)
+{
+	BM25MetaPageData tmp;
+	BM25MetaPageData *m;
+
+	if (BM25PageGetMeta(page)->version >= BM25_VERSION_DOCLEN_SIDECAR)
+		return;
+
+	bm25_meta_from_page(page, &tmp);	/* read v3 into a v4-shaped temp */
+	tmp.version = BM25_VERSION;
+	m = BM25PageGetMeta(page);
+	MemSet(m, 0, sizeof(BM25MetaPageData));
+	memcpy(m, &tmp, sizeof(BM25MetaPageData));
+	((PageHeader) page)->pd_lower =
+		((char *) m + sizeof(BM25MetaPageData)) - (char *) page;
 }
 
 static void
@@ -1889,6 +2018,151 @@ bm25_doclen_lookup(const BM25Doclens *d, uint64 docid)
 	return 0;
 }
 
+/* ---- cursored doclen sidecar lookup (scan path) ----------------------------
+ *
+ * The bulk bm25_doclens_load reads a WHOLE segment's sidecar up front -- fine
+ * for the merge (which reads every doc sequentially), but for a ranked/@@@ scan
+ * it is O(segment docs) PER QUERY regardless of how few docs are scored, and on
+ * a many-segment index (long merge history) that per-segment preload dominated
+ * the scan -- tens of thousands of buffers for a top-k of 200 (the 1.5.0
+ * ranked-scan slowdown report).
+ *
+ * A WAND scan visits a cursor's docids in monotonically non-decreasing order,
+ * and the sidecar blocks are docid-ascending, so a forward cursor reads only
+ * the sidecar pages covering the docids actually scored -- O(scored range),
+ * not O(segment).  It keeps ONE block resident (128 docids + bytes) and seeks
+ * forward on demand, skipping whole sidecar blocks whose docid range is below
+ * the target (the same block-skip the postings enjoy).
+ */
+typedef struct BM25DoclenCursor
+{
+	Relation	index;
+	BlockNumber start;			/* sidecar chain head; Invalid = v3 (inline) */
+	BlockNumber curblk;			/* page holding the resident block */
+	uint32		curoff;			/* byte offset of the resident block on curblk */
+	uint64		docids[BM25_BLOCK_SIZE];
+	uint8		bytes[BM25_BLOCK_SIZE];
+	int			n;				/* docs in the resident block */
+	uint64		blk_last;		/* highest docid in the resident block */
+	bool		exhausted;
+} BM25DoclenCursor;
+
+static void
+bm25_doclen_cursor_init(BM25DoclenCursor *c, Relation index, BlockNumber start)
+{
+	c->index = index;
+	c->start = start;
+	c->curblk = start;
+	c->curoff = MAXALIGN(SizeOfPageHeaderData);
+	c->n = 0;
+	c->blk_last = 0;
+	c->exhausted = (start == InvalidBlockNumber);
+}
+
+/* Load the sidecar block at (curblk,curoff) into the cursor's resident arrays;
+ * advance curblk/curoff to the NEXT block.  Returns false at end of chain or on
+ * a corrupt/short block (treated as end -- bounded, non-crashing, same contract
+ * as the other readers). */
+static bool
+bm25_doclen_cursor_next_block(BM25DoclenCursor *c)
+{
+	Buffer		buf;
+	Page		page;
+	char	   *end;
+	BM25DoclenBlockHdr *bh;
+	uint64		gaps[BM25_BLOCK_SIZE];
+	uint64		acc;
+	int			j;
+	char	   *blkend;
+	char	   *bptr;
+
+	while (c->curblk != InvalidBlockNumber)
+	{
+		CHECK_FOR_INTERRUPTS();
+		buf = ReadBuffer(c->index, c->curblk);
+		LockBuffer(buf, BUFFER_LOCK_SHARE);
+		page = BufferGetPage(buf);
+		end = (char *) page + ((PageHeader) page)->pd_lower;
+		bptr = (char *) page + c->curoff;
+
+		if (bptr + sizeof(BM25DoclenBlockHdr) > end)
+		{
+			/* past this page's blocks: go to the next page */
+			c->curblk = BM25PageGetOpaque(page)->nextblk;
+			c->curoff = MAXALIGN(SizeOfPageHeaderData);
+			UnlockReleaseBuffer(buf);
+			continue;
+		}
+		bh = (BM25DoclenBlockHdr *) bptr;
+		if (bh->count == 0 || bh->count > BM25_BLOCK_SIZE)
+		{
+			UnlockReleaseBuffer(buf);
+			c->exhausted = true;
+			return false;
+		}
+		blkend = (char *) (bh + 1) + bh->gapbytes + bh->count;
+		if (blkend > end)
+		{
+			UnlockReleaseBuffer(buf);
+			c->exhausted = true;
+			return false;
+		}
+		bm25_for_unpack((unsigned char *) (bh + 1), (int) bh->count, gaps);
+		acc = ((uint64) bh->first_docid_hi << 32) | bh->first_docid_lo;
+		for (j = 0; j < (int) bh->count; j++)
+		{
+			acc += gaps[j];		/* gaps[0] == 0 */
+			c->docids[j] = acc;
+			c->bytes[j] = ((uint8 *) ((char *) (bh + 1) + bh->gapbytes))[j];
+		}
+		c->n = (int) bh->count;
+		c->blk_last = c->docids[c->n - 1];
+		/* advance to the next block on this page (or fall to next page next call) */
+		c->curoff = (uint32) MAXALIGN((Size) (((char *) (bh + 1) + bh->gapbytes + bh->count) - (char *) page));
+		UnlockReleaseBuffer(buf);
+		return true;
+	}
+	c->exhausted = true;
+	return false;
+}
+
+/* Exact doclen for docid via the forward cursor.  docid MUST be >= the previous
+ * lookup's docid (WAND scans ascending).  Returns 0 if absent (v3 cursor, or a
+ * docid not in the sidecar -- caller falls back / treats as tombstoned). */
+static inline uint32
+bm25_doclen_cursor_lookup(BM25DoclenCursor *c, uint64 docid)
+{
+	if (c->start == InvalidBlockNumber)
+		return 0;				/* v3 segment: caller uses inline doclen */
+
+	/* advance blocks until the resident block can contain docid */
+	while (!c->exhausted && (c->n == 0 || docid > c->blk_last))
+	{
+		if (!bm25_doclen_cursor_next_block(c))
+			break;
+	}
+	if (c->n == 0 || docid > c->blk_last || docid < c->docids[0])
+		return 0;				/* not in the current block's range */
+	{
+		/* binary search within the resident block */
+		int			lo = 0,
+					hi = c->n - 1;
+
+		while (lo <= hi)
+		{
+			int			mid = (lo + hi) >> 1;
+
+			if (c->docids[mid] < docid)
+				lo = mid + 1;
+			else if (c->docids[mid] > docid)
+				hi = mid - 1;
+			else
+				return fts_byte_to_doclen(c->bytes[mid]);
+		}
+	}
+	return 0;
+}
+
 /*
  * Write the dictionary: sorted (term, df, firstposting) entries packed into a
  * chain of dictionary pages.  Returns the first dictionary block, and via
@@ -2228,6 +2502,7 @@ bm25_meta_add_segment(Relation index, const BM25SegMeta *seg)
 	LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
 	state = GenericXLogStart(index);
 	page = GenericXLogRegisterBuffer(state, buf, 0);
+	bm25_meta_upcast_page(page);	/* v3 -> v4 in-place before any struct write */
 	m = BM25PageGetMeta(page);
 	if (m->nsegments >= BM25_MAX_SEGMENTS)
 	{
@@ -3110,7 +3385,7 @@ bm25_merge_selected(Relation index, const uint32 *sel, uint32 nsel)
 		Buffer		mb = ReadBuffer(index, BM25_METAPAGE_BLKNO);
 
 		LockBuffer(mb, BUFFER_LOCK_SHARE);
-		memcpy(&meta, BM25PageGetMeta(BufferGetPage(mb)), sizeof(meta));
+		bm25_meta_from_page(BufferGetPage(mb), &meta);
 		UnlockReleaseBuffer(mb);
 	}
 	for (i = 0; i < nsel; i++)
@@ -3162,6 +3437,7 @@ bm25_merge_selected(Relation index, const uint32 *sel, uint32 nsel)
 		LockBuffer(mb, BUFFER_LOCK_EXCLUSIVE);
 		state = GenericXLogStart(index);
 		mp = GenericXLogRegisterBuffer(state, mb, 0);
+		bm25_meta_upcast_page(mp);	/* v3 -> v4 before struct write */
 		m = BM25PageGetMeta(mp);
 
 		/*
@@ -3351,7 +3627,7 @@ bm25_merge_all_parallel(Relation index, int request)
 		Buffer		mb = ReadBuffer(index, BM25_METAPAGE_BLKNO);
 
 		LockBuffer(mb, BUFFER_LOCK_SHARE);
-		memcpy(&meta, BM25PageGetMeta(BufferGetPage(mb)), sizeof(meta));
+		bm25_meta_from_page(BufferGetPage(mb), &meta);
 		UnlockReleaseBuffer(mb);
 	}
 	if (meta.nsegments <= 2)
@@ -3434,6 +3710,7 @@ bm25_merge_all_parallel(Relation index, int request)
 		LockBuffer(mb, BUFFER_LOCK_EXCLUSIVE);
 		state = GenericXLogStart(index);
 		mp = GenericXLogRegisterBuffer(state, mb, 0);
+		bm25_meta_upcast_page(mp);	/* v3 -> v4 before struct write */
 		m = BM25PageGetMeta(mp);
 
 		/* keep any segment that is NOT a consumed source of a merged group */
@@ -3527,7 +3804,7 @@ bm25_merge_all(Relation index, bool try_parallel)
 			Buffer		mb = ReadBuffer(index, BM25_METAPAGE_BLKNO);
 
 			LockBuffer(mb, BUFFER_LOCK_SHARE);
-			memcpy(&meta, BM25PageGetMeta(BufferGetPage(mb)), sizeof(meta));
+			bm25_meta_from_page(BufferGetPage(mb), &meta);
 			UnlockReleaseBuffer(mb);
 		}
 		if (meta.nsegments <= 1)
@@ -3633,7 +3910,7 @@ bm25_build_finalize(Relation index)
 		Buffer		mb = ReadBuffer(index, BM25_METAPAGE_BLKNO);
 
 		LockBuffer(mb, BUFFER_LOCK_SHARE);
-		memcpy(&meta, BM25PageGetMeta(BufferGetPage(mb)), sizeof(meta));
+		bm25_meta_from_page(BufferGetPage(mb), &meta);
 		UnlockReleaseBuffer(mb);
 	}
 	nseg = (int) meta.nsegments;
@@ -3695,7 +3972,7 @@ bm25_compact_to_one(Relation index, bool extend_only)
 			Buffer		mb = ReadBuffer(index, BM25_METAPAGE_BLKNO);
 
 			LockBuffer(mb, BUFFER_LOCK_SHARE);
-			memcpy(&meta, BM25PageGetMeta(BufferGetPage(mb)), sizeof(meta));
+			bm25_meta_from_page(BufferGetPage(mb), &meta);
 			UnlockReleaseBuffer(mb);
 			for (i = 0; i < meta.nsegments; i++)
 				if (meta.segs[i].dictstart != InvalidBlockNumber)
@@ -3716,7 +3993,7 @@ bm25_compact_to_one(Relation index, bool extend_only)
 			CHECK_FOR_INTERRUPTS();	/* between merges (no lock/window held) */
 			mb = ReadBuffer(index, BM25_METAPAGE_BLKNO);
 			LockBuffer(mb, BUFFER_LOCK_SHARE);
-			memcpy(&meta, BM25PageGetMeta(BufferGetPage(mb)), sizeof(meta));
+			bm25_meta_from_page(BufferGetPage(mb), &meta);
 			UnlockReleaseBuffer(mb);
 			if (meta.nsegments <= 1)
 				break;
@@ -3796,7 +4073,7 @@ bm25_index_is_compacted(Relation index)
 		uint32		i;
 
 		LockBuffer(mb, BUFFER_LOCK_SHARE);
-		memcpy(&meta, BM25PageGetMeta(BufferGetPage(mb)), sizeof(meta));
+		bm25_meta_from_page(BufferGetPage(mb), &meta);
 		UnlockReleaseBuffer(mb);
 		for (i = 0; i < meta.nsegments; i++)
 			if (meta.segs[i].dictstart != InvalidBlockNumber)
@@ -3999,7 +4276,7 @@ bm25_merge_segments(Relation index)
 			Buffer		mb = ReadBuffer(index, BM25_METAPAGE_BLKNO);
 
 			LockBuffer(mb, BUFFER_LOCK_SHARE);
-			memcpy(&meta, BM25PageGetMeta(BufferGetPage(mb)), sizeof(meta));
+			bm25_meta_from_page(BufferGetPage(mb), &meta);
 			UnlockReleaseBuffer(mb);
 		}
 		if (meta.nsegments <= 1)
@@ -4705,7 +4982,7 @@ bm25_flush_pending(Relation index)
 		Buffer		mb = ReadBuffer(index, BM25_METAPAGE_BLKNO);
 
 		LockBuffer(mb, BUFFER_LOCK_SHARE);
-		memcpy(&meta, BM25PageGetMeta(BufferGetPage(mb)), sizeof(meta));
+		bm25_meta_from_page(BufferGetPage(mb), &meta);
 		UnlockReleaseBuffer(mb);
 	}
 	if (meta.npending == 0)
@@ -4817,6 +5094,7 @@ bm25_flush_pending(Relation index)
 		LockBuffer(mb, BUFFER_LOCK_EXCLUSIVE);
 		state = GenericXLogStart(index);
 		mp = GenericXLogRegisterBuffer(state, mb, 0);
+		bm25_meta_upcast_page(mp);	/* v3 -> v4 before struct write */
 		m = BM25PageGetMeta(mp);
 		m->ndocs -= seg.ndocs;
 		m->sumdoclen -= seg.sumdoclen;
@@ -4957,7 +5235,7 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 
 		LockBuffer(mb, BUFFER_LOCK_SHARE);
 		bm25_check_meta(BufferGetPage(mb), index);
-		memcpy(&meta, BM25PageGetMeta(BufferGetPage(mb)), sizeof(meta));
+		bm25_meta_from_page(BufferGetPage(mb), &meta);
 		UnlockReleaseBuffer(mb);
 	}
 
@@ -5086,6 +5364,7 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 				LockBuffer(mb, BUFFER_LOCK_EXCLUSIVE);
 				st = GenericXLogStart(index);
 				mp = GenericXLogRegisterBuffer(st, mb, 0);
+				bm25_meta_upcast_page(mp);	/* v3 -> v4 before struct write */
 				m = BM25PageGetMeta(mp);
 				if (s < m->nsegments)
 				{
@@ -5117,6 +5396,7 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 		LockBuffer(mb, BUFFER_LOCK_EXCLUSIVE);
 		st = GenericXLogStart(index);
 		mp = GenericXLogRegisterBuffer(st, mb, 0);
+		bm25_meta_upcast_page(mp);	/* v3 -> v4 before reading segs[] and writing */
 		m = BM25PageGetMeta(mp);
 		for (i = 0; i < m->nsegments; i++)
 			nd += m->segs[i].ndocs - m->segs[i].ndeleted;
