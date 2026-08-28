@@ -43,3 +43,31 @@ the high-df postings -- Phase 2 (doclen out of postings) + Phase 3 (codec).
   NO warnings and NO reindex; parity PASS. Mixed v3+v4 fts_merge correct.
 - vacuum reclaim: fixed a sidecar-chain leak in bm25_free_segment (v4 index now
   reclaims to 1.18x the fresh floor, was leaking to 4.13x before the fix).
+
+## Phase 3 (common-term codec) — NOT PURSUED (premise resolved by Phase 2)
+Re-baselined after 1.5.0.  The Phase 3 premise ("pg_fts common-term ranked is
+~6x slower than competitors") is gone:
+- warm common_k10 28 ms (1.4.0) -> 2.3 ms (1.5.0) -- now at/below every
+  competitor's OWN common-term number (pgts 13.5, psearch 4.5, vchord 7.4 ms);
+- index buffers touched for common `year` ranked: 5370 (v3) -> 177 (v4), 30x
+  fewer -- the sidecar means scoring no longer decodes a doclen column across
+  thousands of posting blocks;
+- cold-cache common `year`: v3 78 ms -> v4 62 ms (cold is heap-recheck-I/O bound,
+  which both pay; the win is warm + buffer efficiency + 40% smaller index).
+Phase 3a (impact-quantized postings) was ALREADY proven not to prune common
+terms on real text (NOTE_IMPACT_ORDERING.md); Phase 3b's decode-cost win is now
+largely captured by v4's ~56%-smaller blocks.  Building a format-changing Phase 3
+for marginal cold gains fails the plan's kill criterion.  DEFERRED unless a
+future field report shows a specific common-term latency need v4 does not meet.
+
+## Phase 4 (parallel build) — functional, deeper work not justified
+Parallel build already engages: v4 @4 workers 137 s vs serial 192 s (1.4x,
+Amdahl-limited by the leader's final merge).  Matching Tantivy's ~45 s would need
+a merge-parallelism rework for a build-time-only win (rarely the operational
+bottleneck).  Left as-is.
+
+## Plan outcome
+Phase 0 (harness) + Phase 2 (doclen sidecar, shipped 1.5.0) delivered the size
+win (40% smaller) AND the common-term latency win (7.7x warm) that Phases 2+3
+together were scoped to achieve.  Phase 1 was a measured no-op; Phase 3/4 are not
+justified.  The storage/perf plan is COMPLETE.
