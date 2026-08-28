@@ -19,3 +19,15 @@ common_k10     17.341 17.708 17.861 200
 common_k100    18.333 19.045 19.166 200
 and_count      1.962 2.074 2.116 200
 count_common   3.745 3.834 3.884 200
+
+## Phase 1 (P2/P3 execution-path) — NO-OP on current code, not shipped
+A/B on the fixed rig (pg_fts 1.4.1):
+- over-fetch wantk k*4 -> k*2: rare 2.34->2.34, mid 1.76->1.71, common 17.3->17.3ms
+  (within noise; reverted -- k*4 is cheap defensive headroom for churned tables).
+- Metapage reads are cached-buffer hits (~100ns); 2-3 per WAND batch is
+  unmeasurable against a 2.3ms rare query.
+Finding: rare/mid are ALREADY 2.3/1.7ms -- the P2/P3 fixed-overhead gains
+(ROADMAP target "15.8->4-6ms") were realized in the 1.0.x-1.2.x line. There is
+no measurable execution-path win left on correctness-clean current code, so no
+1.4.2 is shipped. The remaining common-term gap (17.3ms) is scoring/decode of
+the high-df postings -- Phase 2 (doclen out of postings) + Phase 3 (codec).

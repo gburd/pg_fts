@@ -144,6 +144,41 @@ prop_bitwidth(hegel_test_case *tc, void *ctx)
 	assert_true(v >= ((uint64) 1 << (w - 1)));
 }
 
+/*
+ * ---- Property: doclen quantization (fts_doclen_to_byte / fts_byte_to_doclen).
+ * The v4 sidecar codec.  Three properties over the realistic length domain
+ * [0, 16M tokens]:
+ *  (a) MONOTONIC: len1 <= len2  =>  enc(len1) <= enc(len2).  BM25 length-norm
+ *      must not invert two documents' relative lengths.
+ *  (b) IDEMPOTENT: enc(dec(enc(len))) == enc(len).  A re-encode after decode
+ *      (what a merge/vacuum rewrite does) does not drift the byte.
+ *  (c) EXACT for small lengths 0..7 (no quantization loss where it matters most
+ *      for short-doc IDF weighting).
+ */
+static void
+prop_doclen_quant(hegel_test_case *tc, void *ctx)
+{
+	uint32		len = (uint32) hegel_draw_int(tc, hegel_integers(0, 16777216));
+	uint32		len2 = (uint32) hegel_draw_int(tc, hegel_integers(0, 16777216));
+	uint8		b = fts_doclen_to_byte(len);
+	uint8		b2 = fts_doclen_to_byte(len2);
+
+	(void) ctx;
+	/* (a) monotonic */
+	if (len <= len2)
+		assert_true(b <= b2);
+	else
+		assert_true(b >= b2);
+	/* (b) idempotent under decode->encode */
+	assert_int_equal(fts_doclen_to_byte(fts_byte_to_doclen(b)), b);
+	/* (c) exact for 0..7 */
+	if (len <= 7)
+	{
+		assert_int_equal((uint32) b, len);
+		assert_int_equal(fts_byte_to_doclen(b), len);
+	}
+}
+
 /* ---- cmocka wrappers ---- */
 #define RUN(prop) do { \
 	hegel_session *s = (hegel_session *) *state; \
@@ -159,6 +194,7 @@ static void test_roundtrip(void **state) { RUN(prop_roundtrip); }
 static void test_random_access(void **state) { RUN(prop_random_access); }
 static void test_bytelen(void **state) { RUN(prop_bytelen); }
 static void test_bitwidth(void **state) { RUN(prop_bitwidth); }
+static void test_doclen_quant(void **state) { RUN(prop_doclen_quant); }
 
 static int
 setup(void **state)
@@ -183,6 +219,7 @@ main(void)
 		cmocka_unit_test(test_random_access),
 		cmocka_unit_test(test_bytelen),
 		cmocka_unit_test(test_bitwidth),
+		cmocka_unit_test(test_doclen_quant),
 	};
 
 	return cmocka_run_group_tests(tests, setup, teardown);
