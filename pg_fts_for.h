@@ -34,6 +34,7 @@
 #ifndef UINT64CONST
 typedef uint64_t uint64;
 typedef uint32_t uint32;
+typedef uint8_t uint8;
 #define UINT64CONST(x) ((uint64) x##ULL)
 #endif
 

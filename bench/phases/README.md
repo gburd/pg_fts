@@ -31,3 +31,15 @@ Finding: rare/mid are ALREADY 2.3/1.7ms -- the P2/P3 fixed-overhead gains
 no measurable execution-path win left on correctness-clean current code, so no
 1.4.2 is shipped. The remaining common-term gap (17.3ms) is scoring/decode of
 the high-df postings -- Phase 2 (doclen out of postings) + Phase 3 (codec).
+
+## Phase 2 FINAL qualification (clean 2M, v4)
+- index 568 MB (clean rebuild) vs 954 MB v3 = 40% smaller.
+- parity PASS (1% quantization tol; exact-mode ties match 1.4.1 behavior).
+- latency: rare 1.94, mid 1.72, common_k10 2.30, common_k100 3.25, AND 1.99 ms.
+- count(*): v4 == v3 (both dict-df fast path ~0.4ms when heap all-visible; both
+  ~20ms when the corpus was DELETE-churned and VM not all-visible -- NOT a v4
+  regression, verified by swapping the 1.4.1 .so on the identical corpus).
+- dual-read: a v3 index built by 1.4.1 reads correctly under the v4 build with
+  NO warnings and NO reindex; parity PASS. Mixed v3+v4 fts_merge correct.
+- vacuum reclaim: fixed a sidecar-chain leak in bm25_free_segment (v4 index now
+  reclaims to 1.18x the fresh floor, was leaking to 4.13x before the fix).

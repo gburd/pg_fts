@@ -87,17 +87,19 @@ they are not rediscovered. Ordered roughly by value.
      visibility-map count it performs, so the planner chooses it at scale
      (FIXED, commit in the 1.0 prep series).
 
-   - **P1 — doclen sidecar (highest-leverage, format change).** `doclen` is a
-     per-document value but is stored once per posting (once per doc×term pair),
-     ~38–45% of the index (`pg_fts_am.c:243,344,909,921`). Move it to a
-     per-segment array indexed by docid: ~40% smaller index **and** ~40% less
-     common-term decode. Needs `BM25_VERSION` bump + dual-read.
-   - **P2/P3 — execution-path fixes (cheap, no format change).** The ranked scan
-     reads the metapage 3× and does 3× dict lookups per term, and creates+drops
-     a `TupleTableSlot` per candidate while over-fetching `max(k*4,64)`
-     (`pg_fts_am_scan.c`). Cache the metapage + dict entry once per scan, reuse
-     one slot, and right-size the over-fetch. This is most of the rare/mid-term
-     gap (target 15.8 → ~4–6 ms) and helps common terms too.
+   - **P1 — doclen sidecar (DONE, shipped in 1.5.0, format v3->v4).** `doclen`
+     was stored once per posting (once per doc x term); moved to a per-segment
+     sidecar of one quantized byte per doc (Lucene/Tantivy fieldnorm).  Measured
+     at 2M: index 40% smaller, common-term ranked top-10 7.7x faster (17.5->2.3
+     ms), top-100 5.6x faster.  Dual-reads v3 (inline) + v4 (sidecar); no REINDEX;
+     segments migrate on merge/vacuum.  `avgdl` stays exact; ordering changes at
+     most ~0.2% at tie boundaries.  (Also delivered most of the P4 common-term
+     latency win early -- the block is ~56% smaller and scoring is a byte lookup.)
+   - **P2/P3 — execution-path fixes (evaluated, NO-OP on current code).** The
+     rare/mid gap the ROADMAP targeted (15.8 -> 4-6 ms) was already realized in
+     the 1.0.x-1.2.x line (rare/mid are 1.9/1.7 ms).  An A/B of the over-fetch
+     (k*4 -> k*2) and metapage caching moved nothing measurable; not shipped.
+     See bench/PLAN_STORAGE_PERF_2026-08.md and bench/phases/.
    - **P4 — impact-quantized postings + hard top-k WeakAND (format change).**
      The only lever that makes common-term latency *flat* like VectorChord.
      Distinct from the reverted impact-*directory* (`NOTE_IMPACT_ORDERING.md`,

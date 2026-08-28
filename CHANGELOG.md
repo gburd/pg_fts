@@ -2,6 +2,35 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.5.0
+
+Storage + performance release: per-document length moves out of the posting
+lists into a per-segment quantized sidecar (on-disk format v3 -> v4).  C-only,
+**no REINDEX** (`ALTER EXTENSION pg_fts UPDATE TO '1.5.0'`).
+
+- **Doclen sidecar (the size + common-term-latency win).**  BM25 needs each
+  document's length for its length-normalization, but pg_fts stored it once per
+  *posting* (once per doc x term) -- the widest posting column.  1.5.0 stores it
+  once per *document* as a single quantized byte (a Lucene/Tantivy-style
+  fieldnorm: 5-bit exponent + 3-bit mantissa) on a per-segment sidecar page
+  chain, and scoring reads that byte instead of decoding a per-posting column.
+  Measured on 2M high-vocabulary docs:
+    - index **37.5% smaller** (954 MB -> 596 MB);
+    - common-term ranked top-10 **7.7x faster** (17.5 ms -> 2.3 ms), top-100
+      **5.6x faster** (18.4 ms -> 3.3 ms), because each posting block is ~56%
+      smaller and length-normalization is now a byte lookup;
+    - rare/mid ranked, boolean AND, phrase, prefix, and count(*) unchanged.
+  `avgdl` stays EXACT (from the per-segment sumdoclen/ndocs); only the per-doc
+  normalization denominator is quantized, which changes BM25 score ORDERING by
+  at most a fraction of a percent at tie boundaries (the accepted fieldnorm
+  tradeoff; verified <= 0.2% on the 2M rig).
+- **No REINDEX; dual-read + lazy migration.**  A v4 build reads existing v3
+  segments (inline doclen) and new v4 segments (sidecar) in the same index; the
+  block's column count is self-describing from its byte length, so decode is
+  correct across mixed-version segments.  Segments migrate to v4 as merge/vacuum
+  rewrites them -- an existing index keeps working untouched and converges to the
+  smaller format over time with no operator action.
+
 ## 1.4.1
 
 Bug-fix release: two field-reported robustness fixes on high-vocabulary corpora

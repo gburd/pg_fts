@@ -21,7 +21,11 @@
 #include "storage/itemptr.h"
 
 #define BM25_MAGIC			0x42324635	/* "B2F5" */
-#define BM25_VERSION		3		/* v3: segmented layout + optional token positions */
+#define BM25_VERSION		4		/* v4: per-segment doclen sidecar (1 quantized
+										 * byte/doc) replacing the per-posting doclen FOR
+										 * column; v3 (inline doclen) still read.  v3:
+										 * segmented layout + optional token positions. */
+#define BM25_VERSION_DOCLEN_INLINE 3	/* oldest format we dual-read */
 #define BM25_METAPAGE_BLKNO	0
 
 /* page opaque flags */
@@ -33,6 +37,13 @@
 #define BM25_TRGM_DATA		(1 << 5)	/* trigram sparsemap blob page */
 #define BM25_LIVEDOCS		(1 << 6)	/* per-segment tombstone bitmap page */
 #define BM25_DICTINDEX		(1 << 7)	/* sparse block index over dict pages */
+#define BM25_DOCLEN			(1 << 9)	/* per-segment doclen sidecar page (v4):
+										 * a chain of 128-doc blocks, each a
+										 * FOR-packed docid-gap column + one quantized
+										 * length byte per doc, ordered by segment-local
+										 * ascending docid.  Replaces the per-posting
+										 * doclen column; scoring reads the byte and a
+										 * precomputed 256-entry length-norm table. */
 #define BM25_FREED			(1 << 8)	/* page freed & pending recycle: nextblk
 										 * holds the free-time TransactionId (see
 										 * bm25_free_page / the recycle gate in
@@ -76,6 +87,9 @@ typedef struct BM25SegMeta
 	uint32		ndeleted;		/* tombstoned docs (for merge accounting) */
 	uint32		livedocslen;	/* serialized size of the livedocs tombstone blob */
 	BlockNumber dictindexstart; /* sparse block index over dict pages (Invalid = none) */
+	BlockNumber doclenstart;	/* first doclen-sidecar page (v4), or Invalid for a
+								 * v3 segment whose postings still carry inline
+								 * doclen.  Dual-read keys off this per segment. */
 } BM25SegMeta;
 
 #define BM25_MAX_SEGMENTS 128	/* fits the metapage (~6KB of ~8KB); the size-

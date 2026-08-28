@@ -1,0 +1,8 @@
+# Phase 2 v4 sidecar latency (2M high-vocab, prewarmed, NSAMP=200)
+band           median   p95     p99     n
+rare_k10       1.952 2.089 2.110 200
+mid_k10        1.695 1.799 1.826 200
+common_k10     2.279 2.415 2.452 200
+common_k100    3.255 3.393 3.458 200
+and_count      1.993 2.111 2.198 200
+count_common   3.748 3.875 3.926 200

@@ -726,7 +726,8 @@ bm25_docid_to_tid(uint64 docid, ItemPointer tid)
 static int
 bm25_decode_term(Relation index, BlockNumber firstblk, uint32 firstoff,
 				 uint32 df, BM25Posting **out, uint32 **blockmax,
-				 bool want_positions, uint32 **posarena, bool docids_only)
+				 bool want_positions, uint32 **posarena, bool docids_only,
+				 bool has_doclen_col)
 {
 	BM25Posting *posts;
 	uint32	   *bmax = NULL;
@@ -870,7 +871,18 @@ bm25_decode_term(Relation index, BlockNumber firstblk, uint32 firstoff,
 				int			gl = bm25_for_bytelen(stream, cnt);
 				int			tl = (gl <= (int) bh->bytelen)
 					? bm25_for_bytelen(stream + gl, cnt) : 0;
-				int			dl = (gl + tl <= (int) bh->bytelen)
+				int			dl;
+
+				/*
+				 * Column count is SELF-DESCRIBING from bytelen: a v3 block packs
+				 * three FOR columns (docid|tf|doclen) so bytes remain after gl+tl;
+				 * a v4 block packs two (docid|tf, doclen is in the segment sidecar)
+				 * so gl+tl == bytelen exactly.  Detecting it here -- rather than
+				 * trusting the caller's has_doclen_col -- is robust across every
+				 * decode path (build/merge/scan/count) and mixed v3+v4 segments.
+				 */
+				has_doclen_col = (gl + tl < (int) bh->bytelen);
+				dl = (has_doclen_col && gl + tl <= (int) bh->bytelen)
 					? bm25_for_bytelen(stream + gl + tl, cnt) : 0;
 
 				if ((Size) gl + tl + dl > (Size) bh->bytelen)
@@ -896,7 +908,10 @@ bm25_decode_term(Relation index, BlockNumber firstblk, uint32 firstoff,
 				 * tf/dl bytes undecoded is safe.  posts[].tf/.doclen stay 0.
 				 */
 				pos += bm25_for_unpack(stream + pos, cnt, tfs);
-				pos += bm25_for_unpack(stream + pos, cnt, dls);
+				if (has_doclen_col)
+					pos += bm25_for_unpack(stream + pos, cnt, dls);	/* v3: inline doclen */
+				else
+					memset(dls, 0, sizeof(uint64) * cnt);	/* v4: caller fills from sidecar */
 			}
 
 			if (want_positions && bh->posbytelen > 0)
@@ -1279,12 +1294,12 @@ bm25_check_meta(Page page, Relation index)
 				 errdetail("Metapage magic 0x%08X does not match the expected 0x%08X.",
 						   meta->magic, BM25_MAGIC)));
 
-	if (meta->version != BM25_VERSION)
+	if (meta->version < BM25_VERSION_DOCLEN_INLINE || meta->version > BM25_VERSION)
 		ereport(ERROR,
 				(errcode(ERRCODE_INDEX_CORRUPTED),
-				 errmsg("index \"%s\" has pg_fts on-disk format version %u, but this build expects version %u",
+				 errmsg("index \"%s\" has pg_fts on-disk format version %u, but this build supports versions %u..%u",
 						RelationGetRelationName(index),
-						meta->version, BM25_VERSION),
+						meta->version, BM25_VERSION_DOCLEN_INLINE, BM25_VERSION),
 				 errhint("REINDEX the index to rebuild it in the current format.")));
 }
 
@@ -1318,6 +1333,85 @@ cmp_posting_docid(const void *a, const void *b)
 	return 0;
 }
 
+/* ---- doclen sidecar (format v4) --------------------------------------------
+ *
+ * One quantized length byte per document, on a BM25_DOCLEN page chain ordered
+ * by ascending segment-local docid, in 128-doc blocks: a FOR-packed docid-gap
+ * column then `count` raw length bytes.  Replaces the per-posting doclen FOR
+ * column (once per doc x term) with one byte per doc.  A reader binary-locates
+ * the block by first_docid then indexes the byte.
+ *
+ * The collector is a docid->byte hash so the map is built in O(ndocs) memory
+ * regardless of Sum(df) (the P1 build-OOM was a flat Sum(df) array).  Callers
+ * feed (docid, doclen) as they already iterate postings; duplicates (a doc seen
+ * once per term) collapse in the hash.
+ */
+typedef struct DoclenEntry
+{
+	uint64		docid;			/* hash key */
+	uint8		byte;			/* quantized doclen */
+} DoclenEntry;
+
+typedef struct DoclenCollector
+{
+	HTAB	   *ht;				/* docid -> DoclenEntry */
+	MemoryContext ctx;
+} DoclenCollector;
+
+/* One doclen-sidecar block header: count docs, first docid for binary locate,
+ * and the FOR-packed gap column length. The `count` length bytes follow the
+ * gap column. */
+typedef struct BM25DoclenBlockHdr
+{
+	uint32		count;			/* docs in this block (<= BM25_BLOCK_SIZE) */
+	uint32		first_docid_hi;
+	uint32		first_docid_lo;
+	uint32		gapbytes;		/* FOR-packed docid-gap column length */
+} BM25DoclenBlockHdr;
+
+static void
+doclen_collector_init(DoclenCollector *c, MemoryContext ctx, long nhint)
+{
+	HASHCTL		ctl;
+
+	MemSet(&ctl, 0, sizeof(ctl));
+	ctl.keysize = sizeof(uint64);
+	ctl.entrysize = sizeof(DoclenEntry);
+	ctl.hcxt = ctx;
+	c->ctx = ctx;
+	c->ht = hash_create("pg_fts doclen sidecar", Max(nhint, 1024), &ctl,
+						HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+}
+
+/* Record one doc's length (idempotent per docid: the byte is a function of the
+ * length, identical across a doc's term postings). */
+static inline void
+doclen_collector_add(DoclenCollector *c, uint64 docid, uint32 doclen)
+{
+	bool		found;
+	DoclenEntry *e = (DoclenEntry *) hash_search(c->ht, &docid, HASH_ENTER, &found);
+
+	if (!found)
+		e->byte = fts_doclen_to_byte(doclen);
+}
+
+static int
+cmp_doclen_entry(const void *a, const void *b)
+{
+	uint64		da = ((const DoclenEntry *) a)->docid;
+	uint64		db = ((const DoclenEntry *) b)->docid;
+
+	return (da < db) ? -1 : (da > db) ? 1 : 0;
+}
+
+/*
+ * Write the collected docid->byte map to a BM25_DOCLEN page chain and return
+ * the first page (Invalid if empty).  Defined after the posting-page writer
+ * (BM25PostWriter) it reuses; forward-declared here.
+ */
+static BlockNumber bm25_write_doclen_sidecar(Relation index, DoclenCollector *c);
+
+
 /*
  * Shared posting-page writer.  All terms in a segment append their blocks into
  * ONE chain of posting pages, so a rare term (a handful of postings) costs a
@@ -1332,6 +1426,10 @@ typedef struct BM25PostWriter
 	Buffer		buffer;
 	GenericXLogState *state;
 	Page		page;
+	bool		no_doclen_col;	/* v4: omit the per-posting doclen FOR column
+									 * (it lives in the segment doclen sidecar); the
+									 * block header still carries min_doclen for the
+									 * block-max WAND bound. */
 } BM25PostWriter;
 
 static void
@@ -1341,6 +1439,7 @@ pw_begin(BM25PostWriter *pw, Relation index)
 	pw->buffer = InvalidBuffer;
 	pw->state = NULL;
 	pw->page = NULL;
+	pw->no_doclen_col = false;
 }
 
 static void
@@ -1429,7 +1528,8 @@ bm25_write_postings(BM25PostWriter *pw, BuildTerm *bt,
 
 		sclen += bm25_for_pack(gaps, bcount, scratch + sclen);
 		sclen += bm25_for_pack(tfs, bcount, scratch + sclen);
-		sclen += bm25_for_pack(dls, bcount, scratch + sclen);
+		if (!pw->no_doclen_col)
+			sclen += bm25_for_pack(dls, bcount, scratch + sclen);	/* v3: inline doclen */
 
 		/*
 		 * Build the positions blob for this block (WITH positions=on).  It packs
@@ -1563,6 +1663,230 @@ bm25_write_postings(BM25PostWriter *pw, BuildTerm *bt,
 
 	pfree(sorted);
 	bt->max_tf = term_max_tf;	/* dictionary reads this; no tfs[] rescan */
+}
+
+/*
+ * Write the collected docid->byte map to a BM25_DOCLEN page chain and return
+ * the first page (Invalid if empty).  Reuses BM25PostWriter and the same
+ * page-fit idiom as bm25_write_postings.
+ */
+static BlockNumber
+bm25_write_doclen_sidecar(Relation index, DoclenCollector *c)
+{
+	HASH_SEQ_STATUS seq;
+	DoclenEntry *e;
+	DoclenEntry *arr;
+	long		n = hash_get_num_entries(c->ht);
+	long		idx = 0;
+	long		i;
+	BM25PostWriter pw;
+	BlockNumber first = InvalidBlockNumber;
+	bool		start_recorded = false;
+
+	if (n == 0)
+		return InvalidBlockNumber;
+
+	arr = (DoclenEntry *) FTS_ALLOC_MAYBE_HUGE((Size) n * sizeof(DoclenEntry));	/* alloc-ok: n = ndocs (per-doc), not Sum(df) */
+	hash_seq_init(&seq, c->ht);
+	while ((e = (DoclenEntry *) hash_seq_search(&seq)) != NULL)
+		arr[idx++] = *e;
+	qsort(arr, n, sizeof(DoclenEntry), cmp_doclen_entry);
+
+	pw_begin(&pw, index);
+	i = 0;
+	while (i < n)
+	{
+		uint64		gaps[BM25_BLOCK_SIZE];
+		uint8		bytes[BM25_BLOCK_SIZE];
+		unsigned char gapscratch[1 + (BM25_BLOCK_SIZE * 64 + 7) / 8];
+		uint64		first_docid = arr[i].docid;
+		uint64		prev = arr[i].docid;
+		int			bcount = 0;
+		int			gapbytes;
+		Size		need;
+		char	   *pageend;
+		char	   *dst;
+		BM25DoclenBlockHdr *bh;
+
+		while (i < n && bcount < BM25_BLOCK_SIZE)
+		{
+			gaps[bcount] = arr[i].docid - prev;	/* first gap 0 */
+			bytes[bcount] = arr[i].byte;
+			prev = arr[i].docid;
+			bcount++;
+			i++;
+		}
+		gapbytes = bm25_for_pack(gaps, bcount, gapscratch);
+		need = MAXALIGN(sizeof(BM25DoclenBlockHdr) + gapbytes + bcount);
+
+		if (pw.buffer != InvalidBuffer)
+		{
+			pageend = (char *) pw.page + BLCKSZ - MAXALIGN(sizeof(BM25PageOpaqueData));
+			if ((char *) pw.page + ((PageHeader) pw.page)->pd_lower + need > pageend)
+			{
+				Buffer		next = bm25_new_buffer(index);
+				BlockNumber nextblk = BufferGetBlockNumber(next);
+
+				BM25PageGetOpaque(pw.page)->nextblk = nextblk;
+				GenericXLogFinish(pw.state);
+				UnlockReleaseBuffer(pw.buffer);
+				pw.buffer = next;
+				pw.state = GenericXLogStart(index);
+				pw.page = GenericXLogRegisterBuffer(pw.state, pw.buffer, GENERIC_XLOG_FULL_IMAGE);
+				bm25_init_page(pw.page, BM25_DOCLEN);
+			}
+		}
+		if (pw.buffer == InvalidBuffer)
+		{
+			pw.buffer = bm25_new_buffer(index);
+			pw.state = GenericXLogStart(index);
+			pw.page = GenericXLogRegisterBuffer(pw.state, pw.buffer, GENERIC_XLOG_FULL_IMAGE);
+			bm25_init_page(pw.page, BM25_DOCLEN);
+		}
+		if (!start_recorded)
+		{
+			first = BufferGetBlockNumber(pw.buffer);
+			start_recorded = true;
+		}
+		dst = (char *) pw.page + ((PageHeader) pw.page)->pd_lower;
+		bh = (BM25DoclenBlockHdr *) dst;
+		bh->count = (uint32) bcount;
+		bh->first_docid_hi = (uint32) (first_docid >> 32);
+		bh->first_docid_lo = (uint32) (first_docid & 0xFFFFFFFF);
+		bh->gapbytes = (uint32) gapbytes;
+		memcpy((char *) (bh + 1), gapscratch, gapbytes);
+		memcpy((char *) (bh + 1) + gapbytes, bytes, bcount);
+		((PageHeader) pw.page)->pd_lower += need;
+	}
+	pw_finish(&pw);
+	pfree(arr);
+	return first;
+}
+
+/* ---- doclen sidecar reader (format v4) -------------------------------------
+ *
+ * A resident, decoded copy of one segment's sidecar: ascending docids and their
+ * quantized length bytes.  Loaded ONCE per (segment, scan) -- like tombstones
+ * -- then binary-searched per scored posting.  Callers that need a doc's exact
+ * length (scoring, merge) use bm25_doclen_lookup.
+ */
+typedef struct BM25Doclens
+{
+	uint64	   *docids;		/* ascending; NULL if the segment is v3 (inline) */
+	uint8	   *bytes;			/* parallel to docids */
+	int			n;
+} BM25Doclens;
+
+/* Load a segment's BM25_DOCLEN chain into a resident array.  doclenstart ==
+ * Invalid (a v3 segment) yields an empty map (n=0, docids=NULL) -- the caller
+ * then falls back to the inline posting doclen. */
+static void
+bm25_doclens_load(Relation index, BlockNumber doclenstart, BM25Doclens *d)
+{
+	BlockNumber blk = doclenstart;
+	int			cap = 0;
+
+	d->docids = NULL;
+	d->bytes = NULL;
+	d->n = 0;
+	if (doclenstart == InvalidBlockNumber)
+		return;
+
+	while (blk != InvalidBlockNumber)
+	{
+		Buffer		buf;
+		Page		page;
+		char	   *ptr,
+				   *end;
+		BlockNumber next;
+
+		CHECK_FOR_INTERRUPTS();
+		buf = ReadBuffer(index, blk);
+		LockBuffer(buf, BUFFER_LOCK_SHARE);
+		page = BufferGetPage(buf);
+		ptr = (char *) page + MAXALIGN(SizeOfPageHeaderData);
+		end = (char *) page + ((PageHeader) page)->pd_lower;
+		next = BM25PageGetOpaque(page)->nextblk;
+
+		while (ptr + sizeof(BM25DoclenBlockHdr) <= end)
+		{
+			BM25DoclenBlockHdr *bh = (BM25DoclenBlockHdr *) ptr;
+			uint64		first_docid;
+			uint64		gaps[BM25_BLOCK_SIZE];
+			uint8	   *bytes;
+			uint64		acc;
+			int			j;
+			char	   *blkend;
+
+			/* bounds-guard a possibly-recycled/corrupt page (same contract as the
+			 * dict/posting readers): a bad count/gapbytes must not run past end. */
+			if (bh->count == 0 || bh->count > BM25_BLOCK_SIZE)
+				break;
+			blkend = (char *) (bh + 1) + bh->gapbytes + bh->count;
+			if (blkend > end)
+				break;
+			first_docid = ((uint64) bh->first_docid_hi << 32) | bh->first_docid_lo;
+			bm25_for_unpack((unsigned char *) (bh + 1), (int) bh->count, gaps);
+			bytes = (uint8 *) ((char *) (bh + 1) + bh->gapbytes);
+
+			if (d->n + (int) bh->count > cap)
+			{
+				cap = Max(cap * 2, d->n + (int) bh->count + 128);
+				d->docids = d->docids
+					? (uint64 *) repalloc(d->docids, (Size) cap * sizeof(uint64))
+					: (uint64 *) palloc((Size) cap * sizeof(uint64));
+				d->bytes = d->bytes
+					? (uint8 *) repalloc(d->bytes, (Size) cap * sizeof(uint8))
+					: (uint8 *) palloc((Size) cap * sizeof(uint8));
+			}
+			acc = first_docid;
+			for (j = 0; j < (int) bh->count; j++)
+			{
+				acc += gaps[j];		/* gaps[0] == 0 */
+				d->docids[d->n] = acc;
+				d->bytes[d->n] = bytes[j];
+				d->n++;
+			}
+			ptr = (char *) MAXALIGN((char *) (bh + 1) + bh->gapbytes + bh->count);
+		}
+		UnlockReleaseBuffer(buf);
+		blk = next;
+	}
+}
+
+static void
+bm25_doclens_free(BM25Doclens *d)
+{
+	if (d->docids)
+		pfree(d->docids);
+	if (d->bytes)
+		pfree(d->bytes);
+	d->docids = NULL;
+	d->bytes = NULL;
+	d->n = 0;
+}
+
+/* Exact per-doc length for a docid from the resident sidecar, or 0 if absent
+ * (a v3 segment's empty map, or a docid not in the sidecar -- caller falls back
+ * to the inline posting doclen).  Binary search over ascending docids. */
+static inline uint32
+bm25_doclen_lookup(const BM25Doclens *d, uint64 docid)
+{
+	int			lo = 0,
+				hi = d->n - 1;
+
+	while (lo <= hi)
+	{
+		int			mid = (lo + hi) >> 1;
+
+		if (d->docids[mid] < docid)
+			lo = mid + 1;
+		else if (d->docids[mid] > docid)
+			hi = mid - 1;
+		else
+			return fts_byte_to_doclen(d->bytes[mid]);
+	}
+	return 0;
 }
 
 /*
@@ -1842,18 +2166,27 @@ bm25_write_segment(Relation index, BM25BuildState *bs, BM25SegMeta *seg)
 	BlockNumber *postings;
 	uint32	   *offsets;
 	BM25PostWriter pw;
+	DoclenCollector dc;
 	int			i;
 
 	postings = (BlockNumber *) palloc(Max(bs->nterms, 1) * sizeof(BlockNumber));	/* alloc-ok: bs->nterms is a single build/pending segment, bounded by maintenance_work_mem (the merge path spills to disk instead) */
 	offsets = (uint32 *) palloc(Max(bs->nterms, 1) * sizeof(uint32));	/* alloc-ok: see postings[] above */
+	doclen_collector_init(&dc, CurrentMemoryContext, (long) bs->ndocs);
 	pw_begin(&pw, index);
+	pw.no_doclen_col = true;		/* v4: doclen goes to the sidecar */
 	for (i = 0; i < bs->nterms; i++)
 	{
+		BuildTerm  *bt = &bs->terms[i];
+		int			p;
+
 		/* per-term: safe to cancel here (GenericXLog works on a page copy, so a
 		 * throw mid-write leaves on-disk pages untouched; unwind releases the
 		 * buffer lock and leaks at most the new segment's pages) */
 		CHECK_FOR_INTERRUPTS();
-		bm25_write_postings(&pw, &bs->terms[i], &postings[i], &offsets[i]);
+		/* collect each doc's length for the sidecar (idempotent per docid) */
+		for (p = 0; p < bt->nposts; p++)
+			doclen_collector_add(&dc, bm25_tid_to_docid(&bt->tids[p]), bt->doclens[p]);
+		bm25_write_postings(&pw, bt, &postings[i], &offsets[i]);
 	}
 	pw_finish(&pw);
 
@@ -1861,12 +2194,14 @@ bm25_write_segment(Relation index, BM25BuildState *bs, BM25SegMeta *seg)
 	seg->dictstart = bm25_write_dictionary(index, bs, postings, offsets, &seg->dictindexstart);
 	seg->trgmstart = bs->want_trigrams ? bm25_write_trigrams(index, bs)
 		: InvalidBlockNumber;	/* trigrams opt-in (WITH (trigrams=on)); see bm25_index_wants_trigrams */
+	seg->doclenstart = bm25_write_doclen_sidecar(index, &dc);	/* v4: per-doc byte */
 	seg->livedocs = InvalidBlockNumber;
 	seg->ndocs = bs->ndocs;
 	seg->sumdoclen = bs->sumdoclen;
 	seg->nterms = bs->nterms;
 	seg->ndeleted = 0;
 	seg->livedocslen = 0;
+	hash_destroy(dc.ht);
 	pfree(postings);
 	pfree(offsets);
 }
@@ -2024,6 +2359,8 @@ typedef struct MergeSource
 	sm_t		tomb;
 	bool		hastomb;
 	sm_cursor_cached_t tombcache;
+	BM25Doclens doclens;			/* v4 source doclen sidecar (empty for v3) */
+	bool		has_doclen_col;		/* v3 source: doclen inline in postings */
 } MergeSource;
 
 /*
@@ -2158,6 +2495,12 @@ merge_source_open(Relation index, const BM25SegMeta *seg, MergeSource *src,
 	src->hastomb = false;
 	memset(&src->tombcache, 0, sizeof(src->tombcache));
 
+	/* v4 source: doclen lives in the segment sidecar, not the postings.  Load it
+	 * once so the merge can re-attach each posting's exact length.  A v3 source
+	 * (doclenstart Invalid) keeps has_doclen_col=true and reads it inline. */
+	src->has_doclen_col = (seg->doclenstart == InvalidBlockNumber);
+	bm25_doclens_load(index, seg->doclenstart, &src->doclens);
+
 	if (seg->livedocs != InvalidBlockNumber && seg->livedocslen > 0)
 	{
 		src->tombbuf = bm25_read_blob(index, seg->livedocs, seg->livedocslen);
@@ -2284,6 +2627,7 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 {
 	MergeSource *srcv;
 	BM25PostWriter pw;
+	DoclenCollector mergedc;		/* v4: docid->byte for the merged output segment */
 	DictSpill	spill;			/* per-output-term dict metadata, spilled to disk */
 	uint32		nout = 0;
 	uint32		i;
@@ -2300,6 +2644,8 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 	dict_spill_begin(&spill);
 
 	pw_begin(&pw, index);
+	pw.no_doclen_col = true;		/* v4 output: doclen goes to the merged sidecar */
+	doclen_collector_init(&mergedc, CurrentMemoryContext, 65536);
 
 	for (;;)
 	{
@@ -2378,16 +2724,24 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 
 			np = bm25_decode_term(index, mt->firstposting, mt->firstoffset,
 								  mt->df, &post, NULL, bs->want_positions,
-								  &posarena, false);
+								  &posarena, false, s->has_doclen_col);
 			for (k = 0; k < np; k++)
 			{
+				uint32		doclen = post[k].doclen;
+
 				if (s->hastomb &&
 					sm_contains_cached(&s->tomb,
 									   bm25_tid_to_docid(&post[k].tid),
 									   &s->tombcache))
 					continue;	/* tombstoned: physically drop */
+				/* v4 source: post[k].doclen is 0 (no inline column); recover the
+				 * exact length from the source's sidecar so the merged segment
+				 * carries correct doclen (and re-quantizes it into its own sidecar). */
+				if (!s->has_doclen_col)
+					doclen = bm25_doclen_lookup(&s->doclens,
+											   bm25_tid_to_docid(&post[k].tid));
 				add_posting(&tbs, mt->term, mt->termlen,
-							&post[k].tid, post[k].tf, post[k].doclen,
+							&post[k].tid, post[k].tf, doclen,
 							post[k].pos, post[k].pos ? (int) post[k].tf : 0);
 			}
 			pfree(post);
@@ -2439,6 +2793,8 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 	bs->nterms = (int) nout;
 
 	MemSet(seg, 0, sizeof(BM25SegMeta));
+	seg->doclenstart = bm25_write_doclen_sidecar(index, &mergedc);	/* v4 merged sidecar */
+	hash_destroy(mergedc.ht);
 	dict_spill_rewind(&spill);
 	seg->dictstart = bm25_write_dictionary_iter(index, dict_spill_next, &spill,
 												&seg->dictindexstart);
@@ -2458,6 +2814,9 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 	seg->nterms = bs->nterms;
 	seg->ndeleted = 0;
 	seg->livedocslen = 0;
+
+	for (i = 0; i < nsel; i++)
+		bm25_doclens_free(&srcv[i].doclens);
 
 	dict_spill_end(&spill);
 	MemoryContextSwitchTo(old);
@@ -2625,6 +2984,8 @@ bm25_free_segment(Relation index, const BM25SegMeta *seg)
 		bm25_free_chain(index, seg->livedocs);
 	if (seg->dictindexstart != InvalidBlockNumber)
 		bm25_free_chain(index, seg->dictindexstart);
+	if (seg->doclenstart != InvalidBlockNumber)
+		bm25_free_chain(index, seg->doclenstart);	/* v4 doclen sidecar */
 }
 
 /*
@@ -4539,7 +4900,8 @@ bm25_segment_docids(Relation index, const BM25SegMeta *seg)
 						k;
 
 			np = bm25_decode_term(index, de->firstposting, de->firstoffset,
-								  de->df, &post, NULL, false, NULL, true);
+								  de->df, &post, NULL, false, NULL, true,
+								  seg->doclenstart == InvalidBlockNumber);
 			if (np > 0)
 			{
 				if (nids + np > capids)

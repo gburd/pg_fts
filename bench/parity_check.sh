@@ -24,6 +24,14 @@ shift 4
 TERMS=("$@")
 [ ${#TERMS[@]} -eq 0 ] && TERMS=("slovakia" "hungary" "year" "slovakia & hungary")
 
+# Quantization tolerance.  The v4 doclen sidecar stores a 1-byte quantized
+# length, so BM25 scores near a tie boundary can differ from the exact (true
+# doclen) score by a bounded amount -- a doc scoring within TOL of the exact
+# k-th score is an equivalent top-k member (Lucene/Tantivy fieldnorm behavior),
+# NOT a recall error.  Measured bound on the 2M rig: worst case ~0.2% below the
+# cutoff.  TOL is a fraction (0.01 = 1%); set PARITY_TOL=0 for exact (v3) checks.
+TOL="${PARITY_TOL:-0.01}"
+
 Q() { psql "$DSN" -X -q -t -A -c "$1"; }
 
 read -r NDOCS AVGDL < <(psql "$DSN" -X -q -t -A -F' ' -c \
@@ -37,10 +45,13 @@ for term in "${TERMS[@]}"; do
     # exact k-th score (cutoff for the true top-k band)
     kth=$(Q "SELECT min(sc) FROM (SELECT $SC AS sc FROM $TBL t
              WHERE t.$COL @@@ $QQ ORDER BY sc DESC LIMIT $k) z")
-    # index-returned docs' exact scores; count those strictly below the cutoff
+    # A genuine miss is an index-returned doc whose exact score is below the
+    # exact k-th score by MORE than the quantization tolerance TOL (a fraction).
+    # Within TOL the doc is an equivalent top-k member (v4 doclen quantization),
+    # not a recall error.
     gm=$(Q "WITH idx AS (SELECT $SC AS sc FROM $TBL t
               WHERE t.$COL @@@ $QQ ORDER BY t.$COL <=> $QQ LIMIT $k)
-            SELECT count(*) FROM idx WHERE sc < ${kth} - 1e-6")
+            SELECT count(*) FROM idx WHERE sc < ${kth} * (1.0 - ${TOL}) - 1e-6")
     gm=$(echo "$gm" | tr -d '[:space:]')
     if [ "${gm:-x}" = "0" ]; then
       echo "PASS  term='${term}' k=${k}  genuine_misses=0"
