@@ -122,6 +122,14 @@ typedef struct BM25Options
 								 * when it is absent -- correct, just slower).  It is ~18%
 								 * of the index, so it is OFF by default; turn it on with
 								 * WITH (trigrams=on) for regex/long-fuzzy-heavy workloads. */
+	bool		doclen_sidecar; /* store doclen in the per-segment quantized sidecar
+								 * (v4, default on); OFF stores doclen inline in each
+								 * posting (the pre-1.5 layout) -- an escape hatch for a
+								 * workload that wants the pre-sidecar ranked-scan
+								 * behavior.  Both are read by the same self-describing
+								 * decoder, so an index can mix sidecar and inline
+								 * segments and needs no REINDEX to change the option
+								 * (new segments follow the current setting). */
 } BM25Options;
 
 static relopt_kind bm25_relopt_kind;
@@ -129,6 +137,7 @@ static relopt_kind bm25_relopt_kind;
 void		bm25_init_reloptions(void);
 static bool bm25_index_wants_positions(Relation index);
 static bool bm25_index_wants_trigrams(Relation index);
+static bool bm25_index_wants_doclen_sidecar(Relation index);
 
 void
 bm25_init_reloptions(void)
@@ -140,6 +149,9 @@ bm25_init_reloptions(void)
 	add_bool_reloption(bm25_relopt_kind, "trigrams",
 					   "store the per-segment trigram index for regex/long-fuzzy acceleration",
 					   false, AccessExclusiveLock);
+	add_bool_reloption(bm25_relopt_kind, "doclen_sidecar",
+					   "store doclen in a per-segment quantized sidecar (on) or inline in postings (off)",
+					   true, AccessExclusiveLock);
 }
 
 /* ----- build: collect postings from the heap ----- */
@@ -182,6 +194,9 @@ typedef struct BM25BuildState
 								 * positions through build/merge into the postings */
 	bool		want_trigrams;	/* index built WITH (trigrams=on): write the
 								 * per-segment trigram index (regex/long-fuzzy accel) */
+	bool		want_sidecar;	/* index built WITH (doclen_sidecar=on, the default):
+								 * write doclen to the per-segment quantized sidecar and
+								 * omit the inline posting column.  false = inline doclen. */
 	/* build-time term list: an unsorted array collected during the heap scan,
 	 * sorted once before the dictionary is written */
 	double		ndocs;
@@ -2045,6 +2060,19 @@ typedef struct BM25DoclenCursor
 	int			n;				/* docs in the resident block */
 	uint64		blk_last;		/* highest docid in the resident block */
 	bool		exhausted;
+	/*
+	 * Lazy page directory: (first_docid, blk) for each sidecar PAGE, built once
+	 * on first lookup by walking the chain and reading only each page's first
+	 * block header (1 buffer/page, no gap/byte decode).  A lookup binary-searches
+	 * this to JUMP to the page covering the target docid instead of decoding
+	 * every block from the chain head -- so a rare term whose few matches sit at
+	 * high docids no longer walks the whole sidecar (the 1.5.1 native-v4
+	 * ranked-scan report: per-query cost was O(docid span), not O(matches)).
+	 */
+	uint64	   *dir_docid;		/* ascending first-docid per page */
+	BlockNumber *dir_blk;
+	int			dir_n;
+	bool		dir_built;
 } BM25DoclenCursor;
 
 static void
@@ -2057,6 +2085,105 @@ bm25_doclen_cursor_init(BM25DoclenCursor *c, Relation index, BlockNumber start)
 	c->n = 0;
 	c->blk_last = 0;
 	c->exhausted = (start == InvalidBlockNumber);
+	c->dir_docid = NULL;
+	c->dir_blk = NULL;
+	c->dir_n = 0;
+	c->dir_built = (start == InvalidBlockNumber);
+}
+
+static void
+bm25_doclen_cursor_free(BM25DoclenCursor *c)
+{
+	if (c->dir_docid)
+		pfree(c->dir_docid);
+	if (c->dir_blk)
+		pfree(c->dir_blk);
+	c->dir_docid = NULL;
+	c->dir_blk = NULL;
+}
+
+/* Build the page directory: walk the sidecar chain, recording each page's
+ * first block's first_docid.  Reads one buffer per page (no block decode). */
+static void
+bm25_doclen_cursor_build_dir(BM25DoclenCursor *c)
+{
+	BlockNumber blk = c->start;
+	int			cap = 64;
+
+	c->dir_docid = (uint64 *) palloc(cap * sizeof(uint64));
+	c->dir_blk = (BlockNumber *) palloc(cap * sizeof(BlockNumber));
+	c->dir_n = 0;
+	while (blk != InvalidBlockNumber)
+	{
+		Buffer		buf;
+		Page		page;
+		char	   *pptr,
+				   *pend;
+		BlockNumber next;
+
+		CHECK_FOR_INTERRUPTS();
+		buf = ReadBuffer(c->index, blk);
+		LockBuffer(buf, BUFFER_LOCK_SHARE);
+		page = BufferGetPage(buf);
+		pptr = (char *) page + MAXALIGN(SizeOfPageHeaderData);
+		pend = (char *) page + ((PageHeader) page)->pd_lower;
+		next = BM25PageGetOpaque(page)->nextblk;
+		if (pptr + sizeof(BM25DoclenBlockHdr) <= pend)
+		{
+			BM25DoclenBlockHdr *bh = (BM25DoclenBlockHdr *) pptr;
+
+			if (bh->count > 0 && bh->count <= BM25_BLOCK_SIZE)
+			{
+				if (c->dir_n >= cap)
+				{
+					cap *= 2;
+					c->dir_docid = (uint64 *) repalloc(c->dir_docid, cap * sizeof(uint64));
+					c->dir_blk = (BlockNumber *) repalloc(c->dir_blk, cap * sizeof(BlockNumber));
+				}
+				c->dir_docid[c->dir_n] = ((uint64) bh->first_docid_hi << 32) | bh->first_docid_lo;
+				c->dir_blk[c->dir_n] = blk;
+				c->dir_n++;
+			}
+		}
+		UnlockReleaseBuffer(buf);
+		blk = next;
+	}
+	c->dir_built = true;
+}
+
+/* Seek the cursor's resident block to the page covering docid (binary search
+ * over the page directory), so the subsequent forward block scan starts on the
+ * right page instead of the chain head.  Forward-only: never rewinds behind the
+ * page already resident (WAND lookups are ascending). */
+static void
+bm25_doclen_cursor_seek(BM25DoclenCursor *c, uint64 docid)
+{
+	int			lo = 0,
+				hi = c->dir_n - 1,
+				pg = 0;
+
+	/* largest directory entry whose first_docid <= docid */
+	while (lo <= hi)
+	{
+		int			mid = (lo + hi) >> 1;
+
+		if (c->dir_docid[mid] <= docid)
+		{
+			pg = mid;
+			lo = mid + 1;
+		}
+		else
+			hi = mid - 1;
+	}
+	/* jump to that page only if it is AHEAD of the resident block (avoid
+	 * re-reading the current page on every lookup within it). */
+	if (c->dir_blk[pg] != c->curblk)
+	{
+		c->curblk = c->dir_blk[pg];
+		c->curoff = MAXALIGN(SizeOfPageHeaderData);
+		c->n = 0;
+		c->exhausted = false;
+	}
 }
 
 /* Load the sidecar block at (curblk,curoff) into the cursor's resident arrays;
@@ -2134,6 +2261,13 @@ bm25_doclen_cursor_lookup(BM25DoclenCursor *c, uint64 docid)
 {
 	if (c->start == InvalidBlockNumber)
 		return 0;				/* v3 segment: caller uses inline doclen */
+
+	/* build the page directory once, then seek to the covering page so we do
+	 * not decode every block from the chain head for a high-docid lookup */
+	if (!c->dir_built)
+		bm25_doclen_cursor_build_dir(c);
+	if (c->n == 0 || docid > c->blk_last)
+		bm25_doclen_cursor_seek(c, docid);
 
 	/* advance blocks until the resident block can contain docid */
 	while (!c->exhausted && (c->n == 0 || docid > c->blk_last))
@@ -2447,7 +2581,7 @@ bm25_write_segment(Relation index, BM25BuildState *bs, BM25SegMeta *seg)
 	offsets = (uint32 *) palloc(Max(bs->nterms, 1) * sizeof(uint32));	/* alloc-ok: see postings[] above */
 	doclen_collector_init(&dc, CurrentMemoryContext, (long) bs->ndocs);
 	pw_begin(&pw, index);
-	pw.no_doclen_col = true;		/* v4: doclen goes to the sidecar */
+	pw.no_doclen_col = bs->want_sidecar;	/* v4: doclen -> sidecar; off = inline */
 	for (i = 0; i < bs->nterms; i++)
 	{
 		BuildTerm  *bt = &bs->terms[i];
@@ -2468,7 +2602,7 @@ bm25_write_segment(Relation index, BM25BuildState *bs, BM25SegMeta *seg)
 	seg->dictstart = bm25_write_dictionary(index, bs, postings, offsets, &seg->dictindexstart);
 	seg->trgmstart = bs->want_trigrams ? bm25_write_trigrams(index, bs)
 		: InvalidBlockNumber;	/* trigrams opt-in (WITH (trigrams=on)); see bm25_index_wants_trigrams */
-	seg->doclenstart = bm25_write_doclen_sidecar(index, &dc);	/* v4: per-doc byte */
+	seg->doclenstart = bs->want_sidecar ? bm25_write_doclen_sidecar(index, &dc) : InvalidBlockNumber;
 	seg->livedocs = InvalidBlockNumber;
 	seg->ndocs = bs->ndocs;
 	seg->sumdoclen = bs->sumdoclen;
@@ -2919,7 +3053,7 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 	dict_spill_begin(&spill);
 
 	pw_begin(&pw, index);
-	pw.no_doclen_col = true;		/* v4 output: doclen goes to the merged sidecar */
+	pw.no_doclen_col = bs->want_sidecar;	/* v4 output: doclen -> sidecar; off = inline */
 	doclen_collector_init(&mergedc, CurrentMemoryContext, 65536);
 
 	for (;;)
@@ -3068,7 +3202,7 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 	bs->nterms = (int) nout;
 
 	MemSet(seg, 0, sizeof(BM25SegMeta));
-	seg->doclenstart = bm25_write_doclen_sidecar(index, &mergedc);	/* v4 merged sidecar */
+	seg->doclenstart = bs->want_sidecar ? bm25_write_doclen_sidecar(index, &mergedc) : InvalidBlockNumber;
 	hash_destroy(mergedc.ht);
 	dict_spill_rewind(&spill);
 	seg->dictstart = bm25_write_dictionary_iter(index, dict_spill_next, &spill,
@@ -3353,6 +3487,7 @@ bm25_merge_group_to_seg(Relation index, const BM25SegMeta *group, uint32 ngroup,
 								   ALLOCSET_DEFAULT_SIZES);
 	bs.want_positions = bm25_index_wants_positions(index);
 	bs.want_trigrams = bm25_index_wants_trigrams(index);
+	bs.want_sidecar = bm25_index_wants_doclen_sidecar(index);
 	bs.terms = NULL;
 	bs.nterms = 0;
 	bs.maxterms = 0;
@@ -3403,6 +3538,7 @@ bm25_merge_selected(Relation index, const uint32 *sel, uint32 nsel)
 								   ALLOCSET_DEFAULT_SIZES);
 	bs.want_positions = bm25_index_wants_positions(index);
 	bs.want_trigrams = bm25_index_wants_trigrams(index);
+	bs.want_sidecar = bm25_index_wants_doclen_sidecar(index);
 	bs.terms = NULL;
 	bs.nterms = 0;
 	bs.maxterms = 0;
@@ -4469,6 +4605,7 @@ bm25_parallel_build_main(dsm_segment *seg, shm_toc *toc)
 								   ALLOCSET_DEFAULT_SIZES);
 	bs.want_positions = bm25_index_wants_positions(index);
 	bs.want_trigrams = bm25_index_wants_trigrams(index);
+	bs.want_sidecar = bm25_index_wants_doclen_sidecar(index);
 	bs.terms = NULL;
 	bs.nterms = 0;
 	bs.maxterms = 0;
@@ -4662,6 +4799,7 @@ bm25_build(Relation heap, Relation index, IndexInfo *indexInfo)
 								   ALLOCSET_DEFAULT_SIZES);
 	bs.want_positions = bm25_index_wants_positions(index);
 	bs.want_trigrams = bm25_index_wants_trigrams(index);
+	bs.want_sidecar = bm25_index_wants_doclen_sidecar(index);
 	bs.terms = NULL;
 	bs.nterms = 0;
 	bs.maxterms = 0;
@@ -4762,6 +4900,7 @@ bm25_insert_oversized_as_segment(Relation index, FtsDoc doc, ItemPointer tid)
 								   ALLOCSET_DEFAULT_SIZES);
 	bs.want_positions = bm25_index_wants_positions(index);
 	bs.want_trigrams = bm25_index_wants_trigrams(index);
+	bs.want_sidecar = bm25_index_wants_doclen_sidecar(index);
 	bs.terms = NULL;
 	bs.nterms = 0;
 	bs.maxterms = 0;
@@ -4992,6 +5131,7 @@ bm25_flush_pending(Relation index)
 								   ALLOCSET_DEFAULT_SIZES);
 	bs.want_positions = bm25_index_wants_positions(index);
 	bs.want_trigrams = bm25_index_wants_trigrams(index);
+	bs.want_sidecar = bm25_index_wants_doclen_sidecar(index);
 	bs.terms = NULL;
 	bs.nterms = 0;
 	bs.maxterms = 0;
@@ -5598,6 +5738,7 @@ bm25_options(Datum reloptions, bool validate)
 	static const relopt_parse_elt tab[] = {
 		{"positions", RELOPT_TYPE_BOOL, offsetof(BM25Options, positions)},
 		{"trigrams", RELOPT_TYPE_BOOL, offsetof(BM25Options, trigrams)},
+		{"doclen_sidecar", RELOPT_TYPE_BOOL, offsetof(BM25Options, doclen_sidecar)},
 	};
 
 	return (bytea *) build_reloptions(reloptions, validate,
@@ -5637,6 +5778,18 @@ bm25_index_wants_trigrams(Relation index)
 	BM25Options *opts = (BM25Options *) index->rd_options;
 
 	return opts ? opts->trigrams : false;
+}
+
+/* Default ON: a new index uses the quantized doclen sidecar (v4).  WITH
+ * (doclen_sidecar=off) stores doclen inline in each posting instead (the
+ * pre-1.5 layout) -- an escape hatch for workloads that prefer the
+ * pre-sidecar ranked-scan behavior. */
+static bool
+bm25_index_wants_doclen_sidecar(Relation index)
+{
+	BM25Options *opts = (BM25Options *) index->rd_options;
+
+	return opts ? opts->doclen_sidecar : true;
 }
 
 static bool

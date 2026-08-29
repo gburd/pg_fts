@@ -3509,10 +3509,13 @@ fts_search_bmw(WandCursor *cursors, int nterms, int k, const DocidFilter *filter
 		}
 	}
 
-	/* release any still-loaded block buffers */
+	/* release any still-loaded block buffers + doclen page directories */
 	for (t = 0; t < nterms; t++)
+	{
 		if (cursors[t].blkbuf)
 			pfree(cursors[t].blkbuf);
+		bm25_doclen_cursor_free(&cursors[t].doclenc);
+	}
 
 	qsort(heap, nheap, sizeof(ScoredTid), cmp_scored_desc);
 	*out = heap;
@@ -3659,8 +3662,11 @@ fts_search_maxscore(WandCursor *cursors, int nterms, int k,
 	}
 
 	for (t = 0; t < nterms; t++)
+	{
 		if (cursors[t].blkbuf)
 			pfree(cursors[t].blkbuf);
+		bm25_doclen_cursor_free(&cursors[t].doclenc);
+	}
 
 	qsort(heap, nheap, sizeof(ScoredTid), cmp_scored_desc);
 	*out = heap;

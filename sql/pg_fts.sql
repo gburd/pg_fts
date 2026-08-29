@@ -1,4 +1,4 @@
-CREATE EXTENSION pg_fts VERSION '1.5.1';
+CREATE EXTENSION pg_fts VERSION '1.5.2';
 
 -- ftsdoc: analysis, output shows terms with term frequencies
 SELECT to_ftsdoc('The quick brown fox, the QUICK fox!');
@@ -481,6 +481,33 @@ FROM (
 ) z;   -- t | t
 RESET enable_seqscan;
 DROP TABLE segsc;
+-- doclen_sidecar reloption (escape hatch): WITH (doclen_sidecar=off) stores
+-- doclen inline in each posting (the pre-1.5 layout) instead of the v4 sidecar.
+-- Both layouts must return identical results (the decoder is self-describing),
+-- and a query on the inline index must not touch a sidecar.
+CREATE TABLE dls_on  (id serial, d ftsdoc);
+CREATE TABLE dls_off (id serial, d ftsdoc);
+INSERT INTO dls_on (d)
+  SELECT to_ftsdoc('english', repeat('alpha ', 1 + (g % 5)) || 'w' || (g % 300) || ' ' || g)
+  FROM generate_series(1, 3000) g;
+INSERT INTO dls_off (d) SELECT d FROM dls_on ORDER BY id;
+CREATE INDEX dls_on_fts  ON dls_on  USING fts (d);                          -- sidecar (default)
+CREATE INDEX dls_off_fts ON dls_off USING fts (d) WITH (doclen_sidecar = off); -- inline
+SET enable_seqscan = off;
+-- identical count on both layouts
+SELECT (SELECT count(*) FROM dls_on  WHERE d @@@ to_ftsquery('english','alpha'))
+     = (SELECT count(*) FROM dls_off WHERE d @@@ to_ftsquery('english','alpha'))
+       AS dls_count_eq;   -- t
+-- identical ranked top-10 id set
+SELECT (SELECT array_agg(id ORDER BY id) FROM (SELECT id FROM dls_on  WHERE d @@@ to_ftsquery('english','w7')
+          ORDER BY d <=> to_ftsquery('english','w7') LIMIT 10) a)
+     = (SELECT array_agg(id ORDER BY id) FROM (SELECT id FROM dls_off WHERE d @@@ to_ftsquery('english','w7')
+          ORDER BY d <=> to_ftsquery('english','w7') LIMIT 10) b)
+       AS dls_topk_eq;    -- t
+-- the inline index is no larger having dropped the sidecar? (sanity: both build)
+SELECT pg_relation_size('dls_off_fts') > 0 AND pg_relation_size('dls_on_fts') > 0 AS both_built;  -- t
+RESET enable_seqscan;
+DROP TABLE dls_on, dls_off;
 
 -- BM25F: multi-field weighting.
 -- a term in the (heavily weighted) title scores higher than the same term in
