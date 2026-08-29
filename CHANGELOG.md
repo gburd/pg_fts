@@ -2,6 +2,36 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.5.2
+
+Bug-fix release: the native-v4 ranked-scan slowdown on large, many-segment
+indexes (a field-reported 1.5.x adoption blocker), plus an escape hatch.  C-only,
+no REINDEX (`ALTER EXTENSION pg_fts UPDATE TO '1.5.2'`).
+
+- **Doclen sidecar lookup is now random-access, not a forward walk.**  The v4
+  scoring path reads each scored doc's quantized length from the per-segment
+  sidecar.  1.5.1 read it through a forward cursor, which is O(1) amortized only
+  when scored docids are dense; on an index with a long merge/delete history the
+  surviving docids are sparse, so a term whose postings sit at high/scattered
+  docids forced the cursor to decode the whole sidecar up to that docid -- a
+  ranked top-k that touched tens of thousands of buffers (even for a rare term).
+  The cursor now builds a small per-segment page directory (first-docid per
+  sidecar page, one buffer/page, no block decode) once and BINARY-SEARCHES it to
+  jump straight to the covering page, so a lookup is O(log pages) and total
+  sidecar reads are bounded by the pages actually covering scored docids.
+- **New `WITH (doclen_sidecar = on|off)` reloption (escape hatch).**  Default
+  `on` (the v4 quantized sidecar).  `off` stores doclen inline in each posting
+  (the pre-1.5 layout) -- the same ranked-scan behavior as 1.4.x -- for a
+  workload that prefers it while keeping the 1.5.x crash fixes.  Both layouts are
+  read by the same self-describing decoder, so an index can mix sidecar and
+  inline segments and the option can be changed without REINDEX (new segments
+  follow the current setting).
+- **Note.**  Block-max WAND still does not early-terminate a very-high-df term
+  whose per-block score bounds cluster near the top-k threshold; that is
+  pre-existing (1.4.x) and unchanged.  This release fixes the v4-SPECIFIC cost
+  (the sidecar walk) that made a many-segment v4 index slower than the same
+  query on v3.
+
 ## 1.5.1
 
 Bug-fix release: three field-reported regressions in the 1.5.0 v3->v4 doclen
