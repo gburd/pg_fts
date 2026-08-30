@@ -2,6 +2,40 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.5.3
+
+Correctness + performance bug-fix release: **the segment MERGE path produced a
+broken v4 doclen sidecar** (empty), so a merged v4 segment's ranked scores were
+wrong and its ranked scan was pathologically slow.  C-only, no SQL change.
+
+**Who is affected:** any index built with the default `doclen_sidecar=on` (v4)
+under 1.5.0-1.5.2 that has undergone a segment merge or `fts_vacuum`/`fts_merge`
+compaction -- i.e. essentially every non-trivial actively-used v4 index.  A
+freshly-built, never-merged single-segment v4 index was correct; the corruption
+was introduced by merge.  Indexes built with `doclen_sidecar=off` (inline) were
+never affected.
+
+**The bug:** the streaming merge wrote merged postings in the 2-column (no
+inline doclen) layout but never populated the merged segment's doclen collector,
+so `bm25_write_doclen_sidecar` returned `InvalidBlockNumber` for the merged
+segment.  A segment with 2-column postings but `doclenstart = Invalid` is then
+read as if doclen were inline -- so scoring read a garbage "doclen" from past the
+tf column.  Wrong doclen corrupts the BM25 length-normalization (wrong ranking)
+and defeats block-max WAND pruning (the ranked scan scores far more of the
+posting list than the top-k needs -- the multi-second `Index Searches: 0` scans
+reported from the field).
+
+**The fix:** the merge now feeds each surviving posting's `(docid, doclen)` into
+the merged segment's doclen collector, so the merged segment gets a correct,
+populated sidecar and a valid `doclenstart`.  A regression test builds several
+segments, forces a merge, and asserts the merged sidecar index returns the same
+ranked top-k as an inline-built twin.
+
+**Action for operators on 1.5.0-1.5.2 with a default (v4) index:** REINDEX, or
+rebuild under `doclen_sidecar=off`, to correct any already-merged segment's
+doclen.  New merges under 1.5.3 are correct.  (If you were already on
+`doclen_sidecar=off` per the 1.5.2 note, you are unaffected and need do nothing.)
+
 ## 1.5.2
 
 Bug-fix release: the native-v4 ranked-scan slowdown on large, many-segment

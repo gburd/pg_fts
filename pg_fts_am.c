@@ -1328,7 +1328,6 @@ bm25_meta_from_page(Page page, BM25MetaPageData *out)
 		memcpy(out, raw, sizeof(BM25MetaPageData));
 		return;
 	}
-
 	/* v3 page: expand v3-stride segs[] into the v4 in-memory struct */
 	{
 		const BM25MetaPageDataV3 *v3 = (const BM25MetaPageDataV3 *) raw;
@@ -3149,6 +3148,11 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 				if (!s->has_doclen_col)
 					doclen = bm25_doclen_lookup(&s->doclens,
 											   bm25_tid_to_docid(&post[k].tid));
+				/* feed the merged segment's doclen sidecar (idempotent per docid) --
+				 * WITHOUT this the merged sidecar is empty, doclenstart comes back
+				 * Invalid, and the merged 2-column postings are then mis-read as
+				 * inline (garbage doclen, WAND pruning defeated). */
+				doclen_collector_add(&mergedc, bm25_tid_to_docid(&post[k].tid), doclen);
 				add_posting(&tbs, mt->term, mt->termlen,
 							&post[k].tid, post[k].tf, doclen,
 							post[k].pos, post[k].pos ? (int) post[k].tf : 0);
@@ -5788,8 +5792,9 @@ static bool
 bm25_index_wants_doclen_sidecar(Relation index)
 {
 	BM25Options *opts = (BM25Options *) index->rd_options;
+	bool		r = opts ? opts->doclen_sidecar : true;
 
-	return opts ? opts->doclen_sidecar : true;
+	return r;
 }
 
 static bool

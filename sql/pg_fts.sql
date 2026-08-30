@@ -1,4 +1,4 @@
-CREATE EXTENSION pg_fts VERSION '1.5.2';
+CREATE EXTENSION pg_fts VERSION '1.5.3';
 
 -- ftsdoc: analysis, output shows terms with term frequencies
 SELECT to_ftsdoc('The quick brown fox, the QUICK fox!');
@@ -508,6 +508,32 @@ SELECT (SELECT array_agg(id ORDER BY id) FROM (SELECT id FROM dls_on  WHERE d @@
 SELECT pg_relation_size('dls_off_fts') > 0 AND pg_relation_size('dls_on_fts') > 0 AS both_built;  -- t
 RESET enable_seqscan;
 DROP TABLE dls_on, dls_off;
+-- Merge preserves the doclen sidecar (regression for 1.5.2: the merge path
+-- wrote 2-column postings but an EMPTY sidecar collector, so the merged segment
+-- got doclenstart=Invalid and its postings were then mis-read as inline ->
+-- garbage doclen -> wrong ranked scores + defeated WAND pruning).  Build several
+-- segments, force a merge, and confirm the ranked top-k is still correct AND
+-- matches an inline-built twin over the same rows.
+CREATE TABLE mrg (id serial, d ftsdoc);
+CREATE TABLE mrg_inl (id serial, d ftsdoc);
+INSERT INTO mrg (d)
+  SELECT to_ftsdoc('english', repeat('alpha ', 1 + (g % 6)) || 'w' || (g % 400) || ' g' || g)
+  FROM generate_series(1, 40000) g;
+INSERT INTO mrg_inl (d) SELECT d FROM mrg ORDER BY id;
+SET maintenance_work_mem = '1MB';   -- many small segments
+CREATE INDEX mrg_fts ON mrg USING fts (d);                              -- sidecar (default)
+RESET maintenance_work_mem;
+SELECT fts_merge('mrg_fts') IS NOT NULL AS merge_ran;                   -- force the merge path
+CREATE INDEX mrg_inl_fts ON mrg_inl USING fts (d) WITH (doclen_sidecar = off); -- inline twin
+SET enable_seqscan = off;
+-- the merged sidecar index and the inline twin must return the SAME ranked top-10
+SELECT (SELECT array_agg(id ORDER BY id) FROM (SELECT id FROM mrg WHERE d @@@ to_ftsquery('english','w3')
+          ORDER BY d <=> to_ftsquery('english','w3') LIMIT 10) a)
+     = (SELECT array_agg(id ORDER BY id) FROM (SELECT id FROM mrg_inl WHERE d @@@ to_ftsquery('english','w3')
+          ORDER BY d <=> to_ftsquery('english','w3') LIMIT 10) b)
+       AS merged_sidecar_matches_inline;   -- t
+RESET enable_seqscan;
+DROP TABLE mrg, mrg_inl;
 
 -- BM25F: multi-field weighting.
 -- a term in the (heavily weighted) title scores higher than the same term in
