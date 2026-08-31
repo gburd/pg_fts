@@ -2899,13 +2899,25 @@ wand_prime(WandCursor *c)
 /* The block-max contribution upper bound for the current 128-block.
  * Uses the block's max_tf AND min |D|: impact is increasing in tf and
  * decreasing in |D|, so impact(max_tf, min_dl) is a sound (and much tighter
- * than the shortest-possible-doc) upper bound for every posting in the block. */
+ * than the shortest-possible-doc) upper bound for every posting in the block.
+ *
+ * SOUNDNESS with the v4 doclen sidecar: scoring reads the QUANTIZED doclen
+ * (fts_byte_to_doclen, which truncates -> the effective |D| is <= the exact
+ * |D|, i.e. a doc can score HIGHER than its exact length implies).  The block
+ * header stores the EXACT min |D| from build time; using it directly would make
+ * the bound too small (a quantized-down doc could out-score the bound and be
+ * wrongly skipped -- WAND unsoundness that misses true top-k docs on multi-term
+ * AND).  So for a sidecar (v4) cursor we bound with the quantized-floor of the
+ * block min |D|, matching the smallest effective |D| scoring can produce. */
 static inline double
 wand_block_max_contrib(WandCursor *c)
 {
 	double		k1 = 1.2;
 	double		mtf = (double) c->blk_max_tf;
-	double		mindl = (double) c->blk_min_dl;
+	uint32		mindl_raw = c->blk_min_dl;
+	double		mindl = (double) (c->has_doclen_col
+									 ? mindl_raw			/* v3: exact inline doclen */
+									 : fts_byte_to_doclen(fts_doclen_to_byte(mindl_raw)));
 
 	return c->idf * mtf * (k1 + 1.0) / (mtf + c->k1_1mb + c->k1b_inv_avgdl * mindl);
 }
@@ -3403,27 +3415,44 @@ fts_search_bmw(WandCursor *cursors, int nterms, int k, const DocidFilter *filter
 			if (blocksum <= threshold)
 			{
 				/*
-				 * No document AT OR BEFORE the pivot can beat the threshold
-				 * (blocksum bounds exactly the cursors with docid <= pivot).
+				 * FAST PATH -- exactly one cursor is at/before the pivot AND
+				 * no other term's cursor falls within that cursor's current
+				 * block's docid range.  Then blocksum bounded the WHOLE block,
+				 * every docid in it contains ONLY this term (all other cursors
+				 * sit strictly past the block's last docid), so no document in
+				 * the block -- even under a conjunctive/AND score -- can beat the
+				 * threshold.  Skipping the entire block is exact and O(1).
 				 *
-				 * FAST PATH -- exactly one cursor is at/before the pivot (the
-				 * common single-segment / few-term case): that one cursor's
-				 * current 128-block is a contiguous docid run, blocksum bounded
-				 * its WHOLE block <= threshold, and no other cursor holds any
-				 * docid in that block's range (they are all strictly past the
-				 * pivot).  So skipping the entire block is exact and O(1) per
-				 * block instead of O(128) per-posting seeks -- this is what
-				 * keeps common-term WAND fast.
+				 * The block-range guard is essential for correctness with
+				 * multi-term AND: "other cursors are past the PIVOT" does NOT
+				 * imply "past the block"; a cursor at docid in (pivot, blocklast]
+				 * means a document in the skipped range could contain BOTH terms
+				 * and score sum-of-both -- which blocksum (one term) never
+				 * bounded.  Skipping it then drops true top-k AND docs (the
+				 * pre-existing multi-term AND recall gap).
 				 *
-				 * SAFE PATH -- two or more cursors sit at/before the pivot
-				 * (densely interleaved segments): skipping one cursor's whole
-				 * block could jump past docids another cursor still holds and
-				 * whose score blocksum never bounded (the multi-segment ranked-
-				 * exactness hazard).  Advance every at-or-before cursor to just
-				 * past the pivot instead; blocksum proved nothing up to and
-				 * including pivot_docid can win, so this is exact.
+				 * SAFE PATH -- two or more cursors sit at/before the pivot, OR a
+				 * cursor overlaps the block's docid range: advance every
+				 * at-or-before cursor to just past the pivot instead; blocksum
+				 * proved nothing up to and including pivot_docid can win, so this
+				 * is exact regardless of conjunction.
 				 */
-				if (nle == 1)
+				bool		block_isolated = false;
+
+				if (nle == 1 && cursors[lei].blkcount > 0)
+				{
+					uint64		blocklast = cursors[lei].docids[cursors[lei].blkcount - 1];
+
+					block_isolated = true;
+					for (i = 0; i < nterms; i++)
+						if (i != lei && cursors[i].docid != UINT64_MAX &&
+							cursors[i].docid <= blocklast)
+						{
+							block_isolated = false;
+							break;
+						}
+				}
+				if (block_isolated)
 					wand_skip_block(&cursors[lei]);
 				else
 					for (i = 0; i < nterms; i++)
@@ -3956,7 +3985,7 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 			cursors[nactive].has_doclen_col =
 				(meta.segs[s].doclenstart == InvalidBlockNumber);
 			bm25_doclen_cursor_init(&cursors[nactive].doclenc, index,
-									meta.segs[s].doclenstart);
+									meta.segs[s].doclenstart, meta.generation);
 			cursors[nactive].docid_lo = docid_lo;
 			cursors[nactive].docid_hi = docid_hi;
 			{

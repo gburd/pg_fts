@@ -1,0 +1,7 @@
+# build time + index size, 2.19M docs, 1744MB heap (body-only), same corpus (slovakia df=10874, hungary df=24095, year df~735k) on all hosts
+# engine        build      index_size    notes
+pg_fts (ftsx)   161s+211s  2089 MB       initial build 161s; +REINDEX 211s after churn (methodology). trigrams off/positions off.
+pg_textsearch   258s       1885 MB       ranking-only (Block-Max-WAND)
+pg_search       45s        2332 MB       ParadeDB/Tantivy; rich features
+vchord           42s       1453 MB       VectorChord-bm25; ranking-only; smallest
+GIN (baseline)  (n/a-cut)  n/a           tv materialize did not complete in budget; baseline reference omitted

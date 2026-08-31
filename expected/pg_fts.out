@@ -1,4 +1,4 @@
-CREATE EXTENSION pg_fts VERSION '1.5.3';
+CREATE EXTENSION pg_fts VERSION '1.5.4';
 -- ftsdoc: analysis, output shows terms with term frequencies
 SELECT to_ftsdoc('The quick brown fox, the QUICK fox!');
                      to_ftsdoc                     
@@ -1192,6 +1192,72 @@ SELECT (SELECT array_agg(id ORDER BY id) FROM (SELECT id FROM mrg WHERE d @@@ to
 
 RESET enable_seqscan;
 DROP TABLE mrg, mrg_inl;
+-- Multi-term AND ranked exactness (block-max WAND soundness).  Regression for
+-- the pre-existing conjunctive-recall gap: the block-max block-skip fast path
+-- skipped a whole posting block whenever a single cursor sat at/before the
+-- pivot -- but "other cursors past the PIVOT" does not mean "past the BLOCK",
+-- so a document later in the skipped block that contained BOTH terms (scoring
+-- the SUM of contributions, which the one-term block bound never covered) was
+-- dropped from the top-k.  Compounded on the v4 sidecar by scoring against the
+-- quantized (rounded-DOWN) doclen while the block bound used the exact min |D|.
+-- The engine's ranked top-k must now equal the exact (fts_bm25) top-k for an
+-- AND query, on BOTH the sidecar (default) and inline layouts.
+CREATE TABLE andx (id serial, d ftsdoc);
+-- alpha ~ many docs, beta ~ many docs, a controlled overlap forms the AND set;
+-- widely varied doc lengths so doclen quantization spans buckets.
+INSERT INTO andx (d)
+  SELECT to_ftsdoc('english',
+           repeat('w'||(g%2000)||' ', 5 + (g % 120))          -- varied length
+           || CASE WHEN g % 13 = 0 THEN 'alpha alpha ' ELSE '' END
+           || CASE WHEN g % 17 = 0 THEN 'beta beta '   ELSE '' END
+           || CASE WHEN g % 221 = 0 THEN 'alpha beta ' ELSE '' END)  -- 13*17: dense AND docs
+  FROM generate_series(1, 60000) g;
+CREATE INDEX andx_fts     ON andx USING fts (d);                              -- sidecar (default)
+SET enable_seqscan = off;
+-- The index ranked top-10 (KNN) must equal the exact-by-score top-10, computed
+-- as two SEPARATE queries (a single query holding both a KNN and an exact-sort
+-- subquery lets the planner share/rewrite the scan and pick different rows --
+-- a false miss).  N and avgdl feed fts_bm25 for the exact side.
+SELECT (SELECT array_agg(id ORDER BY id) FROM (
+          SELECT id FROM andx WHERE d @@@ to_ftsquery('english','alpha & beta')
+          ORDER BY d <=> to_ftsquery('english','alpha & beta') LIMIT 10) k)
+     = (SELECT array_agg(id ORDER BY id) FROM (
+          SELECT t.id FROM andx t,
+                 (SELECT count(*)::float8 n, avg(ftsdoc_length(d))::float8 a FROM andx) s
+          WHERE t.d @@@ to_ftsquery('english','alpha & beta')
+          ORDER BY fts_bm25(t.d, to_ftsquery('english','alpha & beta'), s.n, s.a,
+                            fts_index_df('andx_fts', to_ftsquery('english','alpha & beta'))) DESC
+          LIMIT 10) x)
+       AS and_sidecar_topk_exact;   -- t
+ and_sidecar_topk_exact 
+------------------------
+ t
+(1 row)
+
+RESET enable_seqscan;
+DROP INDEX andx_fts;
+CREATE INDEX andx_inl_fts ON andx USING fts (d) WITH (doclen_sidecar = off); -- inline layout
+SET enable_seqscan = off;
+-- same assertion against the inline layout (proves the fix is in the shared WAND
+-- traversal, not sidecar-specific)
+SELECT (SELECT array_agg(id ORDER BY id) FROM (
+          SELECT id FROM andx WHERE d @@@ to_ftsquery('english','alpha & beta')
+          ORDER BY d <=> to_ftsquery('english','alpha & beta') LIMIT 10) k)
+     = (SELECT array_agg(id ORDER BY id) FROM (
+          SELECT t.id FROM andx t,
+                 (SELECT count(*)::float8 n, avg(ftsdoc_length(d))::float8 a FROM andx) s
+          WHERE t.d @@@ to_ftsquery('english','alpha & beta')
+          ORDER BY fts_bm25(t.d, to_ftsquery('english','alpha & beta'), s.n, s.a,
+                            fts_index_df('andx_inl_fts', to_ftsquery('english','alpha & beta'))) DESC
+          LIMIT 10) x)
+       AS and_inline_topk_exact;   -- t
+ and_inline_topk_exact 
+-----------------------
+ t
+(1 row)
+
+RESET enable_seqscan;
+DROP TABLE andx;
 -- BM25F: multi-field weighting.
 -- a term in the (heavily weighted) title scores higher than the same term in
 -- only the body

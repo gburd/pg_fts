@@ -1,0 +1,21 @@
+# pg_fts findings during 5-way bench (v1.4.0, PG17, 2.19M docs, body-only, default reloptions=trigrams off/positions off)
+#
+# 1. METHODOLOGY (mine, fixed): idx_ftsx.sh materialized ftsdoc via UPDATE, built docs_fts,
+#    THEN materialized tv via a SECOND UPDATE (rewrites every row) + VACUUM. That left docs_fts
+#    with ~2.19M tombstones (every posting's TID dead). REINDEX docs_fts fixed it. Lesson: build
+#    indexes AFTER all heap churn. Pre-REINDEX numbers (year ranked 24s) were INVALID.
+#
+# 2. REAL ENGINE FINDING (tombstone scan pathology): with ~2.19M tombstones, ranked WAND spent
+#    99.86% CPU in vendor sm.c __sm_get_chunk_offset (sm_contains_cached head-walk per candidate).
+#    O(postings x tombstone-chunks). year ranked top-10 = 24s (10004 buffer hits, all cached: pure CPU).
+#    Same class as the open vacuum/merge-bloat report. Worth a real fix (forward-threaded sparsemap
+#    scan, or skip tombstone check when a segment's live TID range is disjoint from its tombstones).
+#
+# 3. fuzzy/regex REQUIRE trigrams=on (default since 1.3.0 is OFF for size). On this index (trigrams off):
+#    - fuzzy 'hungary~1' ranked top-10 = 31.8s (falls back to full dictionary/universe scan per segment).
+#    - regex '/^hungar/' ranked = ERROR: invalid memory alloc request size 1610612736 (1.5GB TidSet
+#      allocation on a huge segment universe). THIS IS A REAL BUG: regex without trigrams should
+#      degrade gracefully or refuse, not attempt a >1GB alloc. Capture for a fix.
+#    With trigrams=on these are fast (as in prior 4-way / hardening runs).
+#
+# Clean ftsx numbers (post-REINDEX, prewarmed): see bench_ftsx.json (latency) + ftsx_underload.txt.

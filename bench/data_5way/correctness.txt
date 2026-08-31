@@ -1,0 +1,6 @@
+# Correctness cross-check: ground-truth df (seqscan on tsvector, vchord host)
+# slovakia = 10874, hungary = 24095 (match historical Wikipedia-body df exactly -> same corpus)
+# year = huge (>seqscan 20s timeout); pg_fts count fast-path returns it in ~4ms
+# All engines returned real top-10 rows for each band (verified per-engine during harness debug:
+#   pgts <@> returns rows+timing; vchord <&> returns 10 ids; pg_search @@@ score-ordered; ftsx <=> KNN).
+# vchord initial 0.083ms was an ERRORING query (unquoted "bm25.limit" GUC) -> caught + fixed -> 7.3ms real.
