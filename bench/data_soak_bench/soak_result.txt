@@ -1,0 +1,11 @@
+== soak start: Mon Aug 31 04:48:55 AM UTC 2026 for 300s ==
+server up: 2190038
+index size at start: 1419 MB
+== soak end: Mon Aug 31 04:58:24 AM UTC 2026 ==
+server after soak: up
+total reads: 51810   reader-detected wrong/err: 0
+psql-level errors logged: 0
+index size end: 1420 MB (start 1419 MB)
+docs now: 2295038
+nsegments: 2
+== SOAK CLEAN ==
