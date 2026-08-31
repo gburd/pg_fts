@@ -2,6 +2,55 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.5.4
+
+Performance + correctness release making the default `doclen_sidecar=on` (v4)
+layout both **fast** and **exact on multi-term AND**.  C-only, no SQL change,
+**no on-disk index format change (BM25_VERSION stays 4), no REINDEX**.
+
+**1. Doclen-sidecar read locality (performance).**  Since 1.5.0 the per-doc
+length lives in a per-segment sidecar instead of inline in each posting.  That
+saves ~35% index size but a ranked scan of a common term (whose postings are
+scattered across the whole docid space) then read roughly one sidecar buffer
+per scored posting -- effectively the entire sidecar chain per query.  Measured
+on a 2.19M-doc corpus: a common term touched **16,887 buffers** with the sidecar
+vs **1,432** inline, and warm ranked latency was ~2x inline and far behind
+competitors.  1.5.4 decodes a segment's whole sidecar **once per backend** into
+a sorted `(docid, byte)` array cached in the index relcache entry (rebuilt only
+when the metapage generation moves), then answers every doclen lookup with an
+in-RAM binary search -- **0 buffer reads after the first build**.  The common
+term now touches ~2,000 buffers (level with inline) and mid-frequency ranked
+queries are ~5 ms.  (An ultra-common term -- e.g. one in a third of all docs --
+remains dominated by the posting scan itself, the same cost inline pays.)
+
+**2. Block-max WAND multi-term AND recall (correctness).**  A pre-existing
+soundness gap in the block-max block-skip: the fast path skipped a whole posting
+block whenever a single term's cursor sat at or before the WAND pivot -- but a
+cursor being past the *pivot* does not mean it is past the *block*, so a later
+document in the skipped block that contained BOTH query terms (and thus scored
+the SUM of their contributions, which the one-term block bound never covered)
+could be dropped from the top-k.  On a 2.19M Wikipedia corpus the ranked top-10
+for `slovakia & hungary` missed the true #1 and admitted lower-scoring docs.
+The fix only takes the whole-block-skip fast path when no other term's cursor
+falls within the skipped block's docid range; otherwise it advances past the
+pivot exactly.  This was present on BOTH the sidecar and inline layouts (it is
+in the shared WAND traversal), and single-term ranked was always exact.
+
+**3. Sidecar block-max bound vs quantized doclen (correctness).**  The v4 sidecar
+stores a quantized length byte (SmallFloat, rounded DOWN), so scoring can see a
+slightly shorter |D| -- and thus a slightly higher score -- than the exact
+minimum |D| the block header records.  The block-max WAND bound now dequantizes
+the block's min |D| through the same codec, so the bound stays a true upper
+bound for the quantized scores and cannot wrongly prune a top-k document.
+
+**Validation:** ranked top-k now matches the exact `fts_bm25` top-k for AND
+queries on both layouts (new regression test `and_sidecar_topk_exact` /
+`and_inline_topk_exact`), verified at 2.19M docs on the exact
+`slovakia & hungary` case that first exhibited the gap; a concurrent soak
+(readers + writer + merge/vacuum loop) on a sidecar-on index stayed correct and
+bounded; installcheck (PG 17/18), TAP, alloc/ascii guards, and the block-fuzzer
+all pass.
+
 ## 1.5.3
 
 Correctness + performance bug-fix release: **the segment MERGE path produced a

@@ -1,0 +1,4 @@
+# pg_fts (ftsx) under-load, LOAD_SECS=30/band/client, 16GB shared_buffers, REINDEX'd (tombstone-free), prewarmed
+rare_k10:      1:395.7tps/2.53ms   8:3126.5tps/2.56ms   16:3897.6tps/4.11ms   32:3965.1tps/8.07ms
+common_k10:    1:37.9tps/26.41ms   8:296.5tps/26.98ms   16:262.4tps/60.97ms   32:265.4tps/120.59ms
+count_common:  1:407.8tps/2.45ms   8:3204.5tps/2.50ms   16:2315.3tps/6.91ms   32:2325.6tps/13.76ms
