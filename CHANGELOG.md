@@ -2,6 +2,46 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.5.6
+
+Crash-fix release.  C-only, no SQL change, no on-disk format change
+(BM25_VERSION stays 4), no REINDEX.
+
+**Who is affected:** anyone on **1.5.4 or 1.5.5** with the default
+`doclen_sidecar=on`.  Upgrade to 1.5.6.  (1.5.3 and earlier lack the doclen
+cursor and are unaffected.)
+
+**The bug:** the doclen-sidecar cursor added in 1.5.4 has an `owned` flag that
+tells `bm25_doclen_cursor_free` whether the cursor allocated its own decoded
+arrays (and must free them) or merely borrowed the scan cache's (and must not).
+`bm25_doclen_cursor_init` set `owned` only on the rarely-taken self-decode path
+and left it UNINITIALIZED on the common borrow and v3-segment paths.  The
+cursor lives in a `palloc`'d (not zeroed) `WandCursor`, so `owned` held stale
+heap bytes: when they were non-zero, cursor teardown `pfree()`d a pointer it did
+not own -- a borrowed interior/shared pointer -- corrupting the allocator
+(`ERROR: could not find block containing chunk ...` on a following multi-term
+`fts_search`) or segfaulting a concurrent backend.  Intermittent: it fired only
+when the reused chunk's bytes happened to be non-zero, which is why fresh
+backends often looked fine but the CI regression + concurrent-extend suites
+tripped it.
+
+**The fix:** initialize `owned = false` at the top of `bm25_doclen_cursor_init`
+so every path is defined; only the genuine self-decode path sets it true.
+Hardening in the same release: the scan-time sidecar decode
+(`bm25_doclens_load`) now bounds its page walk to the relation's block count and
+stops at any page that is no longer a `BM25_DOCLEN` page, so a chain broken by a
+concurrent merge/vacuum recycling its pages (the A1 race, already retried via
+the metapage-generation guard) cannot spin or read unrelated pages before the
+retry.
+
+**Validation:** clean under AddressSanitizer over the exact multi-term
+`fts_search` sequence that regressed (200-iteration loop, plus a
+garbage-`owned` poison test); installcheck (PG 17/18), the full TAP set
+(t/003-008, including the concurrent-extend crasher), alloc/ascii guards, and
+the block-fuzzer all pass.  The nix `tap-*` check now runs the full t/003-008
+set (previously only t/005) so this class of crash is caught by
+`nix flake check` locally, not only in downstream CI.
+
 ## 1.5.5
 
 Concurrency crash-fix release.  C-only, no SQL change, no on-disk format change

@@ -1928,12 +1928,15 @@ bm25_doclens_load(Relation index, BlockNumber doclenstart, BM25Doclens *d)
 {
 	BlockNumber blk = doclenstart;
 	int			cap = 0;
+	BlockNumber nblocks;
+	uint32		visited = 0;
 
 	d->docids = NULL;
 	d->bytes = NULL;
 	d->n = 0;
 	if (doclenstart == InvalidBlockNumber)
 		return;
+	nblocks = RelationGetNumberOfBlocks(index);
 
 	while (blk != InvalidBlockNumber)
 	{
@@ -1944,9 +1947,27 @@ bm25_doclens_load(Relation index, BlockNumber doclenstart, BM25Doclens *d)
 		BlockNumber next;
 
 		CHECK_FOR_INTERRUPTS();
+		/*
+		 * Concurrency guard (the A1 race): a scan reads the sidecar chain under
+		 * only per-page SHARE locks off a metapage snapshot, so a concurrent
+		 * merge/vacuum can free + recycle these pages mid-walk and leave a
+		 * garbage nextblk that points anywhere (a cycle, a non-sidecar page, or
+		 * out of range).  The caller discards + retries on a generation change,
+		 * but this decode must not crash or spin first.  So: bound the walk to
+		 * the relation's block count (no runaway/cycle) and skip any page that
+		 * is no longer a BM25_DOCLEN page (a recycled/other-type page ends the
+		 * walk).  Bounds inside the block loop already guard a torn page. */
+		if (blk >= nblocks || visited++ > nblocks)
+			break;
 		buf = ReadBuffer(index, blk);
 		LockBuffer(buf, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buf);
+		if (PageIsNew(page) ||
+			!(BM25PageGetOpaque(page)->flags & BM25_DOCLEN))
+		{
+			UnlockReleaseBuffer(buf);
+			break;
+		}
 		ptr = (char *) page + MAXALIGN(SizeOfPageHeaderData);
 		end = (char *) page + ((PageHeader) page)->pd_lower;
 		next = BM25PageGetOpaque(page)->nextblk;
@@ -2142,6 +2163,7 @@ bm25_doclen_cursor_init(BM25DoclenCursor *c, Relation index, BlockNumber start,
 	c->bytes = NULL;
 	c->n = 0;
 	c->hint = 0;
+	c->owned = false;
 
 	if (start == InvalidBlockNumber)
 		return;					/* v3 segment: caller uses inline doclen */
