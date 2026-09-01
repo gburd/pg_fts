@@ -46,7 +46,7 @@
         buildFor = postgresql:
           pkgs.stdenv.mkDerivation {
             pname = "pg_fts";
-            version = "1.5.4";
+            version = "1.5.5";
             src = ./.;
 
             nativeBuildInputs = [ postgresql.pg_config pkgs.clang ];
@@ -63,7 +63,7 @@
               install -D -m 755 -t $out/lib pg_fts.so 2>/dev/null || \
                 install -D -m 755 -t $out/lib pg_fts.dylib
               install -D -m 644 -t $out/share/postgresql/extension pg_fts.control
-              install -D -m 644 -t $out/share/postgresql/extension pg_fts--1.5.4.sql
+              install -D -m 644 -t $out/share/postgresql/extension pg_fts--1.5.5.sql
               install -D -m 644 -t $out/share/postgresql/extension pg_fts--0.2.0--0.2.1.sql
               install -D -m 644 -t $out/share/postgresql/extension pg_fts--0.2.1--0.2.2.sql
               install -D -m 644 -t $out/share/postgresql/extension pg_fts--0.2.2--0.2.3.sql
@@ -105,6 +105,7 @@
               install -D -m 644 -t $out/share/postgresql/extension pg_fts--1.5.1--1.5.2.sql
               install -D -m 644 -t $out/share/postgresql/extension pg_fts--1.5.2--1.5.3.sql
               install -D -m 644 -t $out/share/postgresql/extension pg_fts--1.5.3--1.5.4.sql
+              install -D -m 644 -t $out/share/postgresql/extension pg_fts--1.5.4--1.5.5.sql
               runHook postInstall
             '';
 
@@ -188,7 +189,7 @@
               # harness), not here.  This is what makes `nix flake check`
               # actually exercise TAP instead of silently skipping it.
               make installcheck REGRESS= ISOLATION= \
-                PROVE_TESTS='t/005_concurrency.pl' \
+                PROVE_TESTS='t/003_corruption.pl t/004_encodings.pl t/005_concurrency.pl t/006_concurrent_extend.pl t/007_segment_cap.pl t/008_vacuum_reclaim.pl' \
                 PG_CONFIG=${pgConfigWrapped}/bin/pg_config \
                 || { echo '--- TAP logs ---'; cat tmp_check/log/*.log tmp_check/log/regress_log_* 2>/dev/null; exit 1; }
               touch $out
