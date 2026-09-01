@@ -2,6 +2,56 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.5.7
+
+Concurrency crash-fix release: three pre-existing races surfaced by a
+read+insert+merge+vacuum soak, all present since at least 1.5.3.  C-only, no SQL
+change, no on-disk format change (BM25_VERSION stays 4), no REINDEX.
+
+**Who is affected:** any index under concurrent write + maintenance load
+(ingestion plus `fts_merge`/`fts_vacuum`/autovacuum).  1.5.3 crashed into
+recovery under such a soak; 1.5.7 stays up and error-free.
+
+**1. Merge crash (severe).**  Every operation that mutates the segment directory
+or frees + recycles pages -- `bm25_flush_pending`, the tiered
+`bm25_merge_segments`, `bm25_vacuum_compact`, bulkdelete's livedocs swap -- ran
+with no mutual exclusion: an INSERT's tiered merge holds only RowExclusiveLock, a
+user `fts_merge`/`fts_vacuum` holds ShareUpdateExclusiveLock/AccessExclusiveLock
+on the INDEX, and autovacuum cleanup holds ShareUpdateExclusiveLock on the TABLE
+-- lock tags that do NOT conflict.  Two of these running at once let one free +
+recycle a segment's pages while the other's streaming merge was still reading
+them -> SIGSEGV in `merge_source_load_page`.  Fix: a per-index maintenance
+serialization lock (a heavyweight page lock on the metapage block, the same
+mechanism GIN uses to serialize pending-list cleanup) -- blocking for explicit/
+required maintenance, conditional (skip if busy) for the opportunistic
+insert-time tiered merge.
+
+**2. Index-relkind assert / API misuse.**  The freed-page recycle gate called
+`GlobalVisCheckRemovableXid(index, xid)` with the INDEX relation; that routine
+expects a table (or NULL) and tripped an assertion under --enable-cassert (and
+is latent API misuse otherwise).  Fixed to pass NULL (the global visibility
+horizon), a sound and slightly conservative bound.
+
+**3. Scan read past a concurrent truncation.**  `fts_vacuum` (and autovacuum
+compaction) truncate the freed tail of the index file back to the OS.  A scan
+follows the segment directory it snapshotted (dict/posting chain heads by block
+number), re-checking the metapage generation afterward and retrying if it moved
+-- but a block number from the pre-truncation snapshot points past EOF, and
+`ReadBuffer` raised a hard "could not read blocks N: read only 0 of 8192" ERROR
+before the generation re-check could discard the stale result (a transient query
+error under heavy read+vacuum churn).  Fix: the scan's chain-following reads now
+treat an out-of-range block as end-of-chain (a truncated block can only mean a
+concurrent vacuum bumped the generation), so the existing generation guard
+restarts the scan from a fresh directory and the count/ranked result stays exact.
+
+**Validation (assert build, on the exact concurrent workload):**
+`t/006_concurrent_extend` 45 consecutive runs with zero crashes (1.5.3 crashed
+~13/15); a read+insert+merge+`fts_merge`+`fts_vacuum`+`VACUUM` soak across many
+runs with zero "could not read blocks" errors, zero crashes, and the
+concurrently-churned corpus's fixed-term count staying exact throughout.  The
+nix `tap-*` check now runs the full `t/003`-`t/008` set (was only `t/005`) so
+this class of crash is caught by `nix flake check` locally.
+
 ## 1.5.6
 
 Crash-fix release.  C-only, no SQL change, no on-disk format change
