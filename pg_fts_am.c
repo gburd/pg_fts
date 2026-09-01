@@ -2054,11 +2054,13 @@ typedef struct BM25DoclenCursor
 {
 	Relation	index;
 	BlockNumber start;			/* sidecar chain head; Invalid = v3 (inline) */
-	const uint64 *docids;		/* borrowed from the relcache cache (ascending) */
+	const uint64 *docids;		/* borrowed from the scan-local cache (ascending) */
 	const uint8 *bytes;			/* parallel quantized length bytes */
 	int			n;
 	int			hint;			/* last hit index; WAND lookups ascend, so resume
 								 * the search from here (near-O(1) amortized) */
+	bool		owned;			/* true: no scan cache -> cursor decoded its own
+								 * arrays and must free them at scan end */
 } BM25DoclenCursor;
 
 /*
@@ -2078,58 +2080,44 @@ typedef struct BM25DirCacheEntry
 
 typedef struct BM25DirCache
 {
-	uint32		generation;		/* metapage generation these arrays were built at */
 	int			n;
 	int			cap;
 	BM25DirCacheEntry *ent;
 } BM25DirCache;
 
-/* Find (or make room for) the cached decoded sidecar for segment `start` under
- * the current `generation`; returns NULL if `start` is Invalid (v3 segment).
- * A generation change flushes the whole cache first.  The returned entry's
- * docids may be NULL (not yet built) -- the cursor init fills it. */
+/*
+ * Find (or make room for) the SCAN-LOCAL cached decoded sidecar for segment
+ * `start`; returns NULL if `start` is Invalid (v3 segment) or dc is NULL.
+ *
+ * The cache is owned by the caller (the scan) and lives in the scan's memory
+ * context, NOT the relcache.  A single ranked/@@@ scan creates it once and
+ * shares it across all its per-(term,segment) cursors, so a common term's
+ * sidecar is decoded once per scan and every lookup is an in-RAM binary search;
+ * it is freed when the scan's context is reset.  It is deliberately NOT cached
+ * across queries in index->rd_amcache: rd_amcache must be a single palloc chunk
+ * (PG pfree()s it wholesale on relcache invalidation -- e.g. from a concurrent
+ * merge -- which would corrupt a multi-chunk cache and could free arrays a live
+ * cursor still borrows).  Per-scan decode still removes the per-posting sidecar
+ * page reads (the 1.5.3 16,887-buffer pathology) while staying invalidation-safe.
+ */
 static BM25DirCacheEntry *
-bm25_dircache_slot(Relation index, BlockNumber start, uint32 generation)
+bm25_dircache_slot(BM25DirCache *dc, BlockNumber start)
 {
-	BM25DirCache *dc = (BM25DirCache *) index->rd_amcache;
-	MemoryContext old;
 	int			i;
 
-	if (start == InvalidBlockNumber)
+	if (dc == NULL || start == InvalidBlockNumber)
 		return NULL;
 
-	if (dc != NULL && dc->generation != generation)
-	{
-		/* stale: a merge/vacuum recycled pages -- drop all cached doclens */
-		for (i = 0; i < dc->n; i++)
-		{
-			if (dc->ent[i].docids)
-				pfree(dc->ent[i].docids);
-			if (dc->ent[i].bytes)
-				pfree(dc->ent[i].bytes);
-		}
-		dc->n = 0;
-		dc->generation = generation;
-	}
+	for (i = 0; i < dc->n; i++)
+		if (dc->ent[i].start == start)
+			return &dc->ent[i];
 
-	old = MemoryContextSwitchTo(index->rd_indexcxt);
-	if (dc == NULL)
+	if (dc->ent == NULL)
 	{
-		dc = (BM25DirCache *) palloc0(sizeof(BM25DirCache));
-		dc->generation = generation;
 		dc->cap = 8;
 		dc->ent = (BM25DirCacheEntry *) palloc0(dc->cap * sizeof(BM25DirCacheEntry));
-		index->rd_amcache = (void *) dc;
 	}
-	for (i = 0; i < dc->n; i++)
-	{
-		if (dc->ent[i].start == start)
-		{
-			MemoryContextSwitchTo(old);
-			return &dc->ent[i];
-		}
-	}
-	if (dc->n >= dc->cap)
+	else if (dc->n >= dc->cap)
 	{
 		dc->cap *= 2;
 		dc->ent = (BM25DirCacheEntry *) repalloc(dc->ent, dc->cap * sizeof(BM25DirCacheEntry));
@@ -2139,13 +2127,12 @@ bm25_dircache_slot(Relation index, BlockNumber start, uint32 generation)
 	dc->ent[dc->n].bytes = NULL;
 	dc->ent[dc->n].n = 0;
 	dc->ent[dc->n].built = false;
-	MemoryContextSwitchTo(old);
 	return &dc->ent[dc->n++];
 }
 
 static void
 bm25_doclen_cursor_init(BM25DoclenCursor *c, Relation index, BlockNumber start,
-						uint32 generation)
+						BM25DirCache *dc)
 {
 	BM25DirCacheEntry *slot;
 
@@ -2159,16 +2146,18 @@ bm25_doclen_cursor_init(BM25DoclenCursor *c, Relation index, BlockNumber start,
 	if (start == InvalidBlockNumber)
 		return;					/* v3 segment: caller uses inline doclen */
 
-	slot = bm25_dircache_slot(index, start, generation);
+	slot = bm25_dircache_slot(dc, start);
 	if (slot != NULL && !slot->built)
 	{
-		/* first use in this backend (or after a generation flush): decode the
-		 * whole segment sidecar once, into rd_indexcxt so it outlives the scan.
-		 * ponytail: costs ~9 bytes/doc of backend-lifetime RAM per segment (e.g.
-		 * ~25 MB for a 2.86M-doc segment); acceptable for the warm-query win and
-		 * bounded by the segment cap.  If a deployment with very many huge
-		 * segments makes this footprint matter, add an LRU cap on cached segments. */
-		MemoryContext old = MemoryContextSwitchTo(index->rd_indexcxt);
+		/* first use of this segment IN THIS SCAN: decode the whole segment
+		 * sidecar once, into the scan's context (the cache is scan-local), so
+		 * every subsequent lookup is an in-RAM binary search rather than a
+		 * per-posting sidecar page read.
+		 * ponytail: ~9 bytes/doc of scan-lifetime RAM per distinct segment
+		 * touched (~25 MB for a 2.86M-doc segment); freed at scan end.  Not
+		 * cached across queries (rd_amcache single-chunk + invalidation-safety);
+		 * add a persistent build-time directory if cold-scan decode ever
+		 * dominates at the field's scale. */
 		BM25Doclens	d = {0};
 
 		bm25_doclens_load(index, start, &d);
@@ -2176,7 +2165,6 @@ bm25_doclen_cursor_init(BM25DoclenCursor *c, Relation index, BlockNumber start,
 		slot->bytes = d.bytes;
 		slot->n = d.n;
 		slot->built = true;
-		MemoryContextSwitchTo(old);
 	}
 	if (slot != NULL)
 	{
@@ -2184,15 +2172,36 @@ bm25_doclen_cursor_init(BM25DoclenCursor *c, Relation index, BlockNumber start,
 		c->bytes = slot->bytes;
 		c->n = slot->n;
 	}
+	else
+	{
+		/* no scan cache provided (e.g. a lone lookup path): decode into the
+		 * cursor itself, freed by bm25_doclen_cursor_free */
+		BM25Doclens	d = {0};
+
+		bm25_doclens_load(index, start, &d);
+		c->docids = d.docids;
+		c->bytes = d.bytes;
+		c->n = d.n;
+		c->owned = true;
+	}
 }
 
 static void
 bm25_doclen_cursor_free(BM25DoclenCursor *c)
 {
-	/* the decoded arrays are owned by the relcache cache; nothing to free */
+	/* scan-cache-owned arrays are freed with the scan context; free only the
+	 * arrays this cursor decoded itself (no scan cache was provided) */
+	if (c->owned)
+	{
+		if (c->docids)
+			pfree((void *) c->docids);
+		if (c->bytes)
+			pfree((void *) c->bytes);
+	}
 	c->docids = NULL;
 	c->bytes = NULL;
 	c->n = 0;
+	c->owned = false;
 }
 
 /* Exact doclen for docid via the cached decoded sidecar.  Robust to ANY docid

@@ -2,6 +2,36 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.5.5
+
+Concurrency crash-fix release.  C-only, no SQL change, no on-disk format change
+(BM25_VERSION stays 4), no REINDEX.
+
+**Who is affected:** anyone running **1.5.4** with the default
+`doclen_sidecar=on` under concurrent write + query load.  Upgrade to 1.5.5.
+(1.5.3 and earlier do not have the 1.5.4 doclen cache and are unaffected.)
+
+**The bug:** 1.5.4 cached the decoded doclen sidecar in the index relcache entry
+(`rd_amcache`).  `rd_amcache` must be a single palloc'd chunk because
+PostgreSQL `pfree()`s it wholesale on a relcache invalidation (e.g. one raised
+by a concurrent `fts_merge`/segment extend via `RelationReloadIndexInfo`); the
+1.5.4 cache was multi-chunk (a header plus per-segment decoded arrays), so the
+invalidation freed only the header, corrupting the allocator and/or leaving a
+concurrently-scanning backend's cursor pointing at freed memory -- an
+intermittent backend crash under the exact ingest+merge+query overlap the
+concurrent-extend TAP test drives.
+
+**The fix:** the decoded-sidecar cache is now **scan-local** -- decoded once per
+scan into the scan's own memory context and shared across that scan's
+per-(term,segment) cursors, freed when the scan ends.  This keeps 1.5.4's
+read-locality win (a common term's sidecar is decoded once per scan, then every
+doclen lookup is an in-RAM binary search -- no per-posting sidecar page reads)
+while being invalidation-safe: nothing is stored in `rd_amcache`, so a
+concurrent merge cannot free memory a live cursor borrows.  (Cross-query caching
+was dropped; if cold-scan decode ever dominates at scale, a persistent
+build-time sidecar directory is the follow-up.)  Verified by running the
+concurrent-extend TAP test 20x with no crash (it reproduced ~1-in-10 on 1.5.4).
+
 ## 1.5.4
 
 Performance + correctness release making the default `doclen_sidecar=on` (v4)

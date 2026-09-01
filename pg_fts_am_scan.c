@@ -3820,6 +3820,9 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 	int			nterms;
 	WandCursor *cursors;
 	ScoredTid  *cand;
+	BM25DirCache doclencache = {0};	/* scan-local decoded-sidecar cache, shared
+									 * across this scan's per-(term,segment) cursors;
+									 * arrays live in the scan context, freed at reset */
 	BM25Tombstones tombs;
 	DocidFilter filter;
 	DocidFilter *filterp = NULL;
@@ -3985,7 +3988,7 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 			cursors[nactive].has_doclen_col =
 				(meta.segs[s].doclenstart == InvalidBlockNumber);
 			bm25_doclen_cursor_init(&cursors[nactive].doclenc, index,
-									meta.segs[s].doclenstart, meta.generation);
+									meta.segs[s].doclenstart, &doclencache);
 			cursors[nactive].docid_lo = docid_lo;
 			cursors[nactive].docid_hi = docid_hi;
 			{
