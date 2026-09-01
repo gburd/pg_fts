@@ -39,6 +39,29 @@ static double bm25_query_maxhits(Relation index, FtsQuery q, double N);
 /* forward decl: blob reader (pg_fts_trgm_index.c, included after this file) */
 static uint8 *bm25_read_blob(Relation index, BlockNumber blk, Size len);
 
+/*
+ * EOF-tolerant page read for the scan's directory-following chain walks.
+ *
+ * A scan reads the segment directory (metapage + per-segment chain heads) under
+ * a transient SHARE lock, releases it, then follows dict/posting chains by
+ * block number, re-checking the metapage `generation` afterward and retrying if
+ * it moved (the A1 race).  But a concurrent fts_vacuum can TRUNCATE the index
+ * tail; a block number from the pre-truncation snapshot then points past EOF and
+ * ReadBuffer raises a hard "could not read blocks N: read only 0 of 8192" ERROR
+ * before the generation re-check can discard the stale result.  So a chain walk
+ * must treat an out-of-range block as END OF CHAIN: return InvalidBuffer, let
+ * the walk stop, and let the caller's generation guard restart from a fresh
+ * (post-truncation) directory.  RelationGetNumberOfBlocks reads the smgr size
+ * cache (refreshed on the truncation's relcache invalidation), so this is cheap.
+ */
+static inline Buffer
+bm25_scan_readbuf(Relation index, BlockNumber blk)
+{
+	if (blk == InvalidBlockNumber || blk >= RelationGetNumberOfBlocks(index))
+		return InvalidBuffer;
+	return ReadBuffer(index, blk);
+}
+
 /* Max terms in a phrase chain we evaluate positionally, and the per-docid
  * position scratch bound.  A phrase with more terms, or a per-(term,doc) tf
  * beyond BM25_PHRASE_POSBUF, falls back to the (correct) recheck path.  16383
@@ -398,7 +421,9 @@ bm25_lookup_term(Relation index, const BM25SegMeta *seg,
 		bool		found = false;
 
 		CHECK_FOR_INTERRUPTS();		/* between pages, no buffer lock held: safe to let a cancel unwind */
-		buffer = ReadBuffer(index, blk);
+		buffer = bm25_scan_readbuf(index, blk);
+		if (buffer == InvalidBuffer)
+			break;			/* block truncated by a concurrent fts_vacuum: end of chain */
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buffer);
 		ptr = (char *) PageGetContents(page);
@@ -667,7 +692,9 @@ bm25_lookup_prefix(Relation index, const BM25SegMeta *seg,
 		BlockNumber next;
 
 		CHECK_FOR_INTERRUPTS();		/* between pages, no buffer lock held: safe to let a cancel unwind */
-		buffer = ReadBuffer(index, blk);
+		buffer = bm25_scan_readbuf(index, blk);
+		if (buffer == InvalidBuffer)
+			break;			/* block truncated by a concurrent fts_vacuum: end of chain */
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buffer);
 		ptr = (char *) PageGetContents(page);
@@ -916,7 +943,9 @@ bm25_fuzzy_terms(Relation index, const BM25SegMeta *seg,
 		bool		reseek = false;
 
 		CHECK_FOR_INTERRUPTS();		/* between pages, no buffer lock held: safe to let a cancel unwind */
-		buffer = ReadBuffer(index, blk);
+		buffer = bm25_scan_readbuf(index, blk);
+		if (buffer == InvalidBuffer)
+			break;			/* block truncated by a concurrent fts_vacuum: end of chain */
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buffer);
 		ptr = (char *) PageGetContents(page);
@@ -1185,7 +1214,9 @@ bm25_universe_bounded(Relation index, BlockNumber dictstart, double ndocs,
 		BlockNumber next;
 
 		CHECK_FOR_INTERRUPTS();		/* between pages, no buffer lock held: safe to let a cancel unwind */
-		buffer = ReadBuffer(index, blk);
+		buffer = bm25_scan_readbuf(index, blk);
+		if (buffer == InvalidBuffer)
+			break;			/* block truncated by a concurrent fts_vacuum: end of chain */
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buffer);
 		ptr = (char *) PageGetContents(page);
@@ -1644,7 +1675,9 @@ bm25_lookup_term_pos(Relation index, const BM25SegMeta *seg,
 		bool		found = false;
 
 		CHECK_FOR_INTERRUPTS();		/* between pages, no buffer lock held: safe to let a cancel unwind */
-		buffer = ReadBuffer(index, blk);
+		buffer = bm25_scan_readbuf(index, blk);
+		if (buffer == InvalidBuffer)
+			break;			/* block truncated by a concurrent fts_vacuum: end of chain */
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buffer);
 		ptr = (char *) PageGetContents(page);
@@ -2173,7 +2206,9 @@ collect_retry:
 			BlockNumber next;
 
 			CHECK_FOR_INTERRUPTS();	/* between pages, no buffer lock held: safe to let a cancel unwind */
-			buffer = ReadBuffer(index, blk);
+			buffer = bm25_scan_readbuf(index, blk);
+			if (buffer == InvalidBuffer)
+				break;		/* block truncated by a concurrent fts_vacuum: end of chain */
 			LockBuffer(buffer, BUFFER_LOCK_SHARE);
 			page = BufferGetPage(buffer);
 			ptr = (char *) PageGetContents(page);
@@ -2399,7 +2434,9 @@ bm25_lookup_dict(Relation index, const BM25SegMeta *seg,
 		bool		found = false;
 
 		CHECK_FOR_INTERRUPTS();		/* between pages, no buffer lock held: safe to let a cancel unwind */
-		buffer = ReadBuffer(index, blk);
+		buffer = bm25_scan_readbuf(index, blk);
+		if (buffer == InvalidBuffer)
+			break;			/* block truncated by a concurrent fts_vacuum: end of chain */
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buffer);
 		ptr = (char *) PageGetContents(page);
@@ -2460,7 +2497,9 @@ bm25_lookup_df(Relation index, const BM25SegMeta *seg,
 		bool		found = false;
 
 		CHECK_FOR_INTERRUPTS();		/* between pages, no buffer lock held: safe to let a cancel unwind */
-		buffer = ReadBuffer(index, blk);
+		buffer = bm25_scan_readbuf(index, blk);
+		if (buffer == InvalidBuffer)
+			break;			/* block truncated by a concurrent fts_vacuum: end of chain */
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buffer);
 		ptr = (char *) PageGetContents(page);
@@ -4612,7 +4651,9 @@ fts_anomalous_docs(PG_FUNCTION_ARGS)
 				BlockNumber next;
 
 				CHECK_FOR_INTERRUPTS();	/* between dict pages, no buffer lock held: safe to unwind */
-				buffer = ReadBuffer(index, blk);
+				buffer = bm25_scan_readbuf(index, blk);
+				if (buffer == InvalidBuffer)
+					break;	/* block truncated by a concurrent fts_vacuum: end of chain */
 				LockBuffer(buffer, BUFFER_LOCK_SHARE);
 				page = BufferGetPage(buffer);
 				ptr = (char *) PageGetContents(page);
@@ -4671,7 +4712,9 @@ fts_anomalous_docs(PG_FUNCTION_ARGS)
 				BlockNumber next;
 
 				CHECK_FOR_INTERRUPTS();	/* between dict pages, no buffer lock held: safe to unwind */
-				buffer = ReadBuffer(index, blk);
+				buffer = bm25_scan_readbuf(index, blk);
+				if (buffer == InvalidBuffer)
+					break;	/* block truncated by a concurrent fts_vacuum: end of chain */
 				LockBuffer(buffer, BUFFER_LOCK_SHARE);
 				page = BufferGetPage(buffer);
 				ptr = (char *) PageGetContents(page);

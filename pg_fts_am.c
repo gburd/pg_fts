@@ -2623,6 +2623,10 @@ bm25_meta_add_segment(Relation index, const BM25SegMeta *seg)
 /* forward decl: bounded merge that reduces the live segment count */
 static void bm25_merge_segments(Relation index);
 static bool bm25_merge_all(Relation index, bool try_parallel);
+/* maintenance serialization (defined in the vacuum/merge section below) */
+static inline void bm25_maintenance_lock(Relation index);
+static inline bool bm25_maintenance_lock_conditional(Relation index);
+static inline void bm25_maintenance_unlock(Relation index);
 
 /*
  * Add a segment, guaranteeing the write cannot fail because the directory is
@@ -3275,7 +3279,16 @@ bm25_page_recyclable(Relation index, Page page)
 	op = BM25PageGetOpaque(page);
 	if (!(op->flags & BM25_FREED))
 		return true;			/* not gated (older free, or in-use race) */
-	return GlobalVisCheckRemovableXid(index, (TransactionId) op->nextblk);
+	/*
+	 * Is the freeing xid old enough that no snapshot can still reference this
+	 * page?  Use the GLOBAL visibility horizon (NULL relation): the per-relation
+	 * form wants the HEAP (an index has no xid horizon -- passing the index trips
+	 * GlobalVisHorizonKindForRel's relkind assert under --enable-cassert, and is
+	 * a latent API misuse in a non-assert build).  The global horizon is a sound
+	 * upper bound -- it may keep a page unrecyclable slightly longer than a
+	 * heap-scoped horizon would, never shorter -- so it is always safe here.
+	 */
+	return GlobalVisCheckRemovableXid(NULL, (TransactionId) op->nextblk);
 }
 
 /* Recycle a chained page list (dict/trigram/posting/data) to the FSM. */
@@ -4916,8 +4929,28 @@ bm25_insert_oversized_as_segment(Relation index, FtsDoc doc, ItemPointer tid)
 	 * letting it grow unbounded toward the cap.  This IS the background
 	 * auto-compaction: no VACUUM or manual fts_merge() is required to stay
 	 * healthy under continuous writes.
+	 *
+	 * The merge frees + recycles the input segments' pages, which is unsafe to
+	 * run concurrently with another flush/merge/compact on this index, so take
+	 * the maintenance mutex.  CONDITIONALLY: this is an opportunistic insert-time
+	 * compaction under only RowExclusiveLock -- if a cleanup is already running
+	 * (autovacuum, fts_merge, or another inserter) just skip; that writer, or the
+	 * next insert/vacuum, keeps nsegments bounded.  (Adding the segment above is
+	 * an extend-only metapage write and needs no mutex; only the recycling merge
+	 * does.)
 	 */
-	bm25_merge_segments(index);
+	if (bm25_maintenance_lock_conditional(index))
+	{
+		PG_TRY();
+		{
+			bm25_merge_segments(index);
+		}
+		PG_FINALLY();
+		{
+			bm25_maintenance_unlock(index);
+		}
+		PG_END_TRY();
+	}
 }
 
 /*
@@ -5069,6 +5102,47 @@ bm25_insert(Relation index, Datum *values, bool *isnull,
 #include "pg_fts_trgm_index.c"
 
 /* ----- vacuum / flush / merge / cost / options ----- */
+
+/*
+ * Maintenance serialization lock (the GIN ginInsertCleanup pattern).
+ *
+ * Every operation that MUTATES the segment directory or frees + recycles a
+ * segment's pages -- bm25_flush_pending, bm25_merge_segments/_all,
+ * bm25_vacuum_compact, bulkdelete's livedocs swap -- must run one-at-a-time per
+ * index.  The obvious candidate, the table/index relation lock, does NOT serve:
+ * autovacuum's index cleanup holds ShareUpdateExclusiveLock on the TABLE while a
+ * user fts_merge()/fts_vacuum() holds it on the INDEX -- different lock tags
+ * that do not conflict -- and an INSERT's oversized-doc segment path holds only
+ * RowExclusiveLock.  So two of these could run at once: one frees + recycles a
+ * segment's dict/posting pages while the other's streaming merge is still
+ * reading them, yielding a garbage read (a SIGSEGV in merge_source_load_page
+ * under heavy concurrent insert+merge+vacuum churn -- the t/006 crash).
+ *
+ * A heavyweight page lock on the metapage block, used for NOTHING else, gives a
+ * per-index mutex independent of the relation lock (exactly how GIN serializes
+ * pending-list cleanup).  Explicit/required maintenance (VACUUM cleanup,
+ * fts_merge, fts_vacuum) takes it blocking; opportunistic maintenance (the
+ * insert-triggered tiered merge) takes it CONDITIONALLY and simply skips when a
+ * cleanup is already running -- another writer or the next insert/vacuum will
+ * compact, so nsegments still stays bounded.
+ */
+static inline void
+bm25_maintenance_lock(Relation index)
+{
+	LockPage(index, BM25_METAPAGE_BLKNO, ExclusiveLock);
+}
+
+static inline bool
+bm25_maintenance_lock_conditional(Relation index)
+{
+	return ConditionalLockPage(index, BM25_METAPAGE_BLKNO, ExclusiveLock);
+}
+
+static inline void
+bm25_maintenance_unlock(Relation index)
+{
+	UnlockPage(index, BM25_METAPAGE_BLKNO, ExclusiveLock);
+}
 
 /*
  * Flush the pending write buffer into a NEW immutable segment.
@@ -5341,6 +5415,13 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	if (stats == NULL)
 		stats = (IndexBulkDeleteResult *) palloc0(sizeof(IndexBulkDeleteResult));
 
+	/* Serialize against a concurrent flush/merge/compact: bulkdelete reads each
+	 * segment's docids (dict + posting pages) and swaps its livedocs pointer --
+	 * both racy with a merge that frees/recycles those pages under a
+	 * non-conflicting relation lock.  Blocking (vacuum must make progress). */
+	bm25_maintenance_lock(index);
+	PG_TRY();
+	{
 	{
 		Buffer		mb = ReadBuffer(index, BM25_METAPAGE_BLKNO);
 
@@ -5515,6 +5596,12 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 		GenericXLogFinish(st);
 		UnlockReleaseBuffer(mb);
 	}
+	}
+	PG_FINALLY();
+	{
+		bm25_maintenance_unlock(index);
+	}
+	PG_END_TRY();
 
 	stats->num_index_tuples = (double) (num_index_tuples - tuples_removed);
 	stats->tuples_removed += (double) tuples_removed;
@@ -5531,28 +5618,41 @@ bm25_vacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 	/* Fold any pending documents into a new segment, then compact segments. */
 	if (!info->analyze_only)
 	{
-		(void) bm25_flush_pending(info->index);
-		bm25_merge_segments(info->index);
-
-		/*
-		 * If the relation carries substantial dead space (physical size well
-		 * above the live pages), reclaim it: compact to one segment reusing
-		 * low blocks, then truncate the free tail.  Gated so routine
-		 * autovacuum does not pay a full rewrite every pass -- only when the
-		 * free tail is a meaningful fraction of the file.
-		 */
+		/* serialize against any concurrent flush/merge/compact on this index
+		 * (a user fts_merge/fts_vacuum, or another autovacuum worker): they take
+		 * different relation locks that do not conflict, so this heavyweight
+		 * page lock is the actual mutex.  Blocking: cleanup should run. */
+		bm25_maintenance_lock(info->index);
+		PG_TRY();
 		{
-			BlockNumber nblocks = RelationGetNumberOfBlocks(info->index);
-			BlockNumber freeblks = 0;
-			BlockNumber b;
+			(void) bm25_flush_pending(info->index);
+			bm25_merge_segments(info->index);
 
-			for (b = 1; b < nblocks; b++)
-				if (GetRecordedFreeSpace(info->index, b) >= BLCKSZ / 2)
-					freeblks++;
-			/* reclaim when >= 25% of the file is free (bloated after merges) */
-			if (nblocks > 16 && freeblks > nblocks / 4)
-				(void) bm25_vacuum_compact(info->index);
+			/*
+			 * If the relation carries substantial dead space (physical size well
+			 * above the live pages), reclaim it: compact to one segment reusing
+			 * low blocks, then truncate the free tail.  Gated so routine
+			 * autovacuum does not pay a full rewrite every pass -- only when the
+			 * free tail is a meaningful fraction of the file.
+			 */
+			{
+				BlockNumber nblocks = RelationGetNumberOfBlocks(info->index);
+				BlockNumber freeblks = 0;
+				BlockNumber b;
+
+				for (b = 1; b < nblocks; b++)
+					if (GetRecordedFreeSpace(info->index, b) >= BLCKSZ / 2)
+						freeblks++;
+				/* reclaim when >= 25% of the file is free (bloated after merges) */
+				if (nblocks > 16 && freeblks > nblocks / 4)
+					(void) bm25_vacuum_compact(info->index);
+			}
 		}
+		PG_FINALLY();
+		{
+			bm25_maintenance_unlock(info->index);
+		}
+		PG_END_TRY();
 	}
 
 	return stats;
@@ -5600,16 +5700,28 @@ fts_merge(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 errmsg("\"%s\" is not an fts index",
 						RelationGetRelationName(index))));
-	done = bm25_flush_pending(index);
-	/*
-	 * Also compact the segment directory to a single optimal segment.  This is
-	 * what makes fts_merge() an explicit "optimize now": after a parallel build
-	 * (which leaves the workers' segments unmerged for speed) or churn, one call
-	 * yields a one-segment index.  The tiered auto-merge deliberately leaves
-	 * several same-size segments, so it is not enough on its own here.
-	 */
-	if (bm25_merge_all(index, true))
-		done = true;
+	/* serialize against a concurrent flush/merge/compact (autovacuum cleanup or
+	 * another fts_merge/fts_vacuum): the index SUEL does not conflict with
+	 * autovacuum's TABLE lock, so this page lock is the mutex.  Blocking. */
+	bm25_maintenance_lock(index);
+	PG_TRY();
+	{
+		done = bm25_flush_pending(index);
+		/*
+		 * Also compact the segment directory to a single optimal segment.  This is
+		 * what makes fts_merge() an explicit "optimize now": after a parallel build
+		 * (which leaves the workers' segments unmerged for speed) or churn, one call
+		 * yields a one-segment index.  The tiered auto-merge deliberately leaves
+		 * several same-size segments, so it is not enough on its own here.
+		 */
+		if (bm25_merge_all(index, true))
+			done = true;
+	}
+	PG_FINALLY();
+	{
+		bm25_maintenance_unlock(index);
+	}
+	PG_END_TRY();
 	index_close(index, ShareUpdateExclusiveLock);
 
 	PG_RETURN_BOOL(done);
@@ -5646,9 +5758,21 @@ fts_vacuum(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 errmsg("\"%s\" is not an fts index",
 						RelationGetRelationName(index))));
-	done = bm25_flush_pending(index);
-	if (bm25_vacuum_compact(index))
-		done = true;
+	/* AccessExclusiveLock on the index blocks scans/inserts on it, but NOT
+	 * autovacuum's cleanup (which locks the table) -- so still take the
+	 * maintenance mutex.  Blocking. */
+	bm25_maintenance_lock(index);
+	PG_TRY();
+	{
+		done = bm25_flush_pending(index);
+		if (bm25_vacuum_compact(index))
+			done = true;
+	}
+	PG_FINALLY();
+	{
+		bm25_maintenance_unlock(index);
+	}
+	PG_END_TRY();
 	index_close(index, AccessExclusiveLock);
 
 	PG_RETURN_BOOL(done);
