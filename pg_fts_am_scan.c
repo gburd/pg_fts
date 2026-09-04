@@ -4069,69 +4069,101 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
  * visible rows survive.  When as_distance is true each result's .score is the
  * ordering distance 1/(1+score).  Returns visible results (palloc'd) sorted by
  * descending score.
+ *
+ * A heavy-delete workload can make more than the over-fetch fraction of the
+ * top candidates invisible, leaving nvis < k.  The amgettuple path retries and
+ * grows on its own, but the fts_search SRF calls this once, so we grow wantk
+ * and re-generate here: double wantk (capped) and retry whenever the loop ends
+ * short AND the last batch was full (ncand == wantk, i.e. more candidates
+ * existed).  If ncand < wantk the corpus is exhausted, so we stop.
  */
 static int
 bm25_topk_visible(Relation index, FtsQuery q, int k, bool as_distance,
 				  ScoredTid **out)
 {
 	ScoredTid  *cand;
-	ScoredTid  *results;
+	ScoredTid  *results = NULL;
 	int			ncand;
 	int			nvis = 0;
 	int			i;
 	int			wantk = Max(k * 4, 64);
+	int			wantk_cap;
 	Snapshot	snap = GetActiveSnapshot();
 	Relation	heap;
 	IndexFetchTableData *fetch;
 	uint32		gen0;
-	int			gen_retries = 0;
 
-	/*
-	 * Candidate generation reads segment pages under only per-page SHARE locks
-	 * off a metapage snapshot; a concurrent merge/vacuum can free + recycle
-	 * those pages mid-scan (the A1 race).  Bracket it with the directory
-	 * generation: if it moved, discard the candidates and redo from a fresh
-	 * snapshot (bounded).  The subsequent MVCC visibility loop reads the heap,
-	 * not the index, so it needs no guard.
-	 */
-	do
-	{
-		gen0 = bm25_read_meta_generation(index);
-		ncand = bm25_topk_candidates_range(index, q, wantk, 0, UINT64_MAX, &cand);
-		if (bm25_read_meta_generation(index) == gen0)
-			break;
-		if (cand)
-			pfree(cand);
-	} while (gen_retries++ < 10);
 	if (k < 1)
 		k = 1;
+	wantk_cap = Max(k * 64, 4096);
 
-	results = (ScoredTid *) palloc(Max(k, 1) * sizeof(ScoredTid));
-	heap = table_open(index->rd_index->indrelid, AccessShareLock);
-#if PG_VERSION_NUM >= 190000
-	fetch = table_index_fetch_begin(heap, SO_NONE);
-#else
-	fetch = table_index_fetch_begin(heap);
-#endif
-	for (i = 0; i < ncand && nvis < k; i++)
+	for (;;)
 	{
-		ItemPointerData tid = cand[i].tid;
-		bool		call_again = false;
-		bool		all_dead = false;
-		TupleTableSlot *slot = table_slot_create(heap, NULL);
+		int			gen_retries = 0;
 
-		if (table_index_fetch_tuple(fetch, &tid, snap, slot,
-									&call_again, &all_dead))
+		/*
+		 * Candidate generation reads segment pages under only per-page SHARE
+		 * locks off a metapage snapshot; a concurrent merge/vacuum can free +
+		 * recycle those pages mid-scan (the A1 race).  Bracket it with the
+		 * directory generation: if it moved, discard the candidates and redo
+		 * from a fresh snapshot (bounded).  The subsequent MVCC visibility
+		 * loop reads the heap, not the index, so it needs no guard.
+		 */
+		cand = NULL;
+		do
 		{
-			results[nvis] = cand[i];
-			if (as_distance)
-				results[nvis].score = 1.0 / (1.0 + cand[i].score);
-			nvis++;
+			gen0 = bm25_read_meta_generation(index);
+			ncand = bm25_topk_candidates_range(index, q, wantk, 0, UINT64_MAX, &cand);
+			if (bm25_read_meta_generation(index) == gen0)
+				break;
+			if (cand)
+				pfree(cand);
+			cand = NULL;
+		} while (gen_retries++ < 10);
+
+		/* Drop any results from a prior (short) attempt before re-filling. */
+		if (results)
+			pfree(results);
+		results = (ScoredTid *) palloc(k * sizeof(ScoredTid));
+		nvis = 0;
+
+		heap = table_open(index->rd_index->indrelid, AccessShareLock);
+#if PG_VERSION_NUM >= 190000
+		fetch = table_index_fetch_begin(heap, SO_NONE);
+#else
+		fetch = table_index_fetch_begin(heap);
+#endif
+		for (i = 0; i < ncand && nvis < k; i++)
+		{
+			ItemPointerData tid = cand[i].tid;
+			bool		call_again = false;
+			bool		all_dead = false;
+			TupleTableSlot *slot = table_slot_create(heap, NULL);
+
+			if (table_index_fetch_tuple(fetch, &tid, snap, slot,
+										&call_again, &all_dead))
+			{
+				results[nvis] = cand[i];
+				if (as_distance)
+					results[nvis].score = 1.0 / (1.0 + cand[i].score);
+				nvis++;
+			}
+			ExecDropSingleTupleTableSlot(slot);
 		}
-		ExecDropSingleTupleTableSlot(slot);
+		table_index_fetch_end(fetch);
+		table_close(heap, AccessShareLock);
+		if (cand)
+			pfree(cand);
+
+		/*
+		 * Enough visible rows, or the corpus is exhausted (ncand < wantk means
+		 * generation returned fewer than we asked for -- no more candidates),
+		 * or we have hit the growth cap: stop.  Otherwise double wantk and redo.
+		 */
+		if (nvis >= k || ncand < wantk || wantk >= wantk_cap)
+			break;
+		wantk = Min(wantk * 2, wantk_cap);
 	}
-	table_index_fetch_end(fetch);
-	table_close(heap, AccessShareLock);
 
 	*out = results;
 	return nvis;

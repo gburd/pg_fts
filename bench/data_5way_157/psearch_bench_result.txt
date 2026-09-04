@@ -1,0 +1,68 @@
+=== pg_search (ParadeDB / Tantivy BM25) benchmark ===
+
+Versions
+--------
+paradedb git commit: c74bcde7bf6f6e44516d81f18350f2725d14fd5f
+pgrx version: 0.19.2 (matches paradedb/Cargo.toml pin pgrx = "=0.19.2")
+pgvector version: v0.8.5 (git commit 159b79aaad5983fb7459c1e3df2897fbb2d11788)
+pg_search version installed: 0.25.6
+PostgreSQL: 17.10, built from source at /nvme/pg17
+Rows loaded: 2188038 (bench.docs)
+
+Build note: pg_search release build failed to link with "unable to find
+library -lopenblas" until `sudo dnf install -y openblas-devel` was run;
+retried cargo pgrx install --release and it succeeded.
+
+Query forms used
+-----------------
+CREATE INDEX docs_ps ON docs USING bm25 (id, body) WITH (key_field='id');
+
+rare/mid/common k10/k100 (ranked):
+  SELECT id FROM docs WHERE body @@@ 'slovakia' ORDER BY paradedb.score(id) DESC LIMIT 10;
+  SELECT id FROM docs WHERE body @@@ 'hungary'  ORDER BY paradedb.score(id) DESC LIMIT 10;
+  SELECT id FROM docs WHERE body @@@ 'year'     ORDER BY paradedb.score(id) DESC LIMIT 10;
+  SELECT id FROM docs WHERE body @@@ 'year'     ORDER BY paradedb.score(id) DESC LIMIT 100;
+
+count:
+  SELECT count(*) FROM docs WHERE body @@@ 'year';
+
+AND (boolean, via tantivy query-string passed straight to @@@):
+  SELECT id FROM docs WHERE body @@@ 'slovakia AND hungary' ORDER BY paradedb.score(id) DESC LIMIT 10;
+
+phrase (pg_search's @@@ 'text' form does not accept quoted phrases directly;
+used pdb.parse() with a field-qualified Tantivy query string, which does):
+  SELECT id FROM docs WHERE body @@@ pdb.parse('body:"united states"') ORDER BY paradedb.score(id) DESC LIMIT 10;
+
+prefix (Tantivy wildcard prefix via pdb.parse()):
+  SELECT id FROM docs WHERE body @@@ pdb.parse('body:hung*') ORDER BY paradedb.score(id) DESC LIMIT 10;
+
+All ranked/count/AND/phrase/prefix queries were confirmed to return the
+expected row counts before timing (10, 10, 10, 100, 495569, 10 of 3059 total,
+10 of 362060 total, 10 of 7535 total respectively).
+
+Index build
+-----------
+CREATE INDEX build time: 120.877 s (2m 0.877s)
+Index size (docs_ps): 2935 MB (3,077,398,528 bytes)
+VACUUM (FREEZE, ANALYZE) docs run after index build.
+
+Latency (median of 5, warm, ms)
+--------------------------------
+rare k10 ('slovakia'):        2.374 ms
+mid  k10 ('hungary'):         2.293 ms
+common k10 ('year'):          2.267 ms
+common k100 ('year'):         4.127 ms
+count ('year'):               16.312 ms
+AND ('slovakia AND hungary'): 3.663 ms
+phrase ('united states'):     24.844 ms
+prefix ('hung*'):             2.185 ms
+
+Raw per-run times (ms), in run order:
+rare_k10:    2.731, 2.469, 2.374, 2.281, 2.294
+mid_k10:     2.370, 2.310, 2.292, 2.293, 2.246
+common_k10:  2.370, 2.293, 2.267, 2.211, 2.185
+common_k100: 4.031, 4.136, 4.124, 4.173, 4.127
+count:       16.635, 16.241, 16.312, 16.392, 16.257
+AND:         4.159, 3.804, 3.663, 3.596, 3.535
+phrase:      24.768, 24.959, 24.956, 24.773, 24.844
+prefix:      2.882, 2.479, 2.185, 2.166, 2.100

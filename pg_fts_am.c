@@ -5321,6 +5321,7 @@ static sm_t *
 bm25_segment_docids(Relation index, const BM25SegMeta *seg)
 {
 	sm_t	   *seen = sm_create(256);
+	sm_t *volatile seen_v;
 	BlockNumber blk = seg->dictstart;
 	uint64	   *ids = NULL;
 	int			nids = 0;
@@ -5331,6 +5332,13 @@ bm25_segment_docids(Relation index, const BM25SegMeta *seg)
 				(errcode(ERRCODE_OUT_OF_MEMORY),
 				 errmsg("out of memory building bm25 tombstone map")));
 
+	/* seen is a libc-malloc sparsemap: free it if the page reads / bulk add
+	 * below throw, else it would leak past transaction abort.  volatile: the
+	 * pointer is rewritten inside PG_TRY (sm_add_many_grow may realloc) and read
+	 * in PG_FINALLY. */
+	seen_v = seen;
+	PG_TRY();
+	{
 	/*
 	 * Collect EVERY posting's docid across all terms into one array, then do a
 	 * SINGLE bulk add.  A high-vocabulary segment has millions of low-frequency
@@ -5384,11 +5392,28 @@ bm25_segment_docids(Relation index, const BM25SegMeta *seg)
 	}
 
 	if (nids > 0 && !sm_add_many_grow(&seen, ids, nids))
+	{
+		/* sm_add_many_grow updates *map even on a partial grow-then-fail, so the
+		 * live pointer is `seen`, not the pre-call value; resync BEFORE the throw
+		 * so PG_FINALLY frees the current (not a freed-by-realloc) map. */
+		seen_v = seen;
 		ereport(ERROR,
 				(errcode(ERRCODE_OUT_OF_MEMORY),
 				 errmsg("out of memory building bm25 livedocs set")));
+	}
+	seen_v = seen;			/* sm_add_many_grow may realloc: resync cleanup ptr */
 	if (ids)
 		pfree(ids);
+	seen_v = NULL;			/* success: ownership passes to the caller, do not free */
+	}
+	PG_FINALLY();
+	{
+		/* runs on error only (seen_v NULLed on the success path above); frees the
+		 * libc-malloc map before FINALLY re-throws */
+		if (seen_v)
+			sm_free((sm_t *) seen_v);
+	}
+	PG_END_TRY();
 	return seen;
 }
 
@@ -5411,6 +5436,13 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	uint32		s;
 	int64		num_index_tuples = 0;
 	int64		tuples_removed = 0;
+
+	/* sm_create() uses libc malloc (no palloc allocator installed), so an
+	 * ereport(ERROR) between create and sm_free would leak past transaction
+	 * abort.  Track the live maps here so PG_FINALLY frees them on error too.
+	 * volatile: pointers are written inside PG_TRY, read in PG_FINALLY. */
+	sm_t *volatile seen_v = NULL;
+	sm_t *volatile dead_v = NULL;
 
 	if (stats == NULL)
 		stats = (IndexBulkDeleteResult *) palloc0(sizeof(IndexBulkDeleteResult));
@@ -5446,7 +5478,9 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 			continue;
 
 		seen = bm25_segment_docids(index, sg);
+		seen_v = seen;
 		dead = sm_create(256);
+		dead_v = dead;
 		if (dead == NULL)
 			ereport(ERROR,
 					(errcode(ERRCODE_OUT_OF_MEMORY),
@@ -5478,9 +5512,13 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 			}
 			/* bulk O(N) add; one-at-a-time sm_add_grow is O(N^2) at scale */
 			if (ncarry > 0 && !sm_add_many_grow(&dead, carry, ncarry))
+			{
+				dead_v = dead;	/* resync before throw: *map may have been realloc'd */
 				ereport(ERROR,
 						(errcode(ERRCODE_OUT_OF_MEMORY),
 						 errmsg("out of memory building bm25 tombstone set")));
+			}
+			dead_v = dead;		/* sm_add_many_grow may realloc: resync cleanup ptr */
 			ndead += ncarry;
 			if (carry)
 				pfree(carry);
@@ -5521,14 +5559,19 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 				}
 			}
 			if (nnew > 0 && !sm_add_many_grow(&dead, newdead, nnew))
+			{
+				dead_v = dead;	/* resync before throw: *map may have been realloc'd */
 				ereport(ERROR,
 						(errcode(ERRCODE_OUT_OF_MEMORY),
 						 errmsg("out of memory building bm25 tombstone set")));
+			}
+			dead_v = dead;		/* sm_add_many_grow may realloc: resync cleanup ptr */
 			ndead += nnew;
 			if (newdead)
 				pfree(newdead);
 		}
 		sm_free(seen);
+		seen_v = NULL;
 
 		oldlivedocs = sg->livedocs;
 		oldlen = sg->livedocslen;
@@ -5545,6 +5588,7 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 										 newlen);
 			}
 			sm_free(dead);
+			dead_v = NULL;
 
 
 			{
@@ -5599,6 +5643,10 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	}
 	PG_FINALLY();
 	{
+		if (seen_v)
+			sm_free((sm_t *) seen_v);
+		if (dead_v)
+			sm_free((sm_t *) dead_v);
 		bm25_maintenance_unlock(index);
 	}
 	PG_END_TRY();

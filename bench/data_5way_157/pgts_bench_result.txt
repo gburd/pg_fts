@@ -1,0 +1,71 @@
+pg_textsearch (Timescale) BM25 index benchmark — pg_textsearch host
+======================================================================
+
+Build
+-----
+git commit built: f940210 (Dispatch compaction requests at commit, #477)
+Repo: https://github.com/timescale/pg_textsearch.git
+PostgreSQL: 17.10, built from source at /nvme/pg17
+Extension version installed: pg_textsearch 1.5.0-dev
+
+shared_preload_libraries required: YES
+  Added to /nvme/pgdata/postgresql.conf:
+    shared_preload_libraries = 'pg_textsearch'
+  followed by: pg_ctl -D /nvme/pgdata -w restart
+
+Corpus / table
+---------------
+Table: bench.docs(id bigint, title text, body text)
+Rows loaded: 2,188,038 (first N rows of /nvme/wiki.tsv, wikimedia/wikipedia 20231101.en)
+Rows with NULL/empty body: 0
+
+Exact CREATE INDEX statement used
+----------------------------------
+CREATE INDEX docs_pgts ON docs USING bm25(body) WITH (text_config='english');
+(followed by: VACUUM (FREEZE, ANALYZE) docs;)
+
+Index build notes:
+  NOTICE:  BM25 index build started for relation docs_pgts
+  NOTICE:  Using text search configuration: english
+  NOTICE:  Using index options: k1=1.20, b=0.75
+  NOTICE:  parallel index build: launched 2 of 2 requested workers
+  NOTICE:  BM25 index build completed: 2188031 documents, avg_length=313.91
+  (2188031 documents indexed vs 2188038 rows loaded: 7 docs had all-overlong
+   tokens dropped via "word is too long to be indexed" (>2047 chars), not
+   NULL/empty bodies -- 0 rows have NULL/empty body.)
+
+Build time: 498 seconds (8m 18s)
+Index size (pg_relation_size('docs_pgts')): 1885 MB (1,976,721,408 bytes)
+
+Exact ranked query form used
+-----------------------------
+SELECT id FROM docs ORDER BY body <@> '<term>' LIMIT <k>;
+(implicit index auto-detection via the <@> operator; index name not needed
+ since docs_pgts is the only bm25 index on docs.body)
+
+Query latency (median of last 4 of 5 runs; \timing on via psql -f, warm cache)
+--------------------------------------------------------------------------------
+Term            band     k     rows_returned   median_ms
+slovakia        rare     10    10              0.864
+hungary         mid      10    10              1.074
+year            common   10    10              10.977
+year            common   100   100              13.359
+
+All queries returned the expected non-empty row counts (10 for k=10, 100 for k=100).
+No band returned fewer rows than requested.
+
+Raw \timing values (ms), in run order, per query:
+  slovakia k10: 3.793, 0.922, 0.867, 0.847, 0.861   (first run excluded as warmup)
+  hungary  k10: 1.481, 1.121, 1.085, 1.062, 1.059
+  year     k10: 12.282, 10.982, 10.972, 10.993, 10.966
+  year     k100: 14.368, 13.376, 13.400, 13.342, 13.259
+
+Environment notes
+------------------
+- Host disk: initially provisioned with the WRONG volume (40GB EBS as
+  /nvme); this filled during corpus load. Fixed by unmounting the 40GB
+  disk and mkfs.xfs + mounting the actual 884.8GB instance-store NVMe
+  (/dev/nvme2n1) at /nvme, then re-provisioning PostgreSQL 17.10 from
+  source and re-downloading the Wikipedia corpus from scratch.
+- shared_buffers = 64GB, maintenance_work_mem = 2GB, max_wal_size = 16GB
+- Socket: /tmp, database: bench

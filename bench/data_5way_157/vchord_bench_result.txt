@@ -1,0 +1,54 @@
+VectorChord-bm25 (vchord) benchmark result
+============================================
+Host: EC2 (Amazon Linux 2023), 16 vCPU, 128GB RAM, /nvme = dedicated NVMe instance store (884.8G)
+PostgreSQL: 17.10, built from source, installed at /nvme/pg17
+Corpus: first 2,188,038 rows of /nvme/wiki.tsv (Wikipedia id/title/body), loaded into bench.docs
+
+vchord git commit: 14fc2a332b665e1f38eb5d59bb85c8ac1a00490d
+cargo-pgrx version: 0.17.0 (pinned by vchord_bm25 Cargo.toml: pgrx = "=0.17.0")
+
+Build steps that worked:
+  cargo pgrx init --pg17 /nvme/pg17/bin/pg_config
+  cargo pgrx install --release --pg-config /nvme/pg17/bin/pg_config
+  (cargo build --release --features "simd/init pg17" --no-default-features, invoked internally by cargo-pgrx)
+  postgresql.conf: shared_preload_libraries = 'vchord_bm25'  (required restart before CREATE EXTENSION)
+
+Schema / index setup:
+  CREATE EXTENSION vchord_bm25 CASCADE;
+  ALTER TABLE docs ADD COLUMN tv tsvector;
+  UPDATE docs SET tv = to_tsvector('english', coalesce(title,'')||' '||coalesce(body,''));
+  VACUUM docs;
+  CREATE INDEX docs_vc ON docs USING bm25(tv bm25_ops);
+  VACUUM (FREEZE, ANALYZE) docs;
+
+Exact ranked query form (verified against /nvme/vchord/tests/sqllogictest/*.slt):
+  SET "bm25.limit" = <k>;   -- must be >= LIMIT k, controls how many candidates the bm25 index AM returns
+  SELECT id FROM docs
+  ORDER BY tv <&> to_bm25query(to_tsvector('english', '<term>'), 'docs_vc')
+  LIMIT <k>;
+
+  Note: to_bm25query signature is to_bm25query(tsvector, regclass) -- i.e. (query_tsvector, index_name),
+  NOT (index, query_str). The <&> operator computes a *negative* bm25 score (ORDER BY ascending = most relevant first).
+
+Row count loaded: 2,188,038 (confirmed via SELECT count(*) FROM docs)
+
+Index build:
+  build time: 57 s
+  index size: 2905 MB (pg_relation_size('docs_vc'))
+
+Ranked latency, median of 5 warm runs (psql \timing, EXPLAIN ANALYZE confirmed Index Scan using docs_vc,
+not Seqscan; all result sets non-empty):
+
+  band     term       k    median_ms
+  rare     slovakia   10   2.270
+  mid      hungary    10   2.531
+  common   year       10   4.057
+  common   year       100  24.546
+
+  (rare k10 first-run outlier 8.025ms discarded by median; remaining 4 runs were 2.881/2.270/2.223/2.249 ms -- cold cache/plan warmup on first execution)
+
+Raw per-run timings (ms), in execution order:
+  rare k10:      8.025, 2.881, 2.270, 2.223, 2.249
+  mid k10:       3.650, 2.836, 2.531, 2.497, 2.480
+  common k10:    4.673, 4.120, 4.050, 4.057, 4.031
+  common k100:  26.459, 24.858, 24.546, 24.424, 24.423
