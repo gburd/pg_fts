@@ -168,34 +168,37 @@ they are not rediscovered. Ordered roughly by value.
    leading on query-language breadth and index-native COUNT. The follow-up is
    the format-v3 codec work (#4), not more benchmarking.
 
-11. **`fts_search` SRF under-fetch safety.**
+11. **[DONE 2026-09-01] `fts_search` SRF under-fetch safety.**
     The top-k over-fetch is tight (`k*2`). This is safe for the ordering scan
-    (which retries), but the `fts_search()` SRF does not retry — under a
+    (which retries), but the `fts_search()` SRF did not retry — under a
     heavy-delete workload where more than half the top rows are invisible it
-    could return fewer than `k`. A small internal retry in `bm25_topk_visible`
-    (grow the requested count and re-scan when `nvis < k`) would make tight
-    over-fetch fully safe everywhere.
+    could return fewer than `k`. FIXED: `bm25_topk_visible` grows `wantk` and
+    re-generates when the visibility loop ends with `nvis < k` and more
+    candidates existed (bounded growth cap), keeping the generation-guard retry
+    inside each attempt.
 
 ## Correctness / robustness (lower urgency)
 
-12b. **Reserved query keywords cannot be searched as literal words.**
-    The query lexer recognizes `and`/`or`/`not`/`near` as operators
-    unconditionally, so `to_ftsquery('english','and & x')` errors and even a
-    phrase `"and"` fails (`pg_fts_query.c` keyword recognition runs before
-    phrase-term handling).  Standard `to_tsquery` treats a bare `and` as a
-    lexeme (then drops it as a stopword).  A fix would suppress keyword
-    recognition inside a phrase/NEAR operand context (a `lex_terms_as_words`
-    flag threaded into the lexer).  Low urgency: on natural-language corpora
-    these words are stopwords and are dropped anyway (v1.3.1 stopword fix), so
-    the only loss is searching for the literal token in a non-stopword config.
-    Reported alongside the stopword-asymmetry bug (fixed in 1.3.1) as a distinct,
-    minor issue.
+12b. **[DONE 2026-09-01] Reserved query keywords cannot be searched as literal words.**
+    The query lexer recognized `and`/`or`/`not`/`near` as operators
+    unconditionally, so a phrase `"the and clause"` or `NEAR(near y, 2)` errored.
+    FIXED: keyword tokens now carry their folded text, and the phrase + NEAR
+    operand-collection loops accept keyword kinds as literal terms (matching
+    to_tsquery, which lexes them as lexemes).  Regression tests
+    (`kw_phrase_*`/`kw_or_hit`/`kw_in_near_hit`, `simple` config so the words are
+    not dropped as stopwords).  The ambiguous BARE top-level `and & x` case is
+    deliberately left as-is (changing top-level keyword handling risks breaking
+    real AND queries; low value since these are stopwords on NL corpora).
 
-12. **Sparsemap error-path leaks.**
-    `sm_create` / blob buffers are palloc/libc allocations; on an `ereport`
-    between create and free they leak for the duration of the statement
-    (reclaimed at transaction/backend end). A `PG_TRY`/`PG_FINALLY` around the
-    few error-prone spots would tidy this. Low severity — rare error paths only.
+12. **[DONE 2026-09-01] Sparsemap error-path leaks.**
+    `sm_create` maps (libc malloc, not palloc) in `bm25_bulkdelete` /
+    `bm25_segment_docids` leaked on an `ereport` between create and `sm_free`.
+    FIXED with PG_TRY/PG_FINALLY (volatile cleanup pointers, resynced before
+    each throw because `sm_add_many_grow` reallocs `*map` even on partial
+    grow-then-fail).  `bm25_read_blob` buffers are palloc'd (auto-freed), left
+    alone.  Separately, a genuine sparsemap UPSTREAM bug (`__sm_insert_data`
+    offset/length convention mismatch, a latent masked over-write) was found and
+    reported to the sparsemap project.
 
 ## Managed-service readiness (RDS / Aurora PostgreSQL candidacy)
 

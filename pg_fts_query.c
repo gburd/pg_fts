@@ -226,15 +226,34 @@ lex_raw(ParseState *st)
 	 * the raw run under Unicode lowercasing, so keyword checks use flen after. */
 	folded = fold_token(st->buf + start, flen, &flen);
 
-	/* keyword recognition (ASCII, case already folded) */
+	/* keyword recognition (ASCII, case already folded).  Keyword tokens ALSO
+	 * carry their folded text so a phrase/NEAR operand context can treat them as
+	 * literal terms (a bare `and`/`or`/`not`/`near` inside "..." or NEAR(...) is a
+	 * word, not an operator -- matching to_tsquery, which lexes them as lexemes). */
 	if (flen == 3 && memcmp(folded, "and", 3) == 0)
+	{
 		tok.kind = TOK_AND;
+		tok.term = folded;
+		tok.termlen = flen;
+	}
 	else if (flen == 2 && memcmp(folded, "or", 2) == 0)
+	{
 		tok.kind = TOK_OR;
+		tok.term = folded;
+		tok.termlen = flen;
+	}
 	else if (flen == 3 && memcmp(folded, "not", 3) == 0)
+	{
 		tok.kind = TOK_NOT;
+		tok.term = folded;
+		tok.termlen = flen;
+	}
 	else if (flen == 4 && memcmp(folded, "near", 4) == 0)
+	{
 		tok.kind = TOK_NEAR;
+		tok.term = folded;
+		tok.termlen = flen;
+	}
 	else
 	{
 		tok.kind = TOK_TERM;
@@ -367,7 +386,15 @@ parse_primary(ParseState *st)
 
 			if (p.kind == TOK_QUOTE)
 				break;
-			if (p.kind != TOK_TERM)
+			/* inside "...", a bare and/or/not/near is a literal word, not an
+			 * operator: accept keyword tokens (they carry their folded text). */
+			if (p.kind != TOK_TERM && p.kind != TOK_AND && p.kind != TOK_OR &&
+				p.kind != TOK_NOT && p.kind != TOK_NEAR)
+			{
+				st->error = true;
+				break;
+			}
+			if (p.term == NULL)	/* defensive: only real punctuation lacks text */
 			{
 				st->error = true;
 				break;
@@ -402,7 +429,10 @@ parse_primary(ParseState *st)
 				p.kind == TOK_EOF)
 				break;
 			p = next_token(st);
-			if (p.kind != TOK_TERM)
+			/* inside NEAR(...), and/or/not/near are literal words (they carry
+			 * their folded text), not operators. */
+			if ((p.kind != TOK_TERM && p.kind != TOK_AND && p.kind != TOK_OR &&
+				 p.kind != TOK_NOT && p.kind != TOK_NEAR) || p.term == NULL)
 			{
 				st->error = true;
 				return;
