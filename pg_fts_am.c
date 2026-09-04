@@ -2052,212 +2052,418 @@ bm25_doclen_lookup(const BM25Doclens *d, uint64 docid)
 	}
 	return 0;
 }
-
 /* ---- cursored doclen sidecar lookup (scan path) ----------------------------
  *
- * The bulk bm25_doclens_load reads a WHOLE segment's sidecar up front, which is
- * exactly what the MERGE wants (it reads every doc sequentially).  A ranked/@@@
- * scan, though, scores docids scattered across the whole docid space (a common
- * term is ~1 posting per N docids), and doclen no longer travels with the
- * posting -- so a per-posting page-walk cursor reads ~1 buffer per scored
- * posting, i.e. essentially the entire sidecar chain per query (the 1.5.3
- * benchmark: sidecar `alpha` = 16,887 buffers/query vs inline 1,432).
+ * The doclen sidecar (v4) stores one quantized length byte per doc on a
+ * BM25_DOCLEN page chain (128-doc blocks).  A ranked scan needs a doc's length
+ * to score it, but doclen no longer travels with the posting, so the sidecar
+ * must be probed by docid.  Two failed approaches bracket this one:
+ *   - per-posting page walk (<=1.5.3): ~1 buffer per scored posting -> whole
+ *     chain per query (16,887 buffers on a common term).
+ *   - decode the WHOLE segment sidecar once per scan (1.5.4-1.5.7): a fixed
+ *     ~18ms tax per ranked scan on a 2.19M-doc segment (534 page reads + a
+ *     FOR-unpack of every block) that dwarfs rare/mid-term scoring -- the
+ *     1.5.7 5-way regression (rare ranked 25ms vs 1.6ms inline).
  *
- * Fix: decode the whole segment sidecar ONCE per backend into a sorted
- * (docid,byte) array cached in rd_indexcxt (BM25DirCacheEntry, keyed by
- * doclenstart + metapage generation), then answer every lookup with an
- * in-RAM binary search -- 0 buffer reads after the first build.  The cursor is
- * now a thin handle onto that cached array.  A v3 (inline-doclen) segment has
+ * This is a PAGE-DIRECTORY cursor: a tiny (first_docid, blk) entry per sidecar
+ * PAGE, built by walking only page HEADERS (no block decode), cached in the
+ * relcache (rd_amcache, ONE contiguous chunk, keyed by metapage generation) so
+ * it is built at most once per backend, not per scan.  A lookup binary-searches
+ * the directory to the covering page, reads+decodes ONLY that page, and keeps
+ * it resident (the WAND scan visits docids ascending, so consecutive lookups
+ * usually hit the resident page).  Cost: O(log pages) + ~1 page read per ~128
+ * scored docids, with 0 up-front full decode.  A v3 (inline-doclen) segment has
  * no sidecar (start == Invalid); its cursor returns 0 and the caller reads the
- * inline posting doclen instead.
+ * inline posting doclen.
  */
 typedef struct BM25DoclenCursor
 {
 	Relation	index;
 	BlockNumber start;			/* sidecar chain head; Invalid = v3 (inline) */
-	const uint64 *docids;		/* borrowed from the scan-local cache (ascending) */
-	const uint8 *bytes;			/* parallel quantized length bytes */
-	int			n;
-	int			hint;			/* last hit index; WAND lookups ascend, so resume
-								 * the search from here (near-O(1) amortized) */
-	bool		owned;			/* true: no scan cache -> cursor decoded its own
-								 * arrays and must free them at scan end */
+	const uint64 *dir_docid;	/* per-page first docid, ascending (borrowed) */
+	const BlockNumber *dir_blk;	/* per-page block number (parallel) */
+	int			dir_n;			/* directory entries (= sidecar pages) */
+	int			dir_hint;		/* last page index hit (ascending-resume) */
+	/* one resident decoded page (a sidecar PAGE holds many 128-doc blocks; size
+	 * the resident arrays to the max docs a page can hold and decode the whole
+	 * page).  Heap-allocated once at init to keep the cursor struct small. */
+	BlockNumber res_blk;		/* block currently decoded, or Invalid */
+	uint64	   *res_docid;		/* docids on the resident page (palloc'd) */
+	uint8	   *res_byte;		/* parallel quantized bytes (palloc'd) */
+	int			res_n;			/* docs decoded on the resident page */
+	int			res_cap;		/* capacity of res_docid/res_byte */
 } BM25DoclenCursor;
 
 /*
- * Relation-level decoded-doclen cache.  Decode the whole segment sidecar ONCE
- * per backend into a sorted (docid,byte) array in rd_indexcxt and binary-search
- * it in RAM; rebuilt only when the metapage `generation` moves (a merge/vacuum
- * recycled pages).
+ * Relation-level doclen page-directory cache (ONE contiguous chunk, the
+ * rd_amcache single-chunk contract).  Layout: header, then for each live
+ * sidecar segment its (first_docid[], blk[]) page directory, packed back to
+ * back.  Rebuilt only when the metapage `generation` moves.  The whole thing is
+ * a few KB (one 12-byte entry per sidecar PAGE, ~534 for a 2.19M-doc segment),
+ * so a single palloc satisfies rd_amcache's "single chunk, pfree()d wholesale
+ * on relcache invalidation" rule (the 1.5.4 20MB multi-chunk decoded array
+ * violated it -- this does not).
  */
-typedef struct BM25DirCacheEntry
+typedef struct BM25DoclenDir
 {
-	BlockNumber start;			/* segment doclenstart this entry describes */
-	uint64	   *docids;			/* ascending segment doclens, decoded once */
-	uint8	   *bytes;			/* parallel quantized length bytes */
-	int			n;
-	bool		built;			/* docids/bytes populated (n may legitimately be 0) */
-} BM25DirCacheEntry;
+	BlockNumber start;			/* segment doclenstart this directory describes */
+	int			n;				/* number of pages (entries) */
+	int			docid_off;		/* uint64 index into the packed docid[] region */
+	int			blk_off;		/* BlockNumber index into the packed blk[] region */
+} BM25DoclenDir;
 
-typedef struct BM25DirCache
+typedef struct BM25DoclenDirCache
 {
-	int			n;
-	int			cap;
-	BM25DirCacheEntry *ent;
-} BM25DirCache;
+	uint32		generation;		/* metapage generation this cache was built at */
+	int			nsegs;
+	int			ndocid;			/* total entries across all segs (docid[] len) */
+	BM25DoclenDir segs[BM25_MAX_SEGMENTS];
+	/* packed regions follow in the SAME allocation: uint64 docid[ndocid] then
+	 * BlockNumber blk[ndocid].  Accessed via the *_off indices above. */
+	uint64		data[FLEXIBLE_ARRAY_MEMBER];
+} BM25DoclenDirCache;
+
+#define BM25_DOCLENDIR_DOCIDS(dc) ((dc)->data)
+#define BM25_DOCLENDIR_BLKS(dc)   ((BlockNumber *) ((dc)->data + (dc)->ndocid))
+
+/* Walk ONE segment's sidecar chain reading only page headers, appending a
+ * (first_docid, blk) entry per page into docid[]/blk[] starting at *pos.
+ * Returns the entry count for this segment. */
+static int
+bm25_doclendir_scan_seg(Relation index, BlockNumber start,
+						uint64 *docid, BlockNumber *blk, int cap, int *pos)
+{
+	BlockNumber b = start;
+	BlockNumber nblocks = RelationGetNumberOfBlocks(index);
+	uint32		visited = 0;
+	int			n = 0;
+
+	while (b != InvalidBlockNumber && *pos < cap)
+	{
+		Buffer		buf;
+		Page		page;
+		char	   *ptr,
+				   *end;
+		BlockNumber next;
+
+		CHECK_FOR_INTERRUPTS();
+		if (b >= nblocks || visited++ > nblocks)
+			break;
+		buf = ReadBuffer(index, b);
+		LockBuffer(buf, BUFFER_LOCK_SHARE);
+		page = BufferGetPage(buf);
+		if (PageIsNew(page) || !(BM25PageGetOpaque(page)->flags & BM25_DOCLEN))
+		{
+			UnlockReleaseBuffer(buf);
+			break;
+		}
+		ptr = (char *) page + MAXALIGN(SizeOfPageHeaderData);
+		end = (char *) page + ((PageHeader) page)->pd_lower;
+		next = BM25PageGetOpaque(page)->nextblk;
+		/* the page's first docid = its first block's first_docid */
+		if (ptr + sizeof(BM25DoclenBlockHdr) <= end)
+		{
+			BM25DoclenBlockHdr *bh = (BM25DoclenBlockHdr *) ptr;
+
+			if (bh->count > 0 && bh->count <= BM25_BLOCK_SIZE)
+			{
+				docid[*pos] = ((uint64) bh->first_docid_hi << 32) | bh->first_docid_lo;
+				blk[*pos] = b;
+				(*pos)++;
+				n++;
+			}
+		}
+		UnlockReleaseBuffer(buf);
+		b = next;
+	}
+	return n;
+}
+
+/* Count sidecar pages in a segment (header-only walk), to size the cache. */
+static int
+bm25_doclendir_count_seg(Relation index, BlockNumber start)
+{
+	BlockNumber b = start;
+	BlockNumber nblocks = RelationGetNumberOfBlocks(index);
+	uint32		visited = 0;
+	int			n = 0;
+
+	while (b != InvalidBlockNumber)
+	{
+		Buffer		buf;
+		Page		page;
+		BlockNumber next;
+
+		CHECK_FOR_INTERRUPTS();
+		if (b >= nblocks || visited++ > nblocks)
+			break;
+		buf = ReadBuffer(index, b);
+		LockBuffer(buf, BUFFER_LOCK_SHARE);
+		page = BufferGetPage(buf);
+		if (PageIsNew(page) || !(BM25PageGetOpaque(page)->flags & BM25_DOCLEN))
+		{
+			UnlockReleaseBuffer(buf);
+			break;
+		}
+		next = BM25PageGetOpaque(page)->nextblk;
+		n++;
+		UnlockReleaseBuffer(buf);
+		b = next;
+	}
+	return n;
+}
 
 /*
- * Find (or make room for) the SCAN-LOCAL cached decoded sidecar for segment
- * `start`; returns NULL if `start` is Invalid (v3 segment) or dc is NULL.
- *
- * The cache is owned by the caller (the scan) and lives in the scan's memory
- * context, NOT the relcache.  A single ranked/@@@ scan creates it once and
- * shares it across all its per-(term,segment) cursors, so a common term's
- * sidecar is decoded once per scan and every lookup is an in-RAM binary search;
- * it is freed when the scan's context is reset.  It is deliberately NOT cached
- * across queries in index->rd_amcache: rd_amcache must be a single palloc chunk
- * (PG pfree()s it wholesale on relcache invalidation -- e.g. from a concurrent
- * merge -- which would corrupt a multi-chunk cache and could free arrays a live
- * cursor still borrows).  Per-scan decode still removes the per-posting sidecar
- * page reads (the 1.5.3 16,887-buffer pathology) while staying invalidation-safe.
+ * Get the relcache page-directory cache, (re)building it as ONE chunk in
+ * CacheMemoryContext if absent or stale (generation moved).  `meta` supplies
+ * the live segment doclenstarts + generation.  Returns NULL if no v4 segment
+ * has a sidecar (nothing to cache).
  */
-static BM25DirCacheEntry *
-bm25_dircache_slot(BM25DirCache *dc, BlockNumber start)
+static BM25DoclenDirCache *
+bm25_doclendir_cache(Relation index, const BM25MetaPageData *meta)
 {
-	int			i;
+	BM25DoclenDirCache *dc = (BM25DoclenDirCache *) index->rd_amcache;
+	int			total = 0;
+	uint32		s;
+	int			pos = 0;
+	Size		sz;
+	MemoryContext old;
 
-	if (dc == NULL || start == InvalidBlockNumber)
-		return NULL;
+	if (dc != NULL && dc->generation == meta->generation)
+		return dc;
 
-	for (i = 0; i < dc->n; i++)
-		if (dc->ent[i].start == start)
-			return &dc->ent[i];
-
-	if (dc->ent == NULL)
+	/* stale or absent: drop the old single chunk, rebuild */
+	if (dc != NULL)
 	{
-		dc->cap = 8;
-		dc->ent = (BM25DirCacheEntry *) palloc0(dc->cap * sizeof(BM25DirCacheEntry));
+		pfree(dc);
+		index->rd_amcache = NULL;
+		dc = NULL;
 	}
-	else if (dc->n >= dc->cap)
+
+	/* size: total sidecar pages across all v4 segments (header-only walk) */
+	for (s = 0; s < meta->nsegments && s < BM25_MAX_SEGMENTS; s++)
+		if (meta->segs[s].doclenstart != InvalidBlockNumber)
+			total += bm25_doclendir_count_seg(index, meta->segs[s].doclenstart);
+	if (total == 0)
+		return NULL;			/* no v4 sidecar segment */
+
+	/* one contiguous allocation: header + uint64 docid[total] + BlockNumber
+	 * blk[total] (blk stored in the uint64 tail region, 2 BlockNumbers per
+	 * uint64 slot would misalign -- keep it simple: allocate docid[] as uint64
+	 * and blk[] as uint64-sized slots too, wasting 4B/entry but trivially small
+	 * and single-chunk).  data[] holds total uint64 docids then total uint64
+	 * slots each carrying one BlockNumber. */
+	sz = offsetof(BM25DoclenDirCache, data) +
+		(Size) total *sizeof(uint64) +		/* docid[] */
+		(Size) total *sizeof(uint64);		/* blk[] (one BlockNumber per uint64 slot) */
+	old = MemoryContextSwitchTo(CacheMemoryContext);
+	dc = (BM25DoclenDirCache *) palloc0(sz);
+	MemoryContextSwitchTo(old);
+	dc->generation = meta->generation;
+	dc->ndocid = total;
+	dc->nsegs = 0;
+
 	{
-		dc->cap *= 2;
-		dc->ent = (BM25DirCacheEntry *) repalloc(dc->ent, dc->cap * sizeof(BM25DirCacheEntry));
+		uint64	   *docid = dc->data;
+		BlockNumber *blk = (BlockNumber *) (dc->data + total);	/* NB: BlockNumber slots */
+
+		for (s = 0; s < meta->nsegments && s < BM25_MAX_SEGMENTS; s++)
+		{
+			int			startpos = pos;
+			int			n;
+
+			if (meta->segs[s].doclenstart == InvalidBlockNumber)
+				continue;
+			n = bm25_doclendir_scan_seg(index, meta->segs[s].doclenstart,
+										docid, blk, total, &pos);
+			dc->segs[dc->nsegs].start = meta->segs[s].doclenstart;
+			dc->segs[dc->nsegs].n = n;
+			dc->segs[dc->nsegs].docid_off = startpos;
+			dc->segs[dc->nsegs].blk_off = startpos;
+			dc->nsegs++;
+		}
 	}
-	dc->ent[dc->n].start = start;
-	dc->ent[dc->n].docids = NULL;
-	dc->ent[dc->n].bytes = NULL;
-	dc->ent[dc->n].n = 0;
-	dc->ent[dc->n].built = false;
-	return &dc->ent[dc->n++];
+	index->rd_amcache = (void *) dc;
+	return dc;
 }
 
 static void
 bm25_doclen_cursor_init(BM25DoclenCursor *c, Relation index, BlockNumber start,
-						BM25DirCache *dc)
+						BM25DoclenDirCache *dc)
 {
-	BM25DirCacheEntry *slot;
-
 	c->index = index;
 	c->start = start;
-	c->docids = NULL;
-	c->bytes = NULL;
-	c->n = 0;
-	c->hint = 0;
-	c->owned = false;
+	c->dir_docid = NULL;
+	c->dir_blk = NULL;
+	c->dir_n = 0;
+	c->dir_hint = 0;
+	c->res_blk = InvalidBlockNumber;
+	c->res_n = 0;
+	c->res_docid = NULL;
+	c->res_byte = NULL;
+	c->res_cap = 0;
 
-	if (start == InvalidBlockNumber)
-		return;					/* v3 segment: caller uses inline doclen */
+	if (start == InvalidBlockNumber || dc == NULL)
+		return;					/* v3 segment (inline doclen) or no cache */
 
-	slot = bm25_dircache_slot(dc, start);
-	if (slot != NULL && !slot->built)
 	{
-		/* first use of this segment IN THIS SCAN: decode the whole segment
-		 * sidecar once, into the scan's context (the cache is scan-local), so
-		 * every subsequent lookup is an in-RAM binary search rather than a
-		 * per-posting sidecar page read.
-		 * ponytail: ~9 bytes/doc of scan-lifetime RAM per distinct segment
-		 * touched (~25 MB for a 2.86M-doc segment); freed at scan end.  Not
-		 * cached across queries (rd_amcache single-chunk + invalidation-safety);
-		 * add a persistent build-time directory if cold-scan decode ever
-		 * dominates at the field's scale. */
-		BM25Doclens	d = {0};
+		int			i;
 
-		bm25_doclens_load(index, start, &d);
-		slot->docids = d.docids;
-		slot->bytes = d.bytes;
-		slot->n = d.n;
-		slot->built = true;
+		for (i = 0; i < dc->nsegs; i++)
+			if (dc->segs[i].start == start)
+			{
+				c->dir_docid = BM25_DOCLENDIR_DOCIDS(dc) + dc->segs[i].docid_off;
+				c->dir_blk = BM25_DOCLENDIR_BLKS(dc) + dc->segs[i].blk_off;
+				c->dir_n = dc->segs[i].n;
+				break;
+			}
 	}
-	if (slot != NULL)
+	if (c->dir_n > 0)
 	{
-		c->docids = slot->docids;
-		c->bytes = slot->bytes;
-		c->n = slot->n;
-	}
-	else
-	{
-		/* no scan cache provided (e.g. a lone lookup path): decode into the
-		 * cursor itself, freed by bm25_doclen_cursor_free */
-		BM25Doclens	d = {0};
-
-		bm25_doclens_load(index, start, &d);
-		c->docids = d.docids;
-		c->bytes = d.bytes;
-		c->n = d.n;
-		c->owned = true;
+		/* a sidecar page's data region is < BLCKSZ and every doc costs >= 1
+		 * length byte, so a page can hold at most BLCKSZ docs -- a safe bound
+		 * for the resident decode buffer (the whole page is decoded at once). */
+		c->res_cap = BLCKSZ;
+		c->res_docid = (uint64 *) palloc(c->res_cap * sizeof(uint64));
+		c->res_byte = (uint8 *) palloc(c->res_cap * sizeof(uint8));
 	}
 }
 
 static void
 bm25_doclen_cursor_free(BM25DoclenCursor *c)
 {
-	/* scan-cache-owned arrays are freed with the scan context; free only the
-	 * arrays this cursor decoded itself (no scan cache was provided) */
-	if (c->owned)
-	{
-		if (c->docids)
-			pfree((void *) c->docids);
-		if (c->bytes)
-			pfree((void *) c->bytes);
-	}
-	c->docids = NULL;
-	c->bytes = NULL;
-	c->n = 0;
-	c->owned = false;
+	/* directory arrays are borrowed from the relcache cache; free only the
+	 * cursor's own resident-page buffers */
+	if (c->res_docid)
+		pfree(c->res_docid);
+	if (c->res_byte)
+		pfree(c->res_byte);
+	c->res_docid = NULL;
+	c->res_byte = NULL;
+	c->dir_docid = NULL;
+	c->dir_blk = NULL;
+	c->dir_n = 0;
+	c->res_blk = InvalidBlockNumber;
+	c->res_n = 0;
+	c->res_cap = 0;
 }
 
-/* Exact doclen for docid via the cached decoded sidecar.  Robust to ANY docid
- * order (the WAND ranked scan ascends, but the boolean/AND path can query out
- * of order): a plain binary search, with an ascending-resume hint that makes
- * the common monotone case near-O(1).  Returns 0 if absent (v3 cursor, or a
- * docid genuinely not in the sidecar). */
+/* Decode the sidecar page at blkno into the cursor's resident arrays. */
+static void
+bm25_doclen_cursor_load_page(BM25DoclenCursor *c, BlockNumber blkno)
+{
+	Buffer		buf;
+	Page		page;
+	char	   *ptr,
+			   *end;
+
+	c->res_n = 0;
+	c->res_blk = blkno;
+	if (blkno == InvalidBlockNumber || c->res_docid == NULL ||
+		blkno >= RelationGetNumberOfBlocks(c->index))
+		return;
+	buf = ReadBuffer(c->index, blkno);
+	LockBuffer(buf, BUFFER_LOCK_SHARE);
+	page = BufferGetPage(buf);
+	if (PageIsNew(page) || !(BM25PageGetOpaque(page)->flags & BM25_DOCLEN))
+	{
+		UnlockReleaseBuffer(buf);
+		return;
+	}
+	ptr = (char *) page + MAXALIGN(SizeOfPageHeaderData);
+	end = (char *) page + ((PageHeader) page)->pd_lower;
+	while (ptr + sizeof(BM25DoclenBlockHdr) <= end)
+	{
+		BM25DoclenBlockHdr *bh = (BM25DoclenBlockHdr *) ptr;
+		uint64		gaps[BM25_BLOCK_SIZE];
+		uint8	   *bytes;
+		uint64		acc;
+		char	   *blkend;
+		int			j;
+
+		if (bh->count == 0 || bh->count > BM25_BLOCK_SIZE)
+			break;
+		blkend = (char *) (bh + 1) + bh->gapbytes + bh->count;
+		if (blkend > end)
+			break;
+		bm25_for_unpack((unsigned char *) (bh + 1), (int) bh->count, gaps);
+		bytes = (uint8 *) ((char *) (bh + 1) + bh->gapbytes);
+		acc = ((uint64) bh->first_docid_hi << 32) | bh->first_docid_lo;
+		for (j = 0; j < (int) bh->count && c->res_n < c->res_cap; j++)
+		{
+			acc += gaps[j];		/* gaps[0] == 0 */
+			c->res_docid[c->res_n] = acc;
+			c->res_byte[c->res_n] = bytes[j];
+			c->res_n++;
+		}
+		ptr = (char *) MAXALIGN((char *) (bh + 1) + bh->gapbytes + bh->count);
+	}
+	UnlockReleaseBuffer(buf);
+}
+
+/* Exact doclen for docid via the page-directory cursor.  Robust to ANY docid
+ * order; the ascending-resume hint makes the common monotone WAND scan land on
+ * the resident page.  Returns 0 if absent (v3 cursor, or docid not present). */
 static inline uint32
 bm25_doclen_cursor_lookup(BM25DoclenCursor *c, uint64 docid)
 {
 	int			lo,
-				hi;
+				hi,
+				pg;
 
-	if (c->n == 0 || c->docids == NULL)
+	if (c->dir_n == 0 || c->dir_docid == NULL)
 		return 0;
 
-	/* ascending-resume: if the hint still brackets docid, search from it */
-	if (c->hint < c->n && c->docids[c->hint] <= docid)
-		lo = c->hint;
-	else
-		lo = 0;
-	hi = c->n - 1;
-	while (lo <= hi)
+	/* is docid already on the resident page? (ascending-scan common case) */
+	if (c->res_blk != InvalidBlockNumber && c->res_n > 0 &&
+		docid >= c->res_docid[0] && docid <= c->res_docid[c->res_n - 1])
 	{
-		int			mid = (lo + hi) >> 1;
-
-		if (c->docids[mid] < docid)
-			lo = mid + 1;
-		else if (c->docids[mid] > docid)
-			hi = mid - 1;
+		/* fall through to in-page search below */
+	}
+	else
+	{
+		/* binary-search the directory for the page whose first_docid <= docid
+		 * (the largest such), with an ascending-resume hint */
+		if (c->dir_hint < c->dir_n && c->dir_docid[c->dir_hint] <= docid)
+			lo = c->dir_hint;
 		else
+			lo = 0;
+		hi = c->dir_n - 1;
+		pg = -1;
+		while (lo <= hi)
 		{
-			c->hint = mid;
-			return fts_byte_to_doclen(c->bytes[mid]);
+			int			mid = (lo + hi) >> 1;
+
+			if (c->dir_docid[mid] <= docid)
+			{
+				pg = mid;
+				lo = mid + 1;
+			}
+			else
+				hi = mid - 1;
+		}
+		if (pg < 0)
+			return 0;			/* docid precedes the first page's first docid */
+		c->dir_hint = pg;
+		if (c->dir_blk[pg] != c->res_blk)
+			bm25_doclen_cursor_load_page(c, c->dir_blk[pg]);
+	}
+
+	/* binary-search within the resident page */
+	{
+		int			rlo = 0,
+					rhi = c->res_n - 1;
+
+		while (rlo <= rhi)
+		{
+			int			mid = (rlo + rhi) >> 1;
+
+			if (c->res_docid[mid] < docid)
+				rlo = mid + 1;
+			else if (c->res_docid[mid] > docid)
+				rhi = mid - 1;
+			else
+				return fts_byte_to_doclen(c->res_byte[mid]);
 		}
 	}
 	return 0;

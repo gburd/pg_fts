@@ -3859,9 +3859,9 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 	int			nterms;
 	WandCursor *cursors;
 	ScoredTid  *cand;
-	BM25DirCache doclencache = {0};	/* scan-local decoded-sidecar cache, shared
-									 * across this scan's per-(term,segment) cursors;
-									 * arrays live in the scan context, freed at reset */
+	BM25DoclenDirCache *doclendir;	/* relcache-cached page directory over the v4
+									 * doclen sidecars (built once per backend, keyed
+									 * by generation); borrowed by the cursors below */
 	BM25Tombstones tombs;
 	DocidFilter filter;
 	DocidFilter *filterp = NULL;
@@ -3879,6 +3879,9 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 	bm25_read_meta(index, &meta);
 	N = meta.ndocs < 1.0 ? 1.0 : meta.ndocs;
 	avgdl = meta.ndocs > 0 ? meta.sumdoclen / meta.ndocs : 1.0;
+	/* relcache page directory over the v4 doclen sidecars (built once per backend,
+	 * keyed by meta.generation); NULL if no v4 sidecar segment exists */
+	doclendir = bm25_doclendir_cache(index, &meta);
 
 	/*
 	 * Boolean-structure gating.  The WAND cursors below rank the term
@@ -4027,7 +4030,7 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 			cursors[nactive].has_doclen_col =
 				(meta.segs[s].doclenstart == InvalidBlockNumber);
 			bm25_doclen_cursor_init(&cursors[nactive].doclenc, index,
-									meta.segs[s].doclenstart, &doclencache);
+									meta.segs[s].doclenstart, doclendir);
 			cursors[nactive].docid_lo = docid_lo;
 			cursors[nactive].docid_hi = docid_hi;
 			{
