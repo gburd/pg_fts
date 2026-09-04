@@ -270,6 +270,14 @@ SELECT to_ftsdoc('the quick brown fox') @@@ '"fox brown"'::ftsquery AS order_mis
 -- three-word phrase
 SELECT to_ftsdoc('the quick brown fox jumps') @@@ '"quick brown fox"'::ftsquery AS three_hit;
 SELECT to_ftsdoc('quick red brown fox') @@@ '"quick brown fox"'::ftsquery AS three_miss;
+-- reserved keywords (and/or/not/near) are literal WORDS inside a phrase or NEAR
+-- operand, not operators (ROADMAP #12b).  Use the 'simple' config so they are
+-- not dropped as stopwords.  A bare keyword phrase must parse and match.
+SELECT to_ftsquery('simple','"the and clause"')::text AS kw_phrase_parses;   -- (('the' <-> 'and') <-> 'clause')
+SELECT to_ftsdoc('simple','read the and clause here') @@@ to_ftsquery('simple','"the and clause"') AS kw_phrase_hit;   -- t
+SELECT to_ftsdoc('simple','the clause and read') @@@ to_ftsquery('simple','"the and clause"') AS kw_phrase_miss;      -- f (order/adjacency)
+SELECT to_ftsdoc('simple','alpha or beta') @@@ to_ftsquery('simple','"alpha or beta"') AS kw_or_hit;                  -- t
+SELECT to_ftsdoc('simple','x near y z') @@@ to_ftsquery('simple','NEAR(near y, 2)') AS kw_in_near_hit;                -- t (literal 'near' inside NEAR)
 -- phrase combined with boolean operators
 SELECT to_ftsdoc('the quick brown fox') @@@ '"quick brown" & fox'::ftsquery AS combo;
 -- phrase works through the fts index (recheck enforces adjacency)
