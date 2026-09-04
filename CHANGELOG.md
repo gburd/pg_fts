@@ -2,6 +2,69 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.5.8
+
+Performance + robustness release.  C-only, no SQL change, no on-disk index
+format change (BM25_VERSION stays 4), **no REINDEX**.
+
+**1. Doclen-sidecar ranked latency: 2.5x faster rare/mid terms.**  The
+`doclen_sidecar=on` default (the ~4.7x smaller index) had a fixed per-scan tax:
+1.5.4-1.5.7 decoded the ENTIRE segment sidecar once per ranked scan into a
+scan-local array (~18 ms on a 2.19M-doc segment: ~534 page reads plus a
+FOR-unpack of every block), which dwarfed the actual scoring for anything but a
+very common term.  A fresh 5-way benchmark on real Wikipedia caught it (rare
+ranked 25.6 ms vs 1.6 ms with inline doclen).
+
+Replaced with a **page-directory cursor**: one tiny `(first_docid, blk)` entry
+per sidecar PAGE, built by walking only page HEADERS (no block decode) and
+cached in the index relcache (`rd_amcache`) as ONE contiguous chunk keyed by the
+metapage generation -- so it is built at most once per backend, not per scan.  A
+lookup binary-searches the directory to the covering page, decodes ONLY that
+page, and keeps it resident (the WAND scan visits docids ascending).  Single-chunk
+is deliberate: it satisfies the `rd_amcache` "pfree()d wholesale on relcache
+invalidation" contract that 1.5.4's multi-chunk 20 MB decoded array violated (the
+1.5.5 crash).  The whole-segment bulk decode is retained for the MERGE path,
+which legitimately reads every doc sequentially.
+
+Measured on 2.19M Wikipedia articles (median, warm, `doclen_sidecar=on`):
+rare 25.6 -> ~10 ms, mid 29.3 -> ~11 ms.  Ranked top-k parity PASSES on all
+bands (k=10 and k=100, single-term and AND), and a 90 s concurrent
+`fts_merge` + `fts_vacuum` + 6-reader soak kept the ranked top-10 stable with
+zero mismatches and zero errors.
+
+Known remaining gap (documented, not a regression): a very common term (735k df,
+34% of the corpus) is still ~70 ms, and that is NOT the doclen path -- a plain
+`@@@` count of the same term is 2.4 ms while the ranked top-10 reads 8,115
+buffers, i.e. the block-max WAND is not pruning it.  That is a separate lever.
+
+**2. `fts_search()` SRF could return fewer than k rows.**  The top-k engine
+over-fetches for MVCC (`wantk = k*4`); the `amgettuple` ordering scan retries and
+grows on its own, but the `fts_search` SRF called the engine once, so a
+heavy-delete workload where most of the top candidates are invisible could yield
+`nvis < k`.  `bm25_topk_visible` now grows `wantk` and re-generates when the
+visibility loop ends short AND more candidates existed, with a bounded growth cap
+(and keeps the directory-generation retry inside each attempt).
+
+**3. Sparsemap error-path leaks.**  `sm_create()` maps are libc-malloc (no
+palloc allocator is installed), so an `ereport(ERROR)` between create and
+`sm_free` leaked past transaction abort.  `bm25_bulkdelete` and
+`bm25_segment_docids` now free them via `PG_TRY`/`PG_FINALLY`.  (The cleanup
+pointers are resynced before each throw because `sm_add_many_grow` updates
+`*map` even on a partial grow-then-fail -- freeing the pre-call pointer would be
+a double free.)  `bm25_read_blob` buffers are palloc'd and are left alone.
+
+**4. Reserved keywords are literal words inside a phrase or NEAR.**  The query
+lexer recognized `and`/`or`/`not`/`near` as operators unconditionally, so
+`"the and clause"` or `NEAR(near y, 2)` failed to parse.  Keyword tokens now
+carry their folded text and the phrase/NEAR operand loops accept them as terms,
+matching `to_tsquery` (which lexes them as lexemes).  The ambiguous BARE
+top-level form (`and & x`) is deliberately unchanged.
+
+Also: a genuine bug in the vendored sparsemap (an `__sm_insert_data`
+offset/length convention mismatch -- a latent buffer over-write currently masked
+by compensating capacity slack) was found during this work and reported upstream;
+it is not triggered by pg_fts today.
+
 ## 1.5.7
 
 Concurrency crash-fix release: three pre-existing races surfaced by a
