@@ -1,0 +1,98 @@
+pg_textsearch (BM25) benchmark — Timescale pg_textsearch on PostgreSQL 17.10
+Host: EC2 Amazon Linux 2023, 16 vCPU, 128GB RAM, /nvme instance-store NVMe (885G)
+Corpus: /nvme/w.tsv, 2,188,038 rows (id, title, body), tab-separated
+Loaded row count confirmed: SELECT count(*) FROM docs => 2188038
+
+BUILD
+-----
+git commit: f940210 "Dispatch compaction requests at commit (#477)"
+  (git clone --depth 1 https://github.com/timescale/pg_textsearch.git)
+Build: make PG_CONFIG=/nvme/pg17/bin/pg_config && make install PG_CONFIG=/nvme/pg17/bin/pg_config
+  -> succeeded cleanly (only unrelated compiler warnings from PG headers).
+
+shared_preload_libraries WAS REQUIRED. Added to /nvme/pgdata/postgresql.conf:
+  shared_preload_libraries = 'pg_textsearch'
+then:
+  pg_ctl -D /nvme/pgdata -w restart -l /tmp/pg.log
+Restart succeeded.
+
+EXTENSION + INDEX
+------------------
+CREATE EXTENSION pg_textsearch;
+
+Exact DDL used:
+  CREATE INDEX docs_pgts ON docs USING bm25(body) WITH (text_config='english');
+
+NOTICEs during build:
+  BM25 index build started for relation docs_pgts
+  Using text search configuration: english
+  Using index options: k1=1.20, b=0.75
+  parallel index build: launched 2 of 2 requested workers
+  BM25 index build completed: 2188031 documents, avg_length=313.91
+  (5x "word is too long to be indexed" NOTICEs for words > 2047 chars, harmless)
+
+  Note: 2188031 documents indexed vs 2188038 rows loaded (7 fewer). Checked
+  for NULL bodies (0) and empty-string bodies (0); gap is internal to the
+  index build and below noise level (0.0003% of rows) — not investigated
+  further, out of scope for this benchmark.
+
+VACUUM (FREEZE, ANALYZE) docs; run after index build, not included in the
+timed build interval.
+
+Build time: 495 s
+Index size (docs_pgts): 1885 MB  (pg_relation_size, pg_size_pretty)
+
+RANKED QUERY FORM
+-----------------
+Found in cloned repo's test/expected/*.out (basic.out, bmw.out, aerodocs.out):
+  SELECT id, body <@> '<query text>'::bm25query AS score
+  FROM docs
+  ORDER BY score
+  LIMIT <k>;
+
+Confirmed via EXPLAIN (ANALYZE, BUFFERS) that this plan uses the BM25 index
+(not a seq scan):
+  Limit
+    -> Index Scan using docs_pgts on docs
+         Order By: (body <@> 'docs_pgts:slovakia'::bm25query)
+  Execution Time: 9.480 ms
+
+LATENCY — median of 5 warm runs (first of 6 runs dropped as warmup), measured
+via psql -f with \timing on. Each band's row count was confirmed (exactly 10
+or 100 rows returned) with a wrapping count(*) query run once before the six
+timed SELECTs.
+---------------------------------------------------------------------------
+
+rare k10  (term: slovakia) — count(*) confirmed 10 rows
+  query: SELECT id, body <@> 'slovakia'::bm25query AS score FROM docs ORDER BY score LIMIT 10;
+  raw ms, 6 runs (1st = warmup, dropped): 7.458, 7.434, 7.415, 7.393, 7.336, 7.372
+  5 warm runs used for median: 7.434, 7.415, 7.393, 7.336, 7.372
+  median: 7.393 ms
+
+mid k10   (term: hungary) — count(*) confirmed 10 rows
+  query: SELECT id, body <@> 'hungary'::bm25query AS score FROM docs ORDER BY score LIMIT 10;
+  raw ms, 6 runs (1st = warmup, dropped): 7.939, 7.908, 7.865, 7.909, 7.884, 7.902
+  5 warm runs used for median: 7.908, 7.865, 7.909, 7.884, 7.902
+  median: 7.902 ms
+
+common k10 (term: year) — count(*) confirmed 10 rows
+  query: SELECT id, body <@> 'year'::bm25query AS score FROM docs ORDER BY score LIMIT 10;
+  raw ms, 6 runs (1st = warmup, dropped): 20.863, 20.781, 20.807, 20.747, 20.779, 20.745
+  5 warm runs used for median: 20.781, 20.807, 20.747, 20.779, 20.745
+  median: 20.779 ms
+
+common k100 (term: year) — count(*) confirmed 100 rows
+  query: SELECT id, body <@> 'year'::bm25query AS score FROM docs ORDER BY score LIMIT 100;
+  raw ms, 6 runs (1st = warmup, dropped): 53.971, 54.005, 53.937, 53.917, 54.079, 54.025
+  5 warm runs used for median: 54.005, 53.937, 53.917, 54.079, 54.025
+  median: 54.005 ms
+
+SUMMARY TABLE
+-------------
+band          k    median ms
+rare          10   7.393
+mid           10   7.902
+common        10   20.779
+common        100  54.005
+
+Full raw psql -f \timing output (929 lines incl. all result rows): /tmp/d_out.txt on host.

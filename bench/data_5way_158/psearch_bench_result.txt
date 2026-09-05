@@ -1,0 +1,83 @@
+ParadeDB pg_search (Tantivy BM25) benchmark — arm of 5-way FTS comparison
+==========================================================================
+Host: Amazon Linux 2023, 16 vCPU, 128GB RAM, instance-store NVMe (885G) at /nvme
+PostgreSQL: 17.10 (source build, /nvme/pg17), shared_buffers=64GB
+Corpus: enwiki 20231101.en, 2,188,038 rows (id, title, body), loaded into table docs
+
+Versions
+--------
+paradedb git commit:  f4b1f65e25f5ebeda6744e1e1fd00f962ba89260
+pgrx version:          0.19.2  (cargo-pgrx 0.19.2, pinned by paradedb/Cargo.toml: pgrx = "=0.19.2")
+pgvector version:      0.8.5   (built/installed first, pg_search depends on it -- "requires = 'vector'" in pg_search.control)
+pg_search version:     0.25.6  (pg_search.control: default_version = '0.25.6')
+
+Build notes
+-----------
+- openblas-devel was required (pgvector/pg_search release link needs -lopenblas), installed via dnf.
+- Root EBS volume is only 8G and filled up during `cargo pgrx install --release`
+  (winapi-0.3.9 unpack failed, "No space left on device"). Fix: moved
+  ~/.cargo/registry and ~/.rustup to /nvme and symlinked back into $HOME
+  before retrying the release build. Build then completed cleanly.
+- shared_preload_libraries = 'pg_search' set in postgresql.conf, cluster
+  restarted with `pg_ctl -D /nvme/pgdata -w restart`, BEFORE CREATE EXTENSION.
+- pg_search requires the vector extension: `CREATE EXTENSION vector;` then
+  `CREATE EXTENSION pg_search;` (extname/extversion confirmed: vector 0.8.5,
+  pg_search 0.25.6).
+
+Exact commands used
+--------------------
+Load:
+  psql -h /tmp -d bench -qc "CREATE TABLE docs (id bigint, title text, body text)"
+  psql -h /tmp -d bench -qc "\copy docs FROM '/nvme/w.tsv' WITH (FORMAT csv, DELIMITER E'\t', QUOTE E'\b')"
+  -> row count confirmed: 2188038
+
+Build (pgvector then pg_search):
+  cd /nvme/pgvector && make PG_CONFIG=/nvme/pg17/bin/pg_config && make install PG_CONFIG=/nvme/pg17/bin/pg_config
+  cargo install --locked cargo-pgrx@0.19.2
+  cargo pgrx init --pg17 /nvme/pg17/bin/pg_config
+  cd /nvme/paradedb/pg_search && cargo pgrx install --release --pg-config /nvme/pg17/bin/pg_config
+
+Extension + index:
+  CREATE EXTENSION vector;
+  CREATE EXTENSION pg_search;
+  CREATE INDEX docs_ps ON docs USING bm25(id, body) WITH (key_field='id');
+  VACUUM (FREEZE, ANALYZE) docs;
+
+Query forms used for timing:
+  ranked:  SELECT id FROM docs WHERE body @@@ '<term>' ORDER BY paradedb.score(id) DESC LIMIT k;
+  count:   SELECT count(*) FROM docs WHERE body @@@ 'year';
+  AND:     SELECT id FROM docs WHERE body @@@ 'slovakia AND hungary' ORDER BY paradedb.score(id) DESC LIMIT 10;
+  phrase:  SELECT id FROM docs WHERE body ### 'united states' ORDER BY paradedb.score(id) DESC LIMIT 10;
+           (pg_search's `###` phrase operator; plain @@@ 'text' does not accept quoted phrases)
+  prefix:  SELECT id FROM docs WHERE body @@@ pdb.parse('body:hung*') ORDER BY paradedb.score(id) DESC LIMIT 10;
+           (Tantivy wildcard via pdb.parse() query-string syntax, field-qualified 'body:hung*')
+
+Confirmed row counts (WHERE body @@@ '<term>')
+-----------------------------------------------
+  slovakia:  10852
+  hungary:   23987
+  year:      495569
+  slovakia AND hungary: 3059
+  body ### 'united states' (phrase): 362060
+  body @@@ pdb.parse('body:hung*') (prefix): 7535
+
+Index build
+-----------
+  CREATE INDEX build time: 118 s
+  (WARNING during build: "only 2 parallel workers were available for index build")
+  Index size (docs_ps), pg_relation_size: 2855231488 bytes = 2723 MB (pg_size_pretty)
+
+Latency — median of 5 warm runs (first/cold run dropped), via psql -f with \timing on
+---------------------------------------------------------------------------------------
+Measurement           Median (ms)   Raw warm timings (ms), in order
+rare k10 (slovakia)      2.190      2.587, 2.249, 2.114, 2.149, 2.190
+mid  k10 (hungary)       2.062      2.212, 2.091, 2.044, 2.045, 2.062
+common k10 (year)        2.217      2.361, 2.193, 2.185, 2.218, 2.217
+common k100 (year)       3.701      3.815, 3.717, 3.637, 3.681, 3.701
+count (year)            13.753      14.268, 14.004, 13.709, 13.753, 13.627
+AND (slovakia AND hungary) 3.296    3.542, 3.356, 3.296, 3.204, 3.165
+phrase ('united states') 22.239     22.672, 22.239, 22.263, 22.209, 22.223
+prefix ('hung*')          2.048     2.286, 2.121, 2.039, 2.048, 2.017
+
+(cold/first run, dropped, for reference: rare 7.501, mid 6.393, common_k10 5.940,
+ common_k100 9.354, count 16.098, and 8.021, phrase 25.569, prefix 6.197 ms)
