@@ -1,0 +1,67 @@
+=== VectorChord-bm25 (vchord) benchmark report ===
+Host: Amazon Linux 2023, dedicated EC2 (bare metal per prior provisioning)
+PostgreSQL: 17.10, /nvme/pg17
+Corpus: /nvme/c.tsv, 2,188,038 rows, 2 tab-separated columns (id, content)
+Schema (per mandated methodology): docs(id bigint, content text) + tv tsvector
+  materialized as: UPDATE docs SET tv = to_tsvector('english', content)
+  (derived from content ONLY, no title/body concat)
+Row count confirmed after load: 2188038
+Row count confirmed after tv materialization: 2188038
+
+--- Build info ---
+vchord commit:      14fc2a332b665e1f38eb5d59bb85c8ac1a00490d
+pgrx version:        0.17.0 (matches vchord/Cargo.toml pin "pgrx = \"=0.17.0\"")
+shared_preload_libraries = 'vchord_bm25' set + restart done BEFORE CREATE EXTENSION.
+
+--- Index ---
+Exact CREATE INDEX:
+  CREATE INDEX docs_vc ON docs USING bm25(tv bm25_ops);
+
+Exact ranked query form:
+  SET "bm25.limit" = <k>;
+  SELECT id FROM docs ORDER BY tv <&> to_bm25query(to_tsvector('english','<term>'), 'docs_vc') LIMIT <k>;
+
+EXPLAIN confirms Index Scan (not seq scan):
+  Limit  (cost=0.00..17.77 rows=10 width=16)
+    ->  Index Scan using docs_vc on docs  (cost=0.00..3888602.39 rows=2188351 width=16)
+          Order By: (tv <&> '(''slovakia'':1,docs_vc)'::bm25query)
+
+Build time: 59s   (CREATE INDEX only, per T0/T1 wall clock)
+Index size: 2902 MB  (pg_relation_size('docs_vc'))
+Post-build: VACUUM (FREEZE, ANALYZE) docs run after index creation.
+
+--- Latency: median of 5 warm runs, first (cold) run dropped, ms via psql \timing ---
+
+1) rare, k=10, term="slovakia"
+   raw 6 runs (ms): 7.708, 2.903, 2.303, 2.191, 2.148, 2.085
+   warm 5 (first dropped): 2.903, 2.303, 2.191, 2.148, 2.085
+   median: 2.191 ms
+
+2) mid, k=10, term="hungary"
+   raw 6 runs (ms): 7.332, 3.236, 2.660, 2.608, 2.596, 2.595
+   warm 5 (first dropped): 3.236, 2.660, 2.608, 2.596, 2.595
+   median: 2.608 ms
+
+3) common, k=10, term="year"
+   raw 6 runs (ms): 6.984, 4.032, 3.835, 3.843, 3.852, 3.801
+   warm 5 (first dropped): 4.032, 3.835, 3.843, 3.852, 3.801
+   median: 3.843 ms
+
+4) common, k=100, term="year"
+   raw 6 runs (ms): 32.963, 26.935, 26.536, 26.342, 26.072, 25.953
+   warm 5 (first dropped): 26.935, 26.536, 26.342, 26.072, 25.953
+   median: 26.342 ms
+
+--- Match counts (fairness check) ---
+Method: plain tsvector predicate on the SAME tv column vchord indexes
+  (NOT a vchord-internal df; this counts rows where the term's tsvector
+   representation matches the indexed tv column):
+  SELECT count(*) FROM docs WHERE tv @@ to_tsquery('english','<term>');
+
+  slovakia: 10875 matching rows
+  hungary:  24097 matching rows
+  year:     734896 matching rows
+
+These are tsvector match counts on the exact `tv` column vchord's bm25_ops
+index was built over (single source-of-truth column, per the methodology
+requirement that every engine index one identical text column).

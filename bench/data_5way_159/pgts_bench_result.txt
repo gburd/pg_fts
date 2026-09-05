@@ -1,0 +1,152 @@
+pg_textsearch (Timescale) BM25 Benchmark on PostgreSQL 17.10
+==============================================================
+Methodology: ONE identical text column ("content"), no title/body split.
+
+git commit: f940210f9a7761529fab1cf85fc10e5d70699f0b
+  ("Dispatch compaction requests at commit (#477)")
+
+shared_preload_libraries: REQUIRED. CREATE EXTENSION failed with
+  "pg_textsearch library not loaded. Add pg_textsearch to
+  shared_preload_libraries and restart." until
+  shared_preload_libraries = 'pg_textsearch' was set and postgres restarted.
+
+Schema (exact, per methodology requirement):
+  CREATE TABLE docs (id bigint, content text);
+  \copy docs FROM '/nvme/c.tsv' WITH (FORMAT csv, DELIMITER E'\t', QUOTE E'\b')
+  -> SELECT count(*) FROM docs = 2188038  (matches corpus exactly)
+
+CREATE INDEX (exact form used):
+  CREATE INDEX docs_pgts ON docs USING bm25(content) WITH (text_config='english')
+
+Ranked query form (exact form used, verified via EXPLAIN to use the
+docs_pgts index scan, never a seq scan, for all 4 latency queries):
+  SELECT id, content <@> '<term>'::bm25query AS score
+  FROM docs ORDER BY score LIMIT k
+
+------------------------------------------------------------
+BUILD
+------------------------------------------------------------
+Build NOTICE (verbatim from CREATE INDEX):
+  NOTICE:  BM25 index build started for relation docs_pgts
+  NOTICE:  Using text search configuration: english
+  NOTICE:  Using index options: k1=1.20, b=0.75
+  NOTICE:  parallel index build: launched 2 of 2 requested workers
+  (x5) NOTICE: word is too long to be indexed / DETAIL: Words longer
+       than 2047 characters are ignored.
+  NOTICE:  BM25 index build completed: 2188038 documents, avg_length=316.55
+
+Documents indexed (per build NOTICE): 2188038
+Documents loaded (\copy + count(*)):   2188038
+Difference: 0 documents (this run indexed everything loaded; the task
+  brief mentioned a prior run reported 7 fewer -- not reproduced here).
+
+Build time: 498 s  (CREATE INDEX only, wall clock via `date +%s` around
+  the psql call; VACUUM FREEZE ANALYZE run separately afterward)
+Index size (docs_pgts relation): 1887 MB  (1,978,327,040 bytes, via
+  pg_relation_size)
+
+Corpus stats reported by the index itself (bm25_summarize_index):
+  total_docs=2188038, total_len=692613200 tokens, avg_doc_len=316.55,
+  segments: 1 L0 segment, 7,357,921 distinct terms, on-disk 1,971,545,575 bytes
+  (segment data) + fieldnorm/CTID tables -> pg_relation_size above.
+
+------------------------------------------------------------
+LATENCY (median of 5 warm runs, psql -f with \timing on, first/cold
+run of 6 dropped; EXPLAIN confirmed "Index Scan using docs_pgts" for
+every query below, never a seq scan)
+------------------------------------------------------------
+
+1. rare k10   ('slovakia'): median = 9.671 ms
+   raw (runs 2-6, run 1 dropped as cold): 9.680, 9.506, 9.494, 9.671, 9.727 ms
+
+2. mid k10    ('hungary'):  median = 10.109 ms
+   raw: 10.228, 10.109, 10.090, 10.287, 10.051 ms
+
+3. common k10 ('year'):     median = 23.620 ms
+   raw: 23.620, 23.768, 23.620, 23.683, 23.617 ms
+
+4. common k100 ('year'):    median = 54.232 ms
+   raw: 54.511, 54.513, 54.232, 54.138, 54.131 ms
+
+------------------------------------------------------------
+MATCH COUNTS (document frequency)
+------------------------------------------------------------
+Method used: pg_textsearch exposes NO public SQL function that returns
+document frequency or a boolean/count match form. Exhaustive check of
+every PG_FUNCTION_INFO_V1-registered C function in the extension's
+source (src/**/*.c) and of sql/pg_textsearch--1.5.0-dev.sql confirms:
+  - The only text<@>bm25query / text<@>text operators return a
+    (possibly negative) BM25 *score*, not a boolean or count.
+  - bm25_dump_index() / bm25_summarize_index() are superuser-only debug
+    dumps; the string-mode dictionary listing is truncated to the
+    alphabetically-first 20 terms and does not reach arbitrary terms
+    like "slovakia"/"hungary"/"year" (dictionary has 7,357,921 terms).
+  - The only function with a "doc_freq" argument path
+    (bm25_test_cache_source 'lookup:<term>') queries the MEMTABLE only,
+    which is empty after VACUUM (all data lives in the on-disk L0
+    segment), so it returns "fail:null" for every term post-build.
+  - There is no exposed doc_freq()/count() SQL wrapper around the
+    internal tp_segment_get_doc_freq()/tp_source_get_doc_freq() C
+    functions used internally for IDF.
+
+Therefore match counts were derived empirically from the BM25 index's
+own ranking behavior: the bm25 AM's index-order scan (ORDER BY score)
+stops returning rows once it exhausts the term's posting list --
+i.e. once every matching document has been emitted, a LIMIT larger
+than the true match count returns fewer rows than requested. This was
+confirmed via EXPLAIN ANALYZE (actual rows < requested LIMIT) and by
+checking that all returned scores were non-zero (score=0 marks a
+non-match; score<0 marks BM25 matches under this index's scoring, and
+0-score rows never appeared once the posting list was exhausted -- the
+scan simply produces no further rows). Note: two important caveats
+about this method are recorded below.
+
+  slovakia: 10,875 matches
+    (LIMIT 20000 returned exactly 10,875 rows via Index Scan on
+     docs_pgts; EXPLAIN ANALYZE confirmed "actual rows=10875" against
+     a requested rows=20000, i.e. the posting list was exhausted)
+
+  hungary: 24,097 matches
+    (same method; LIMIT 200000 -> Index Scan returned exactly 24,097
+     rows before exhausting the posting list)
+
+  year: 734,896 matches
+    (same method, but required `SET enable_seqscan = off;` because
+     PostgreSQL's planner switches to a Seq Scan + Sort once the
+     requested LIMIT is large relative to the 2,188,038-row table --
+     the bm25 access method's own ORDER-BY-limit pushdown only
+     activates on an Index Scan plan. With enable_seqscan off and
+     LIMIT 2000000, EXPLAIN ANALYZE showed "Index Scan ... actual
+     rows=734896" against requested LIMIT 2000000, i.e. exhausted
+     before the limit. This full scan took ~8 minutes (480.8s) because
+     "year" is common and the AM still walks/re-heapifies a large
+     posting list even past pg_textsearch's normal top-k pruning path;
+     it is NOT a representative query latency, only a one-time count.)
+
+  CAVEATS on the match-count method:
+   - This is an indirect/empirical measurement (rows returned before
+     the posting list runs dry), not a value read from any exposed
+     df/count API, because none exists.
+   - There is a hard-coded internal cap: pg_textsearch.default_limit
+     (GUC, default 1000, min 1, max 100000 = TP_MAX_QUERY_LIMIT) caps
+     result volume when no LIMIT is present in the query; an explicit
+     SQL LIMIT clause up to the requested size was used instead to
+     avoid that cap, and each count was independently verified by
+     using a LIMIT comfortably larger than the observed match count
+     and re-checking that the row count returned was stable and less
+     than the LIMIT.
+   - Because ties/duplicate scores or exact float equality across
+     independently-scored docs could in principle affect the exact
+     boundary, these df numbers should be read as the count of
+     documents the bm25 index scan itself considers non-empty matches
+     for that single query term under this build's BM25 parameters
+     (k1=1.20, b=0.75, english text_config) -- i.e. exactly the
+     population an apples-to-apples ranked-retrieval comparison across
+     engines would draw from.
+
+------------------------------------------------------------
+Host / environment
+------------------------------------------------------------
+Amazon Linux 2023, PostgreSQL 17.10 at /nvme/pg17, data dir /nvme/pgdata
+shared_buffers=64GB, maintenance_work_mem=2GB, max_wal_size=16GB
+Corpus: /nvme/c.tsv, 2,188,038 rows, id<TAB>content (title+body pre-joined)

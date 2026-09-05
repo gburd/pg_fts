@@ -1,0 +1,35 @@
+pg_fts (1.5.8 + block-granular doclen decode) — single-column run
+=================================================================
+Rig: EC2 r6id.4xlarge (bene), AL2023, PG 17.10 from source, shared_buffers=64GB,
+     884GB NVMe instance store, prewarmed.
+Corpus: /nvme/c.tsv = 2,188,038 rows, EXACTLY 2 columns (id, content) where
+        content = Wikipedia title + ' ' + body, pre-joined in the TSV so every
+        engine indexes byte-identical text.
+Schema: CREATE TABLE docs (id bigint, content text); d ftsdoc = to_ftsdoc('english', content)
+Index:  CREATE INDEX docs_fts ON docs USING fts (d)   -- defaults: positions=off, doclen_sidecar=on
+        + fts_merge + fts_vacuum + VACUUM(FREEZE,ANALYZE) + pg_prewarm
+Build:  1047 s (incl. merge+vacuum+freeze)   Size: 1421 MB   Segments: 1
+
+df (pg_fts's own index statistics):
+  slovakia = 10,875
+  hungary  = 24,097
+  year     = 734,896
+
+Latency (median of 5 warm, first dropped), ms:
+  rare   k10 (slovakia)  :  6.05     raw: 9.611, 6.350, 6.112, 6.052, 5.997
+  mid    k10 (hungary)   : 10.84     raw: 11.008, 10.847, 10.799, 10.853, 10.841
+  common k10 (year)      : 56.5      raw: 57.098, 56.605, 56.479, 56.375, 56.619
+  common k100 (year)     : 70.0      raw: 70.395, 70.187, 70.024, 70.038, 70.000
+  count(*) (year)        :  2.34     raw: 2.904, 2.434, 2.336, 2.343, 2.328
+  AND (slovakia&hungary) :  0.87     raw: 1.268, 1.113, 0.892, 0.865, 0.875
+  prefix (hung:*)        :  2.41     raw: 2.274, 2.418, 2.421, 2.397, 2.414
+
+Ranked parity vs an exact fts_bm25 sort: PASS on all bands
+  (slovakia/hungary/year/slovakia&hungary, k=10 and k=100, genuine_misses=0).
+
+Analyzer ground truth on this corpus (regex word-boundary counts):
+  docs matching \myear\M   : 501,231
+  docs matching \myears\M  : 461,682
+  docs matching \myears?\M : 733,960   <-- agrees with pg_fts df 734,896
+  to_ftsdoc('english','year years yearly') -> 'year':3   (all three stem to 'year')
+  to_tsvector('english','year years yearly') -> 'year':1,2,3  (PostgreSQL agrees)

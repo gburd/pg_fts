@@ -1,0 +1,43 @@
+pg_search (ParadeDB / Tantivy) — single-column run
+==================================================
+NOTE: this arm was driven directly by the orchestrator, not by a sub-agent: the
+dispatched agent terminated early (19 tool uses, ~10 min) while still polling the
+Rust build, without installing the extension or reporting. The build was then
+completed and measured manually; everything below is measured on the host.
+
+Versions: paradedb f4b1f65 ("fix: clean up the pg15/pg16 insert states before a
+commit (#6211)"); cargo-pgrx 0.19.2 (pin from paradedb/Cargo.toml);
+pgvector 0.8.5; pg_search 0.25.6; PostgreSQL 17.10 from source.
+Build notes: openblas-devel required (else release link fails on -lopenblas);
+CARGO_HOME/RUSTUP_HOME relocated to /nvme (the 8GB root EBS otherwise fills
+during `cargo pgrx install --release`).
+
+Schema (identical to every other arm):
+  CREATE TABLE docs (id bigint, content text);
+  \copy docs FROM '/nvme/c.tsv' (2,188,038 rows, id<TAB>content, title+body pre-joined)
+  shared_preload_libraries='pg_search' + restart, then CREATE EXTENSION pg_search CASCADE
+Index:
+  CREATE INDEX docs_ps ON docs USING bm25(id, content) WITH (key_field='id')
+  build = 118 s ; size = 2950 MB
+
+Ranked query form:
+  SELECT id FROM docs WHERE content @@@ '<term>' ORDER BY paradedb.score(id) DESC LIMIT k
+
+MATCH COUNTS (SELECT count(*) FROM docs WHERE content @@@ '<term>'):
+  slovakia :  10,853
+  hungary  :  23,990
+  year     : 495,580     <-- vs pg_fts/vchord 734,896 on the SAME text
+
+Latency (median of 5 warm, first dropped), ms:
+  rare   k10 (slovakia) : 2.16    raw: 8.130, 2.433, 2.155, 2.117, 2.162
+  mid    k10 (hungary)  : 2.07    raw: 2.560, 2.136, 2.090, 2.069, 2.035
+  common k10 (year)     : 2.19    raw: 2.748, 2.233, 2.187, 2.199, 2.159
+  common k100 (year)    : 3.70    raw: 4.800, 3.861, 3.699, 3.695, 3.696
+
+INTERPRETATION: rare/mid match counts agree with pg_fts within 0.2-0.4%, but
+`year` is 33% lower. Regex ground truth on the same table: \myear\M = 501,231,
+\myears\M = 461,682, \myears?\M = 733,960. pg_search's 495,580 tracks the literal
+`year` count, while pg_fts/vchord's 734,896 tracks the stemmed year+years(+yearly)
+set. Tantivy is not stemming under this configuration; pg_fts uses PostgreSQL's
+'english' config and does. The common-band latency comparison is therefore a
+stemmed 734k-posting scan vs a literal 495k-posting scan.
