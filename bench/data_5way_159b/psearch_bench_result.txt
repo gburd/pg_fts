@@ -1,3 +1,35 @@
+!!! SUPERSEDED LATENCY NUMBERS -- READ THIS FIRST !!!
+=====================================================
+The per-query medians BELOW IN THIS FILE ARE WRONG (too slow, by up to 3x) and
+are retained only as a record of what the benchmarking subagent reported.
+
+Cause: this arm dropped only ONE cold run and took the median of the next 5.
+pg_search needs 2-3 runs to reach steady state, so runs 2-6 were still warming.
+Re-measured by hand with 8 runs, median of the LAST 5:
+
+  query          agent (WRONG)   verified
+  rare k10           6.858  ms     2.13 ms
+  mid k10            6.249  ms     2.04 ms
+  common k10         6.369  ms     2.12 ms
+  common k100        9.500  ms     3.72 ms
+  count(year)       17.563  ms    13.63 ms
+  AND 2-term         8.220  ms     3.17 ms
+  phrase (###)      26.301  ms    22.86 ms
+  prefix (hung*)     6.584  ms     2.05 ms
+  (OR 2-term 3.35 ms and OR 3-term 4.35 ms were not measured by the agent.)
+
+Demonstration of the warming (8 consecutive rare-k10 runs, same session):
+  7.545, 2.534, 2.206, 2.142, 2.201, 2.159, 2.167, 2.166 ms
+
+The verified numbers are the ones used in RESULTS_5WAY_159b_2026-09-06.md, and the
+raw 8-run series is in s4_raw.txt.  Note the error FLATTERED pg_fts, which is why
+it was worth catching.
+
+Everything else in this file (versions, 127s build time, 2734 MB index size,
+match counts 10,853 / 23,990 / 495,580, exact DDL and query forms) was
+independently confirmed and IS accurate.
+=====================================================
+
 ParadeDB pg_search (Tantivy BM25) Benchmark Report
 ====================================================
 Host: Amazon Linux 2023, 16 vCPU / 128GB RAM, dedicated EC2, NVMe-backed /nvme (885G)
