@@ -1,0 +1,75 @@
+VectorChord-bm25 (vchord_bm25) Benchmark Report
+=================================================
+Host: Amazon Linux 2023, 16 vCPU / 128GB RAM, dedicated EC2, data on /nvme (NVMe local disk)
+PostgreSQL: 17.10 (built from source into /nvme/pg17)
+
+vchord_bm25 commit: 14fc2a332b665e1f38eb5d59bb85c8ac1a00490d
+                     (2026-04-28 17:17:34 +0800)
+pgrx version: 0.17.0 (cargo-pgrx@0.17.0, matches vchord Cargo.toml pin pgrx = "=0.17.0")
+Build: cargo pgrx install --release --pg-config /nvme/pg17/bin/pg_config
+shared_preload_libraries = 'vchord_bm25' (set + restarted BEFORE CREATE EXTENSION)
+
+Schema (byte-identical text across engines)
+--------------------------------------------
+CREATE TABLE docs (id bigint, content text);
+\copy docs FROM '/nvme/c.tsv' WITH (FORMAT csv, DELIMITER E'\t', QUOTE E'\b')
+-- 2188038 rows confirmed (COPY 2188038 / SELECT count(*) = 2188038)
+
+ALTER TABLE docs ADD COLUMN tv tsvector;
+UPDATE docs SET tv = to_tsvector('english', content);   -- 2188038 rows updated
+VACUUM docs;
+
+Exact CREATE INDEX
+-------------------
+CREATE INDEX docs_vc ON docs USING bm25(tv bm25_ops);
+
+Index build time: 56s
+Index size: 2902 MB (2,902 MB pretty; 3,043,385,344 bytes exact via pg_relation_size)
+Post-build: VACUUM (FREEZE, ANALYZE) docs executed successfully.
+
+Exact ranked query form
+------------------------
+SET "bm25.limit" = <k>;
+SELECT id FROM docs
+  ORDER BY tv <&> to_bm25query(to_tsvector('english','<term>'), 'docs_vc')
+  LIMIT <k>;
+
+EXPLAIN confirms index usage (not seq scan):
+  Limit  (cost=0.00..17.76 rows=10 width=16)
+    ->  Index Scan using docs_vc on docs  (cost=0.00..3899596.61 rows=2195569 width=16)
+          Order By: (tv <&> '(''slovakia'':1,docs_vc)'::bm25query)
+
+Timings: median of 5 warm runs, first (cold) run dropped
+==========================================================
+
+1) RARE k10 (slovakia)  SET "bm25.limit" = 10;
+   Raw 6 runs (ms): 8.360 (dropped/cold), 3.150, 2.584, 2.544, 2.490, 2.502
+   Warm 5 (ms): 3.150, 2.584, 2.544, 2.490, 2.502
+   MEDIAN (ms): 2.544
+
+2) MID k10 (hungary)  SET "bm25.limit" = 10;
+   Raw 6 runs (ms): 7.254 (dropped/cold), 3.161, 2.662, 2.492, 2.463, 2.452
+   Warm 5 (ms): 3.161, 2.662, 2.492, 2.463, 2.452
+   MEDIAN (ms): 2.492
+
+3) COMMON k10 (year)  SET "bm25.limit" = 10;
+   Raw 6 runs (ms): 6.688 (dropped/cold), 3.634, 3.528, 3.483, 3.493, 3.464
+   Warm 5 (ms): 3.634, 3.528, 3.483, 3.493, 3.464
+   MEDIAN (ms): 3.493
+
+4) COMMON k100 (year)  SET "bm25.limit" = 100;
+   Raw 6 runs (ms): 30.843 (dropped/cold), 25.263, 25.193, 25.186, 25.173, 25.009
+   Warm 5 (ms): 25.263, 25.193, 25.186, 25.173, 25.009
+   MEDIAN (ms): 25.186
+
+Match counts (tsvector match count on the SAME tv column the vchord index is built over)
+============================================================================================
+Method: SELECT count(*) FROM docs WHERE tv @@ to_tsquery('english','<term>')
+NOTE: this is a plain tsvector @@ tsquery match count against the docs.tv column,
+      NOT a vchord-internal document-frequency (df) statistic. vchord_bm25 is a
+      ranking-only extension (no boolean/count query support), so this count is
+      reported via Postgres's own tsvector matching for cross-engine comparability.
+
+  slovakia :  10875
+  hungary  :  24097
+  year     : 734896

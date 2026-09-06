@@ -1,0 +1,122 @@
+psql:/tmp/f4_bench.sql:1: ERROR:  extension "pg_prewarm" is not available
+psql:/tmp/f4_bench.sql:2: ERROR:  function pg_prewarm(unknown) does not exist
+    10
+Time: 9.306 ms
+    10
+Time: 6.141 ms
+    10
+Time: 5.892 ms
+    10
+Time: 5.854 ms
+    10
+Time: 5.827 ms
+    10
+Time: 5.826 ms
+    10
+Time: 10.828 ms
+    10
+Time: 10.681 ms
+    10
+Time: 10.685 ms
+    10
+Time: 10.696 ms
+    10
+Time: 10.700 ms
+    10
+Time: 10.678 ms
+    10
+Time: 56.569 ms
+    10
+Time: 55.836 ms
+    10
+Time: 55.966 ms
+    10
+Time: 56.371 ms
+    10
+Time: 55.762 ms
+    10
+Time: 56.100 ms
+   100
+Time: 70.330 ms
+   100
+Time: 68.980 ms
+   100
+Time: 69.319 ms
+   100
+Time: 69.899 ms
+   100
+Time: 69.901 ms
+   100
+Time: 69.785 ms
+ 734896
+Time: 2.689 ms
+ 734896
+Time: 2.339 ms
+ 734896
+Time: 2.224 ms
+ 734896
+Time: 2.182 ms
+ 734896
+Time: 2.197 ms
+ 734896
+Time: 2.177 ms
+    10
+Time: 4.796 ms
+    10
+Time: 4.447 ms
+    10
+Time: 4.411 ms
+    10
+Time: 4.373 ms
+    10
+Time: 4.379 ms
+    10
+Time: 4.340 ms
+    10
+Time: 4.321 ms
+    10
+Time: 4.338 ms
+    10
+Time: 4.313 ms
+    10
+Time: 4.319 ms
+    10
+Time: 4.309 ms
+    10
+Time: 4.341 ms
+    10
+Time: 6.890 ms
+    10
+Time: 6.816 ms
+    10
+Time: 6.799 ms
+    10
+Time: 6.768 ms
+    10
+Time: 6.774 ms
+    10
+Time: 6.803 ms
+    10
+Time: 91.000 ms
+    10
+Time: 90.472 ms
+    10
+Time: 90.871 ms
+    10
+Time: 90.893 ms
+    10
+Time: 90.558 ms
+    10
+Time: 90.700 ms
+    10
+Time: 5.740 ms
+    10
+Time: 5.326 ms
+    10
+Time: 5.292 ms
+    10
+Time: 5.249 ms
+    10
+Time: 5.273 ms
+    10
+Time: 5.237 ms

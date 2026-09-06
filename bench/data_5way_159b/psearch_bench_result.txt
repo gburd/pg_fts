@@ -1,0 +1,102 @@
+ParadeDB pg_search (Tantivy BM25) Benchmark Report
+====================================================
+Host: Amazon Linux 2023, 16 vCPU / 128GB RAM, dedicated EC2, NVMe-backed /nvme (885G)
+
+VERSIONS
+--------
+PostgreSQL:      17.10 (compiled by gcc 11.5.0)
+paradedb commit: c807edea84cc882673003f352eeb05a77bdaf8dc (HEAD at clone time)
+pg_search:       0.25.6
+pgvector:        0.8.5 (installed as CASCADE dependency of pg_search's extension DDL)
+cargo-pgrx:      0.19.2 (pinned by paradedb/Cargo.toml: pgrx = "=0.19.2")
+rustc:           1.97.1 (8bab26f4f 2026-07-14)
+
+CORPUS / SCHEMA
+----------------
+Source: /nvme/c.tsv, exactly 2,188,038 rows, 2 columns (id<TAB>content, title+body pre-joined).
+  CREATE TABLE docs (id bigint, content text);
+  \copy docs FROM '/nvme/c.tsv' WITH (FORMAT csv, DELIMITER E'\t', QUOTE E'\b')
+Confirmed row count: 2188038
+COPY wall time: 2m38.230s
+
+CLUSTER CONFIG
+--------------
+initdb -D /nvme/pgdata -U ec2-user --no-locale -E UTF8
+postgresql.conf additions:
+  shared_buffers = 64GB
+  maintenance_work_mem = 2GB
+  max_wal_size = 16GB
+  unix_socket_directories = '/tmp'
+  listen_addresses = ''
+  shared_preload_libraries = 'pg_search'   (added before CREATE EXTENSION, then restart)
+
+BUILD (from source, both known gotchas applied)
+------------------------------------------------
+- openblas-devel installed alongside other dnf deps (release link requires -lopenblas)
+- CARGO_HOME=/nvme/cargo, RUSTUP_HOME=/nvme/rustup set in every script (root disk only 8GB,
+  would fill during `cargo pgrx install --release` otherwise)
+- pgvector v0.8.5 built/installed against /nvme/pg17 first (pg_search depends on the vector
+  extension via CASCADE)
+- cargo install --locked cargo-pgrx@0.19.2 (matches paradedb/Cargo.toml pin)
+- cargo pgrx init --pg17 /nvme/pg17/bin/pg_config
+- cd /nvme/paradedb/pg_search && cargo pgrx install --release --pg-config /nvme/pg17/bin/pg_config
+Build completed with no errors. Root disk stayed at 3.5G/8G used throughout (peaked, never filled).
+
+EXTENSION CREATION
+------------------
+psql -h /tmp -d bench -qc "CREATE EXTENSION pg_search CASCADE"
+  -> NOTICE: installing required extension "vector"
+Result: pg_search 0.25.6, vector 0.8.5 installed.
+
+INDEX BUILD
+-----------
+Exact DDL:
+  CREATE INDEX docs_ps ON docs USING bm25(id, content) WITH (key_field='id');
+followed by:
+  VACUUM (FREEZE, ANALYZE) docs;
+
+Build time:  127 s
+Index size:  2734 MB (2,866,421,760 bytes, pg_relation_size('docs_ps'))
+(WARNING emitted during build: "only 2 parallel workers were available for index build" — did
+not affect correctness, only build parallelism.)
+
+MEASUREMENTS
+------------
+Methodology: psql -f <file>.sql with \timing on, 6 runs per query, first (cold) run dropped,
+median of the remaining 5 reported. Times are the value from psql's "Time:" line (planning +
+execution, single-statement file).
+
+All exact query forms used:
+
+  rare k10:      SELECT id FROM docs WHERE content @@@ 'slovakia' ORDER BY paradedb.score(id) DESC LIMIT 10;
+  mid k10:       SELECT id FROM docs WHERE content @@@ 'hungary' ORDER BY paradedb.score(id) DESC LIMIT 10;
+  common k10:    SELECT id FROM docs WHERE content @@@ 'year' ORDER BY paradedb.score(id) DESC LIMIT 10;
+  common k100:   SELECT id FROM docs WHERE content @@@ 'year' ORDER BY paradedb.score(id) DESC LIMIT 100;
+  count(year):   SELECT count(*) FROM docs WHERE content @@@ 'year';
+  AND:           SELECT id FROM docs WHERE content @@@ 'slovakia AND hungary' ORDER BY paradedb.score(id) DESC LIMIT 10;
+  phrase:        SELECT id FROM docs WHERE content ### 'united states' ORDER BY paradedb.score(id) DESC LIMIT 10;
+  prefix:        SELECT id FROM docs WHERE content @@@ pdb.parse('content:hung*') ORDER BY paradedb.score(id) DESC LIMIT 10;
+
+Row counts confirmed before timing (all correct: k10 -> 10 rows, k100 -> 100 rows).
+
+Results (median of 5, first of 6 runs dropped; all 5 raw timings in ms shown):
+
+  rare k10 (slovakia)          median = 6.858 ms   raw = [7.216, 7.247, 6.811, 6.591, 6.858]
+  mid k10 (hungary)            median = 6.249 ms   raw = [6.297, 6.249, 6.147, 6.094, 6.370]
+  common k10 (year)            median = 6.369 ms   raw = [6.369, 6.614, 6.334, 6.196, 6.515]
+  common k100 (year)           median = 9.500 ms   raw = [9.500, 9.485, 9.383, 9.685, 9.685]
+  count(year)                  median = 17.563 ms  raw = [17.100, 17.240, 17.563, 17.865, 17.593]
+  AND (slovakia AND hungary)   median = 8.220 ms   raw = [8.537, 8.397, 8.220, 8.027, 8.156]
+  phrase (### "united states") median = 26.301 ms  raw = [26.301, 26.171, 26.532, 26.207, 26.658]
+  prefix (hung*)                median = 6.584 ms  raw = [6.789, 6.660, 6.557, 6.584, 6.422]
+
+MATCH COUNTS (SELECT count(*) FROM docs WHERE content @@@ '<term>')
+---------------------------------------------------------------------
+  slovakia : 10853
+  hungary  : 23990
+  year     : 495580
+
+Note: Tantivy (pg_search's engine) does not stem by default. The 495580 match count for
+"year" reflects only literal-token matches of "year" (not "years", "yearly", etc.), which is
+why it is far lower than a stemming PostgreSQL tsvector-based engine would report for the same
+term on identical text. This confirms the prior-run observation on this identical corpus.

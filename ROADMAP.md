@@ -115,6 +115,38 @@ they are not rediscovered. Ordered roughly by value.
    scoped to achieve together.  P2/P3 were a measured no-op (already banked in
    1.0.x-1.2.x).  Plan complete.
 
+4a. **Common-term ranked top-k — the one clear remaining perf gap (NEW, top
+   priority after 1.5.9).**
+   Measured on 1.5.9 (`bench/RESULTS_5WAY_159b_2026-09-06.md`): common k10
+   **55.97 ms** vs pg_search 2.12 / vchord 3.49 / pg_textsearch 20.71.  This is
+   no longer a doclen-gathering problem -- 1.5.9's block-granular decode and
+   shared resident block fixed rare (1.74x) and multi-term (1.4-1.6x) and left
+   common flat, which is the expected signature.
+   **Diagnosis is already done and three easy answers are already disproven**
+   (`bench/NOTE_WAND_PRUNING_2026-09-04.md`): `year` scores 670,976 of 735k
+   postings with only 500 block-skips.  The block-max bound is TIGHT (measured
+   true per-block max impact equals our `impact(max_tf, min_dl)` bound to 4
+   decimals, so a precomputed block-max score buys nothing), finer 16-posting
+   granularity lowers the max only 3.7-4.6% and stays above the threshold, and
+   pruning is identical at k=1/10/100.  Bound and threshold simply sit ~12% apart
+   across a flat impact plateau, so WAND cannot prune -- the cost IS the posting
+   scan.
+   Also note pg_fts scans ~48% MORE postings than pg_search here because we stem
+   correctly and Tantivy does not (`year` -> 734,896 vs 495,580; regex-confirmed
+   ground truth 733,960).  That accounts for ~1.5x, not 26x.
+   The remaining levers all trade away something we currently guarantee:
+   - **impact-ordered / impact-quantized postings** -- the real fix used by
+     Lucene/Tantivy, but it breaks the docid ordering that `count(*)`, AND,
+     phrase and prefix all depend on (`bench/NOTE_IMPACT_ORDERING.md`), so it
+     likely means a SECOND posting layout per term, i.e. index growth -- against
+     our current best-in-field size.
+   - **early termination** -- rejected: breaks exact top-k, which parity_check
+     enforces as non-negotiable.
+   - **parallel scan (item 7)** -- does not lower work but would cut wall-clock
+     on exactly this shape.
+   Decide deliberately (exactness + size + capability vs common-term latency)
+   rather than drifting into it.  Nothing here is a micro-optimisation.
+
 5. **`WITH (positions=off)` — heap-side only.**
    An option to omit token positions from the heap `ftsdoc` for phrase-free
    workloads: smaller heap column, faster build/insert/merge. It does **not**
@@ -161,6 +193,15 @@ they are not rediscovered. Ordered roughly by value.
 ## Benchmark / competitive
 
 10. **Multi-engine real-corpus comparison — done; iterate.**
+    Latest: `bench/RESULTS_5WAY_159b_2026-09-06.md` (1.5.9, identical single
+    column, 8-run medians).  pg_fts has the **smallest index in the field**
+    (1421 MB vs 1887 pg_textsearch / 2734 pg_search / 2902 vchord) and the
+    **fastest exact `count(*)`** (2.20 ms vs pg_search 13.63; the other two
+    cannot do it).  Against the like-for-like comparator pg_textsearch it is
+    faster on rare (5.85 vs 7.36 ms), slower on mid (10.69 vs 7.96), 2.7x slower
+    on common k10, 1.4x faster on common k100.  **The open gap is common-term
+    ranked top-k** (55.97 ms vs pg_search 2.12) and phrase (90.70 vs 22.86) --
+    see item 4a below.
    A clean 3-way comparison (build time, index size, per-query latency across
    selectivity bands) vs VectorChord-bm25 and Timescale pg_textsearch on 2.19M
    Wikipedia articles is in `bench/RESULTS_VS_VCHORD_PGTEXTSEARCH.md`. It shows

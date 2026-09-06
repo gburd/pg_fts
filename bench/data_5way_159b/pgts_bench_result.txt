@@ -1,0 +1,90 @@
+pg_textsearch (Timescale) BM25 benchmark
+==========================================
+Host: Amazon Linux 2023, 16 vCPU / 128GB RAM, dedicated EC2, /nvme instance-store NVMe (885G)
+PostgreSQL: 17.10, built to /nvme/pg17, cluster at /nvme/pgdata
+Corpus: /nvme/c.tsv, 2,188,038 rows, 2 tab-separated columns (id, content), loaded into table docs
+
+Extension
+---------
+Repo: https://github.com/timescale/pg_textsearch.git
+Git commit: f940210 ("Dispatch compaction requests at commit (#477)")
+Build: make PG_CONFIG=/nvme/pg17/bin/pg_config && make install PG_CONFIG=/nvme/pg17/bin/pg_config  -- succeeded first try
+shared_preload_libraries: REQUIRED. Added shared_preload_libraries = 'pg_textsearch' to postgresql.conf;
+  server failed to use the extension without it, required pg_ctl restart. Confirmed clean restart after adding it.
+
+Schema / load
+-------------
+CREATE TABLE docs (id bigint, content text);
+\copy docs FROM '/nvme/c.tsv' WITH (FORMAT csv, DELIMITER E'\t', QUOTE E'\b')
+SELECT count(*) FROM docs;  -> 2188038  (matches corpus row count exactly)
+
+Index
+-----
+CREATE EXTENSION pg_textsearch;
+CREATE INDEX docs_pgts ON docs USING bm25(content) WITH (text_config='english');
+
+Build NOTICE: "BM25 index build completed: 2188038 documents, avg_length=316.55"
+Documents indexed: 2188038  vs  documents loaded: 2188038  (exact match, no rows dropped)
+(Incidental NOTICEs: 5x "word is too long to be indexed" for words >2047 chars -- ignored words, not dropped documents)
+
+Build time: 496 s
+Index size (pg_relation_size, docs_pgts): 1887 MB
+
+Query form (confirmed via EXPLAIN to use Index Scan on docs_pgts, not seqscan)
+-------------------------------------------------------------------------------
+SELECT id, content <@> '<term>'::bm25query AS score FROM docs ORDER BY score LIMIT k;
+
+EXPLAIN sample:
+ Limit  (cost=0.01..28.15 rows=10 width=16)
+   ->  Index Scan using docs_pgts on docs  (cost=0.01..6170841.99 rows=2192849 width=16)
+         Order By: (content <@> 'docs_pgts:slovakia'::bm25query)
+
+Latency measurements (median of 5 warm runs; first/cold run dropped)
+----------------------------------------------------------------------
+All runs confirmed to return the expected row count (10 or 100) before timing was recorded.
+
+rare k10  ('slovakia', LIMIT 10):   returned 10 rows every run
+  cold (dropped): 10.678 ms
+  warm runs (ms): 7.542, 7.515, 7.546, 7.565, 7.519
+  median: 7.542 ms
+
+mid k10   ('hungary', LIMIT 10):    returned 10 rows every run
+  cold (dropped): 11.092 ms
+  warm runs (ms): 8.118, 8.025, 8.019, 8.032, 7.963
+  median: 8.025 ms
+
+common k10 ('year', LIMIT 10):      returned 10 rows every run
+  cold (dropped): 25.112 ms
+  warm runs (ms): 21.232, 21.505, 21.256, 21.374, 21.195
+  median: 21.256 ms
+
+common k100 ('year', LIMIT 100):    returned 100 rows every run
+  cold (dropped): 56.260 ms
+  warm runs (ms): 51.330, 51.438, 51.141, 53.443, 51.294
+  median: 51.330 ms
+
+Match counts (df) -- derived via index-scan exhaustion
+--------------------------------------------------------
+Method: pg_textsearch exposes no df/count function. Ran SET enable_seqscan = off; then
+issued the ranked query with LIMIT larger than the true match count, and observed the
+row count returned (index scan naturally stops when it runs out of postings, so the
+returned row count IS the true match count / document frequency for that term).
+
+slovakia: LIMIT 1000000  -> 10875 matches   (query took 7.568 s -- exhaustion artifact, NOT a latency measurement)
+hungary:  LIMIT 1000000  -> 24097 matches   (query took 20.287 s -- exhaustion artifact, NOT a latency measurement)
+year:     LIMIT 3000000  -> 734896 matches  (query took 474.545 s / 7m54.545s -- exhaustion artifact, NOT a latency measurement;
+                                              this duration is a property of the brute-force full-posting-list scan used only
+                                              to derive the match count, not a property of top-k query performance)
+
+Summary table
+-------------
+Query                    | rows | median warm latency
+slovakia (rare)  LIMIT10 |  10  | 7.542 ms
+hungary  (mid)   LIMIT10 |  10  | 8.025 ms
+year     (common)LIMIT10 |  10  | 21.256 ms
+year     (common)LIMIT100|  100 | 51.330 ms
+
+Term      | match count (df)
+slovakia  | 10875
+hungary   | 24097
+year      | 734896
