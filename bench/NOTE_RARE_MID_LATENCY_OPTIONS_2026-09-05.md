@@ -143,3 +143,65 @@ Note the honest ceiling: even at zero doclen cost, rare/mid would be ~2.4 ms
 options 1-4 can close the rare/mid gap almost entirely. The **common** band is a
 different problem (posting-scan bound + we stem and pg_search does not) and is
 not addressed by any of this.
+
+---
+
+# OUTCOMES (measured 2026-09-06, 2.19M single-column Wikipedia, r6id.4xlarge)
+
+## Option 1 — block-granular decode: DONE, 1.7x on rare
+Shipped. rare k10 10.2 -> 6.05 ms. See RESULTS_5WAY_159.
+
+## Option 2 — share the resident decoded block across a query's cursors: DONE
+Reframed during implementation. The original idea (an LRU of decoded blocks) is
+POINTLESS for single-term ranked: the WAND visits a cursor's docids monotonically
+ascending, so a sidecar block is entered once and never revisited -- an LRU has
+nothing to hit.
+
+The real duplication is ACROSS CURSORS. Each (term, segment) has its own
+BM25DoclenCursor, but the scoring loop is
+    for i in cursors: if cursors[i].docid == pivot: score += contrib(cursors[i])
+so for an N-term query every cursor at the pivot looks up THE SAME docid -- and
+with per-cursor resident blocks that decoded the same sidecar block N times.
+
+Fix: hoist the resident block into a per-SEGMENT slot (BM25DoclenResident) shared
+by all of that scan's cursors for that segment. The 2nd..Nth lookup of a docid is
+then a pure in-memory binary search.
+
+Measured A/B (same host, same index, medians):
+
+| query        | per-cursor resident | shared resident | change |
+|--------------|--------------------|-----------------|--------|
+| 1-term rare  | 6.02 ms            | 6.15 ms         | flat (expected: 1 cursor) |
+| 1-term mid   | 10.83 ms           | 11.06 ms        | flat |
+| **2-term OR**| **6.17 ms**        | **4.27 ms**     | **1.44x** |
+| **3-term OR**| **10.95 ms**       | **6.71 ms**     | **1.63x** |
+
+The win grows with term count, exactly as the mechanism predicts. Parity PASS on
+all five shapes (single, AND, OR, k=10 and k=100). No format change.
+
+## Option 3 — df-threshold bulk-load fast path: REJECTED by measurement
+The premise was that for a small-df term, one sequential bulk load might beat
+many per-block decodes. Measured ranked k10 across a df spectrum on the same
+index:
+
+| term       | df      | ranked k10 | us/posting |
+|------------|---------|-----------|------------|
+| bratislava | 2,560   | 2.35 ms   | 0.92 |
+| zurich     | 4,225   | 3.71 ms   | 0.88 |
+| slovakia   | 10,875  | 5.92 ms   | 0.54 |
+| vienna     | 18,927  | 9.74 ms   | 0.51 |
+| hungary    | 24,097  | 10.80 ms  | 0.45 |
+| berlin     | 36,776  | 13.51 ms  | 0.37 |
+| paris      | 66,826  | 17.10 ms  | 0.26 |
+| city       | 397,793 | 37.6 ms   | 0.09 |
+| year       | 734,896 | 55.9 ms   | 0.08 |
+
+Cost is ~linear in df with **no fixed floor**: the smallest term already runs at
+2.35 ms, which is the plain `@@@` count floor for that df. A bulk load reads ~547
+sidecar pages regardless of df -- strictly MORE work than bratislava's current
+2.35 ms. **There is no crossover; the page directory already wins at every df.**
+Do not implement this. (This is why the plan said "measure before writing code".)
+
+## Net effect of this release on rare/mid
+rare 10.2 -> 6.05 ms (1.7x, option 1); multi-term 1.44-1.63x (option 2); the
+per-posting floor is now the posting scan itself, not doclen gathering.

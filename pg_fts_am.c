@@ -2076,6 +2076,28 @@ bm25_doclen_lookup(const BM25Doclens *d, uint64 docid)
  * no sidecar (start == Invalid); its cursor returns 0 and the caller reads the
  * inline posting doclen.
  */
+/*
+ * Resident decoded doclen block, SHARED by every cursor of one scan that reads
+ * the same segment sidecar.
+ *
+ * Each (term, segment) gets its own BM25DoclenCursor, but for a multi-term query
+ * every cursor sitting at the scored pivot docid looks up THE SAME docid -- so
+ * with per-cursor resident blocks an N-term match decoded the same sidecar block
+ * N times.  Hoisting the resident block into a per-segment shared slot makes the
+ * 2nd..Nth lookup of a docid a pure in-memory binary search.  Single-term scans
+ * are unaffected (one cursor, one slot).
+ */
+typedef struct BM25DoclenResident
+{
+	BlockNumber blk;			/* block currently decoded, or Invalid */
+	uint64	   *docid;			/* docids of the resident block (palloc'd) */
+	uint8	   *byte;			/* parallel quantized bytes (palloc'd) */
+	int			n;				/* docs decoded in the resident block */
+	int			cap;			/* capacity of docid/byte */
+	uint64		first;			/* lowest docid in the resident block */
+	uint64		last;			/* highest docid in the resident block */
+} BM25DoclenResident;
+
 typedef struct BM25DoclenCursor
 {
 	Relation	index;
@@ -2084,16 +2106,9 @@ typedef struct BM25DoclenCursor
 	const BlockNumber *dir_blk;	/* per-page block number (parallel) */
 	int			dir_n;			/* directory entries (= sidecar pages) */
 	int			dir_hint;		/* last page index hit (ascending-resume) */
-	/* one resident decoded page (a sidecar PAGE holds many 128-doc blocks; size
-	 * the resident arrays to the max docs a page can hold and decode the whole
-	 * page).  Heap-allocated once at init to keep the cursor struct small. */
-	BlockNumber res_blk;		/* block currently decoded, or Invalid */
-	uint64	   *res_docid;		/* docids of the resident BLOCK (palloc'd) */
-	uint8	   *res_byte;		/* parallel quantized bytes (palloc'd) */
-	int			res_n;			/* docs decoded in the resident block */
-	int			res_cap;		/* capacity of res_docid/res_byte */
-	uint64		res_first;		/* lowest docid in the resident block */
-	uint64		res_last;		/* highest docid in the resident block */
+	BM25DoclenResident *res;	/* SHARED resident block for this segment (borrowed
+								 * from the scan's per-segment slot; never freed
+								 * by the cursor) */
 } BM25DoclenCursor;
 
 /*
@@ -2291,7 +2306,7 @@ bm25_doclendir_cache(Relation index, const BM25MetaPageData *meta)
 
 static void
 bm25_doclen_cursor_init(BM25DoclenCursor *c, Relation index, BlockNumber start,
-						BM25DoclenDirCache *dc)
+						BM25DoclenDirCache *dc, BM25DoclenResident *res)
 {
 	c->index = index;
 	c->start = start;
@@ -2299,13 +2314,7 @@ bm25_doclen_cursor_init(BM25DoclenCursor *c, Relation index, BlockNumber start,
 	c->dir_blk = NULL;
 	c->dir_n = 0;
 	c->dir_hint = 0;
-	c->res_blk = InvalidBlockNumber;
-	c->res_n = 0;
-	c->res_docid = NULL;
-	c->res_byte = NULL;
-	c->res_cap = 0;
-	c->res_first = 0;
-	c->res_last = 0;
+	c->res = NULL;
 
 	if (start == InvalidBlockNumber || dc == NULL)
 		return;					/* v3 segment (inline doclen) or no cache */
@@ -2322,35 +2331,34 @@ bm25_doclen_cursor_init(BM25DoclenCursor *c, Relation index, BlockNumber start,
 				break;
 			}
 	}
-	if (c->dir_n > 0)
+	if (c->dir_n > 0 && res != NULL)
 	{
-		/* the resident buffer holds ONE 128-doc block (we decode only the block
-		 * covering the sought docid, not the whole page) */
-		c->res_cap = BM25_BLOCK_SIZE;
-		c->res_docid = (uint64 *) palloc(c->res_cap * sizeof(uint64));
-		c->res_byte = (uint8 *) palloc(c->res_cap * sizeof(uint8));
+		/* Attach the SHARED resident block for this segment.  Lazily size it to
+		 * one 128-doc block (we decode only the block covering the sought docid,
+		 * never a whole page). */
+		if (res->docid == NULL)
+		{
+			res->cap = BM25_BLOCK_SIZE;
+			res->docid = (uint64 *) palloc(res->cap * sizeof(uint64));
+			res->byte = (uint8 *) palloc(res->cap * sizeof(uint8));
+			res->blk = InvalidBlockNumber;
+			res->n = 0;
+			res->first = 0;
+			res->last = 0;
+		}
+		c->res = res;
 	}
 }
 
 static void
 bm25_doclen_cursor_free(BM25DoclenCursor *c)
 {
-	/* directory arrays are borrowed from the relcache cache; free only the
-	 * cursor's own resident-page buffers */
-	if (c->res_docid)
-		pfree(c->res_docid);
-	if (c->res_byte)
-		pfree(c->res_byte);
-	c->res_docid = NULL;
-	c->res_byte = NULL;
+	/* the directory arrays are borrowed from the relcache cache and the resident
+	 * block from the scan's per-segment slot -- nothing here is cursor-owned */
 	c->dir_docid = NULL;
 	c->dir_blk = NULL;
 	c->dir_n = 0;
-	c->res_blk = InvalidBlockNumber;
-	c->res_n = 0;
-	c->res_cap = 0;
-	c->res_first = 0;
-	c->res_last = 0;
+	c->res = NULL;
 }
 
 /* Decode the ONE sidecar block on page `blkno` whose docid range covers `docid`
@@ -2370,17 +2378,20 @@ bm25_doclen_cursor_free(BM25DoclenCursor *c)
 static void
 bm25_doclen_cursor_load_page(BM25DoclenCursor *c, BlockNumber blkno, uint64 docid)
 {
+	BM25DoclenResident *r = c->res;
 	Buffer		buf;
 	Page		page;
 	char	   *ptr,
 			   *end;
 	char	   *cand = NULL;		/* best (largest first_docid <= docid) block */
 
-	c->res_n = 0;
-	c->res_blk = blkno;
-	c->res_first = 0;
-	c->res_last = 0;
-	if (blkno == InvalidBlockNumber || c->res_docid == NULL ||
+	if (r == NULL)
+		return;
+	r->n = 0;
+	r->blk = blkno;
+	r->first = 0;
+	r->last = 0;
+	if (blkno == InvalidBlockNumber || r->docid == NULL ||
 		blkno >= RelationGetNumberOfBlocks(c->index))
 		return;
 	buf = ReadBuffer(c->index, blkno);
@@ -2426,17 +2437,17 @@ bm25_doclen_cursor_load_page(BM25DoclenCursor *c, BlockNumber blkno, uint64 doci
 		bm25_for_unpack((unsigned char *) (bh + 1), (int) bh->count, gaps);
 		bytes = (uint8 *) ((char *) (bh + 1) + bh->gapbytes);
 		acc = ((uint64) bh->first_docid_hi << 32) | bh->first_docid_lo;
-		for (j = 0; j < (int) bh->count && c->res_n < c->res_cap; j++)
+		for (j = 0; j < (int) bh->count && r->n < r->cap; j++)
 		{
 			acc += gaps[j];		/* gaps[0] == 0 */
-			c->res_docid[c->res_n] = acc;
-			c->res_byte[c->res_n] = bytes[j];
-			c->res_n++;
+			r->docid[r->n] = acc;
+			r->byte[r->n] = bytes[j];
+			r->n++;
 		}
-		if (c->res_n > 0)
+		if (r->n > 0)
 		{
-			c->res_first = c->res_docid[0];
-			c->res_last = c->res_docid[c->res_n - 1];
+			r->first = r->docid[0];
+			r->last = r->docid[r->n - 1];
 		}
 	}
 	UnlockReleaseBuffer(buf);
@@ -2448,16 +2459,18 @@ bm25_doclen_cursor_load_page(BM25DoclenCursor *c, BlockNumber blkno, uint64 doci
 static inline uint32
 bm25_doclen_cursor_lookup(BM25DoclenCursor *c, uint64 docid)
 {
+	BM25DoclenResident *r = c->res;
 	int			lo,
 				hi,
 				pg;
 
-	if (c->dir_n == 0 || c->dir_docid == NULL)
+	if (c->dir_n == 0 || c->dir_docid == NULL || r == NULL)
 		return 0;
 
-	/* Fast path: docid is inside the resident BLOCK's range (the ascending WAND
-	 * scan hits this for consecutive postings that share a block). */
-	if (c->res_n > 0 && docid >= c->res_first && docid <= c->res_last)
+	/* Fast path: docid is inside the resident BLOCK's range.  This now also hits
+	 * when a DIFFERENT term's cursor of the same segment already decoded the
+	 * block for this pivot docid (the multi-term win). */
+	if (r->n > 0 && docid >= r->first && docid <= r->last)
 	{
 		/* fall through to the in-block search below */
 	}
@@ -2486,27 +2499,24 @@ bm25_doclen_cursor_lookup(BM25DoclenCursor *c, uint64 docid)
 		if (pg < 0)
 			return 0;			/* docid precedes the first page's first docid */
 		c->dir_hint = pg;
-		/* Load the covering BLOCK.  Reload even when the page is unchanged: the
-		 * resident unit is one block, so a docid on the same page but a different
-		 * block is not covered (the fast path above already handled "same block"). */
 		bm25_doclen_cursor_load_page(c, c->dir_blk[pg], docid);
 	}
 
 	/* binary-search within the resident block */
 	{
 		int			rlo = 0,
-					rhi = c->res_n - 1;
+					rhi = r->n - 1;
 
 		while (rlo <= rhi)
 		{
 			int			mid = (rlo + rhi) >> 1;
 
-			if (c->res_docid[mid] < docid)
+			if (r->docid[mid] < docid)
 				rlo = mid + 1;
-			else if (c->res_docid[mid] > docid)
+			else if (r->docid[mid] > docid)
 				rhi = mid - 1;
 			else
-				return fts_byte_to_doclen(c->res_byte[mid]);
+				return fts_byte_to_doclen(r->byte[mid]);
 		}
 	}
 	return 0;

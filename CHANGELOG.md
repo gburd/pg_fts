@@ -2,6 +2,101 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.5.9
+
+Correctness fix for non-UTF-8 databases, plus two ranked-latency optimisations.
+C-only, no SQL objects, no on-disk index format change (BM25_VERSION stays 4).
+
+### 1. Non-ASCII case folding was broken on non-UTF-8 server encodings
+
+**Who is affected:** databases whose server encoding is NOT UTF-8 (LATIN1,
+WIN1252, etc) **and** whose locale is not `C`. UTF-8 databases were never
+affected.
+
+`fold_token()` case-folded ASCII but passed every byte >= 0x80 through
+**unchanged**, so upper- and lower-case accented letters were different terms and
+case-insensitive search silently failed for all non-ASCII text. Measured on
+LATIN1 + `de_DE.iso88591`: a document `Apfel` (A-umlaut, 0xC4) did **not** match a
+query `apfel` (a-umlaut, 0xE4), while PostgreSQL's own `to_tsvector()` **did**.
+We were diverging from PostgreSQL text search on exactly the deployments most
+likely to be non-UTF-8.
+
+The non-UTF-8 path now delegates to `str_tolower()` -- the same
+locale/collation-aware primitive tsearch's `lowerstr()` uses -- so pg_fts
+produces byte-identical terms to `to_tsvector()` on those servers.
+
+Behaviour under locale `C` is deliberately unchanged: the C library has no case
+mapping for high bytes there. (PostgreSQL appears to "match" under `C` only
+because its parser *discards* the accented character; pg_fts keeps it, which
+loses less information.) The contract is now explicit: **non-ASCII folding on a
+non-UTF-8 server follows the database locale, exactly as PostgreSQL does.**
+
+**Upgrade action for affected databases:** terms already stored by an older
+version are unfolded and will not match the newly-folded query form. Re-derive
+them -- `UPDATE t SET d = to_ftsdoc('<cfg>', body)` for a stored `ftsdoc` column,
+or `REINDEX INDEX <name>` for an expression index. Until then those rows keep the
+old (case-sensitive for non-ASCII) behaviour. Nothing to do on UTF-8.
+
+Also hardened: the UTF-8 folding loop called `utf8_to_unicode()` without checking
+that the character's bytes fit within the token. Not reachable today (the
+tokenizer never splits a well-formed UTF-8 character and pg_fts imposes no term
+length cap), but the bound is now explicit.
+
+New regression coverage in `t/004_encodings.pl` asserts an upper-case accented
+document matches a lower-case query on LATIN1 with an ISO-8859-1 locale; it skips
+cleanly where no such locale exists. The pre-existing LATIN1 probes only tested
+exact-case round-trips, which is why this bug survived.
+
+### 2. Rare-term ranked latency: 1.7x faster (block-granular doclen decode)
+
+The page-directory cursor decoded a **whole sidecar page** (~31 blocks, ~4,000
+doc entries) to answer one doclen lookup. A rare term scattered across the docid
+space touches nearly every sidecar page, so scoring 10,875 postings cost ~2.2M
+doc-decodes -- a ~200x amplification, measured as ~7.9 ms of a 10.2 ms rare-term
+ranked query. Now only the **covering 128-doc block** is decoded: the page's block
+headers are walked (no FOR-unpack) to locate it, then that one block is unpacked.
+
+rare k10 **10.2 -> 6.05 ms**. Mid is ~flat (a denser term's consecutive postings
+already shared a block), common 60.9 -> 56.5 ms.
+
+### 3. Multi-term ranked latency: 1.44-1.63x faster (shared resident block)
+
+Each `(term, segment)` has its own doclen cursor, but the scoring loop asks every
+cursor sitting at the pivot docid for its contribution -- i.e. **N cursors look up
+the SAME docid**, and each decoded the same sidecar block independently. The
+resident decoded block is now hoisted into a per-**segment** slot shared by all of
+that scan's cursors, so the 2nd..Nth lookup of a docid is a pure in-memory binary
+search.
+
+| query | before | after | change |
+|-------|--------|-------|--------|
+| 1-term | 6.02 / 10.83 ms | 6.15 / 11.06 ms | flat (one cursor) |
+| 2-term OR | 6.17 ms | **4.27 ms** | **1.44x** |
+| 3-term OR | 10.95 ms | **6.71 ms** | **1.63x** |
+
+(The originally-planned "LRU of decoded blocks" was dropped: the WAND visits a
+cursor's docids monotonically ascending, so a block is never revisited by the same
+cursor and an LRU would have nothing to hit. The duplication is across cursors,
+which is what this fixes.)
+
+### Rejected by measurement (recorded so it is not retried)
+
+A df-threshold "bulk-load the whole sidecar for small-df terms" fast path was
+planned and then **disproven**: measured ranked cost is ~linear in df with no
+fixed floor (df 2,560 -> 2.35 ms, already the plain `@@@` count floor), while a
+bulk load reads ~547 sidecar pages regardless of df. There is no crossover; the
+page directory already wins at every df. Details in
+`bench/NOTE_RARE_MID_LATENCY_OPTIONS_2026-09-05.md`.
+
+### Validation
+
+Ranked top-k **parity PASS** on all five query shapes (single-term, AND, OR, at
+k=10 and k=100) against an exact `fts_bm25` sort, on 2.19M Wikipedia articles.
+Encoding fix verified against real LATIN1/WIN1252/UTF-8 clusters and against
+`to_tsvector` on identical bytes. installcheck (PG 17/18), full TAP set (incl.
+`t/004_encodings` running for real with an ISO-8859-1 locale, and
+`t/006_concurrent_extend`), alloc/ascii guards and the block-fuzzer all pass.
+
 ## 1.5.8
 
 Performance + robustness release.  C-only, no SQL change, no on-disk index

@@ -111,4 +111,46 @@ run_encoding_case(
 		[ "\xc5\xec\xb5\xfe postgresql",     "zzzzz"                    ],  # no-match
 	]);
 
+# --- non-UTF-8 CASE FOLDING with a real locale --------------------------------
+# Regression for a genuine correctness bug: on a non-UTF-8 server, fold_token()
+# used to leave every byte >= 0x80 UNCHANGED, so an upper-case accented letter
+# did not fold to its lower-case form and case-insensitive search silently failed
+# for all non-ASCII text.  Measured on LATIN1 + de_DE.iso88591 before the fix:
+#   'Apfel' (A-umlaut 0xC4) did NOT match a query 'apfel' (a-umlaut 0xE4),
+# while PostgreSQL's own to_tsvector() DID (it lowercases 0xC4 -> 0xE4).
+# fold_token() now delegates non-UTF-8 folding to str_tolower() -- the same
+# locale-aware primitive tsearch uses -- so pg_fts agrees with to_tsvector.
+#
+# Needs an ISO-8859-1 locale; skipped when the host has none (locale C has no
+# case mapping for high bytes, so nothing to assert there -- and pg_fts
+# correctly does not fold under C, matching the C library).
+SKIP:
+{
+	my $loc;
+	for my $cand (qw(de_DE.iso88591 de_DE.ISO-8859-1 en_US.iso88591 fr_FR.iso88591))
+	{
+		my $out = `locale -a 2>/dev/null`;
+		if (defined $out && $out =~ /^\Q$cand\E$/mi) { $loc = $cand; last; }
+	}
+	skip 'no ISO-8859-1 locale available on this host', 2 unless defined $loc;
+
+	my $node = PostgreSQL::Test::Cluster->new('enc_fold');
+	$node->init(
+		extra => [ '--encoding', 'LATIN1', '--lc-ctype', $loc, '--lc-collate', $loc ]);
+	$node->start;
+	my ($rc, $out, $err) = $node->psql('postgres', 'CREATE EXTENSION pg_fts');
+	is($rc, 0, "LATIN1/$loc: CREATE EXTENSION pg_fts succeeds")
+	  or diag("stderr: $err");
+
+	# 0xC4 = A-umlaut (upper), 0xE4 = a-umlaut (lower); rest is ASCII "pfel".
+	# Built via convert_from(bytea) so this test file stays pure ASCII.
+	my $match = $node->safe_psql('postgres', q{
+		SELECT (to_ftsdoc(convert_from('\xc470666565'::bytea, 'LATIN1'))
+				@@@ to_ftsquery(convert_from('\xe470666565'::bytea, 'LATIN1')))::text
+	});
+	is($match, 'true',
+		"LATIN1/$loc: upper-case accented doc matches lower-case query (str_tolower folding)");
+	$node->stop;
+}
+
 done_testing();
