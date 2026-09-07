@@ -2947,3 +2947,15 @@ SELECT count(*) = 0 AS labelA_no_match FROM zold WHERE d @@@ to_ftsquery('englis
 SELECT count(*) = 200 AS phrase_ok FROM zold WHERE d @@@ '"vacuum lock"'::ftsquery;
 RESET enable_seqscan;
 DROP TABLE zold;
+
+-- positionless-doc adjacency: the ftsdoc text-input parser SYNTHESIZES positions
+-- from token order when the literal supplies none, so FTS_DOC_HAS_POS holds and
+-- phrase adjacency is still enforced.  This pins that behaviour: phrase_step()
+-- has a presence-only AND fallback for docs without positions ("precision
+-- degraded"), and these assertions are what keep that fallback unreachable --
+-- if a future change lets a positionless doc through, the reversed case below
+-- flips to true and a phrase silently becomes a conjunction.
+SELECT 'bravo alpha'::ftsdoc::text AS nopos_synthesizes_positions;                                        -- 'alpha':1@2 'bravo':1@1
+SELECT 'bravo alpha'::ftsdoc @@@ to_ftsquery('simple','"alpha bravo"') AS nopos_reversed_phrase_false;    -- f
+SELECT 'alpha bravo'::ftsdoc @@@ to_ftsquery('simple','"alpha bravo"') AS nopos_forward_phrase_true;      -- t
+SELECT 'bravo alpha'::ftsdoc @@@ to_ftsquery('simple','alpha & bravo') AS nopos_conjunction_true;         -- t

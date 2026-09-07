@@ -196,6 +196,31 @@ they are not rediscovered. Ordered roughly by value.
    shrink the bm25 index (which stores no positions — see #4); the earlier
    "smaller index" framing was wrong. Phrase/NEAR require positions, so opt-in.
 
+   **Interaction found while profiling phrase (2026-09-06) — read before
+   implementing.** With index `positions=off` (the default), a phrase is answered
+   by AND + a **heap recheck**, and that recheck (`fts_doc_matches` →
+   `phrase_step`) derives adjacency from the heap `ftsdoc` positions.  Dropping
+   heap positions therefore removes the only adjacency source for a
+   default-built index.
+
+   Note what `phrase_step()` does when a side lacks positions: it falls back to
+   presence-only AND ("recall preserved, precision degraded", per its comment) —
+   i.e. it would answer a phrase with a conjunction and report it as a phrase
+   match.  **Verified 2026-09-06 that this is currently unreachable**, so it is
+   not a live bug: the `ftsdoc` text-input parser *synthesizes* positions from
+   token order when the literal supplies none (`'bravo alpha'::ftsdoc` →
+   `'alpha':1@2 'bravo':1@1`), so `FTS_DOC_HAS_POS` holds for every parsed doc,
+   and adjacency is enforced (reversed-order phrase → false, forward → true).
+   `to_ftsdoc()` and the tsvector path both set the flag unconditionally too.
+
+   So the constraint on this item is: a heap-side `positions=off` would be the
+   **first** way to construct a positionless doc in practice, converting that
+   dormant fallback into a live silent-wrong-answer path.  Implement it only with
+   either (a) index `positions=on` required before heap positions may be dropped,
+   or (b) a clear error for phrase/NEAR when neither side carries positions — and
+   consider changing the `phrase_step` fallback to an error at the same time, so
+   it cannot degrade silently if some future path does produce such a doc.
+
 6. **COUNT / aggregation Custom Scan pushdown. [DONE]**
    Implemented in `pg_fts_customscan.c`: `_PG_init` installs
    `create_upper_paths_hook` (count) and `set_rel_pathlist_hook` (ranked), so a
