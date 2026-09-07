@@ -165,19 +165,48 @@ they are not rediscovered. Ordered roughly by value.
    top-k, which parity_check enforces.  Do not open that decision on an
    unprofiled premise again.
 
+4b. **Phrase queries — PROFILED 2026-09-06; the win was documentation, not code**
+   (`bench/NOTE_PHRASE_PROFILE_2026-09-06.md`).
+   Two findings.  First, **our published "phrase 90.70 ms" was not a phrase**: it
+   was written with single quotes, which parse to `('unit' & 'state')` -- a plain
+   AND.  Phrase needs DOUBLE quotes.  RESULTS_5WAY_159b carries an in-place
+   correction.
+   Second, the real numbers (2.19M docs, `"united states"`, 361,465 matches):
+   ranked top-10 **8,385 ms** with the default `positions=off` vs **229 ms** with
+   `positions=on` (**36x**); exact phrase `count(*)` **7,170 -> 132 ms** (**54x**);
+   index 1421 -> 2626 MB (1.85x).  With positions off a phrase cannot be verified
+   from the index, so the scan falls back to AND + a HEAP RECHECK per candidate.
+   **Shipped: the documentation gap.**  README and `doc/pg_fts.sgml` described
+   `positions=on` as enabling "index-only" phrase without ever saying the default
+   costs SECONDS at scale.  Both now carry the measured table plus the
+   double-quote syntax note (and the SGML was verified to actually render).
+   **Considered and declined: a lazy phrase gate.**  Feasible without a format
+   change (the block header carries `posbytelen`; `wand_load_block` simply does
+   not copy the position bytes), but the profile bounds it: the adjacency test is
+   only 4.3% of the query, `bm25_collect_matches` materializing all 361,465
+   docids is 21.2%, and WAND ranking + the doclen path -- which both stay -- are
+   37%.  Ceiling **~229 -> ~150 ms (~1.5x)**, which does not close the 5-10x gap
+   to pg_search's 22.9 ms, in exchange for changing `WandCursor` on the hot path
+   that already caused 1.5.5/1.5.6.  Revisit only if a field report shows ranked
+   phrase latency mattering AFTER positions are enabled.
+
 5. **`WITH (positions=off)` — heap-side only.**
    An option to omit token positions from the heap `ftsdoc` for phrase-free
    workloads: smaller heap column, faster build/insert/merge. It does **not**
    shrink the bm25 index (which stores no positions — see #4); the earlier
    "smaller index" framing was wrong. Phrase/NEAR require positions, so opt-in.
 
-6. **COUNT / aggregation Custom Scan pushdown.**
-   A transparent `count(*) WHERE col @@@ query` currently runs as a bitmap heap
-   scan, which goes lossy on a huge match set and rechecks the heap.
-   `fts_count()` already avoids this with a visibility-map-based bulk count, but
-   it is an explicit function call. A `set_rel_pathlist_hook` /
-   `create_upper_paths_hook` Custom Scan that pushes COUNT into the index would
-   make plain `count(*)` fast without the explicit call.
+6. **COUNT / aggregation Custom Scan pushdown. [DONE]**
+   Implemented in `pg_fts_customscan.c`: `_PG_init` installs
+   `create_upper_paths_hook` (count) and `set_rel_pathlist_hook` (ranked), so a
+   plain `count(*) WHERE col @@@ query` is planned as `Custom Scan (FtsCount)`
+   with no explicit `fts_count()` call and no lossy bitmap heap recheck.  Verified
+   again 2026-09-06 during phrase profiling: `EXPLAIN` on
+   `count(*) ... WHERE d @@@ to_ftsquery(...)` shows `Custom Scan (FtsCount)`, and
+   the measured cost is 2.20 ms for a 734,896-match term (a single plain term
+   short-circuits to the dictionary df with no posting decode at all).  The cost
+   model was repriced as the index-only visibility-map count it performs so the
+   planner picks it at scale.  This item was simply never marked done.
 
 7. **Parallel scan (`amcanparallel`).**
    Query execution is single-threaded. A parallel bitmap / ordering scan would
