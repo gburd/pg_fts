@@ -2,6 +2,71 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.5.10
+
+Performance release: **common-term ranked top-k is 1.56x faster.** C-only, no SQL
+objects changed, no on-disk index format change (BM25_VERSION stays 4), no
+REINDEX. Both wins came from profiling the scan with `perf` on real hardware,
+and both are ordinary read-path fixes -- no format, ordering or exactness change.
+
+| query | 1.5.9 | 1.5.10 | change |
+|---|---|---|---|
+| common k10 (`year`, df 734,896) | 56.30 ms | **36.16 ms** | **1.56x** |
+| common k100 | 69.78 ms | **46.01 ms** | **1.52x** |
+| rare k10 / mid k10 / 2-term OR | 5.85 / 10.69 / 4.32 | 5.89 / 10.64 / 4.12 | flat |
+
+### 1. Ascending-resume hint in the doclen lookup
+
+`bm25_doclen_cursor_lookup()` ran an unconditional binary search over the
+resident 128-entry doclen block -- **~7 branchy iterations per posting**, on a
+term whose docids are consecutive. `perf annotate` put ~45% of a common-term
+query in that search (the BM25 math itself was 1.68%).
+
+The WAND scan probes docids in strictly ascending order, so the next answer is
+almost always the next entry: try a short linear walk from a resume hint, fall
+back to the binary search on a miss, and reset the hint whenever a new block is
+decoded. **56.30 -> 42.67 ms.**
+
+### 2. `bm25_for_get()` was still decoding bit-by-bit
+
+`bm25_for_unpack()` (batch) had long since been optimized to a
+word-load/shift/mask extraction -- its comment even says it "replaces the per-bit
+inner loop that dominated posting decode" -- but **the random-access twin
+`bm25_for_get()` never got that treatment** and still ran one bit-test per bit of
+width, per call. It is on the hot path twice: `wand_contrib_cur()` reads `tf`
+through it for *every scored posting*, and the v3 inline-doclen path reads |D|
+through it too.
+
+Gave it the same extraction, including the `shift == 0` undefined-behaviour guard
+the batch version documents for a corrupt on-disk width byte. **42.67 -> 36.16
+ms.** The `bm25_for_get(buf, i) == bm25_for_unpack(buf)[i]` equivalence is already
+asserted by both `test/fuzz/fuzz_for.c` and `test/hegel/test_for.c`.
+
+### Rejected by measurement (recorded so they are not retried)
+
+- **Partial/lazy block decode for rare-term latency.** Gains ~1%. The motivating
+  "71x decode amplification" was an arithmetic artifact of ours: the doclen
+  sidecar is keyed by **all** docids, so a rare term's target sits at an
+  arbitrary offset in its block -- instrumented at **60-82 entries decoded per
+  block**, which is the unavoidable gap-decode prefix (delta-encoded docids have
+  no random access), not waste. Forcing a small decode window made it *worse*
+  (rare 5.83 -> 7.74 ms) via tens of thousands of geometric re-walks.
+- **Impact-ordered postings / a precomputed block-max score / finer block
+  granularity / early termination** -- all previously disproven or rejected; see
+  `bench/NOTE_WAND_PRUNING_2026-09-04.md`.
+
+After this release **rare and mid are at their floor**: what remains in
+`bm25_doclen_cursor_load_page()` is inherent gap-decoding. Moving them further
+would need a format change (periodic absolute docids within a block) worth at most
+~2x of a portion of the query.
+
+### Validation
+
+Ranked top-k **parity PASS on all 10 cases** (single-term, AND, OR at k=10 and
+k=100) against an exact `fts_bm25` sort, on 2.19M Wikipedia articles at 1421 MB.
+installcheck (PG 17/18), full TAP set, alloc/ascii guards and the block fuzzer
+(`== ALL CLEAN ==`) all pass. Measured on EC2 r6id.4xlarge, medians of runs 4-8.
+
 ## 1.5.9
 
 Correctness fix for non-UTF-8 databases, plus two ranked-latency optimisations.
