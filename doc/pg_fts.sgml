@@ -64,7 +64,7 @@
       phrases <literal>"a b c"</literal>; <literal>NEAR(a b, k)</literal>
       proximity; prefix <literal>term*</literal>; fuzzy
       <literal>term~k</literal> (edit distance <replaceable>k</replaceable>,
-      default&nbsp;2); and regular expressions <literal>/re/</literal>.
+      default&#160;2); and regular expressions <literal>/re/</literal>.
       Produced with <function>to_ftsquery</function> or the input syntax
       (<literal>'a &amp; b'::ftsquery</literal>).
      </para>
@@ -390,6 +390,35 @@ CREATE INDEX docs_bm25 ON docs USING fts (to_ftsdoc('english', body))
    only makes them <emphasis>fast</emphasis> (index-only).  This is an on-disk
    format change (BM25 v2 &rarr; v3); an index built by an older release must be
    <command>REINDEX</command>ed.
+  </para>
+  <para>
+   The size of that difference is easy to underestimate.  Measured on 2,188,038
+   Wikipedia articles (16 vCPU, 128&#160;GB, warm cache), with the phrase
+   <literal>"united states"</literal> matching 361,465 documents:
+<informaltable>
+ <tgroup cols="3">
+  <thead>
+   <row><entry>query</entry><entry>default (<literal>positions = off</literal>)</entry><entry><literal>positions = on</literal></entry></row>
+  </thead>
+  <tbody>
+   <row><entry>ranked top-10</entry><entry>8,385 ms</entry><entry><emphasis>229 ms</emphasis> (36&#215;)</entry></row>
+   <row><entry>exact <function>count(*)</function></entry><entry>7,170 ms</entry><entry><emphasis>132 ms</emphasis> (54&#215;)</entry></row>
+   <row><entry>index size</entry><entry>1,421 MB</entry><entry>2,626 MB (1.85&#215;)</entry></row>
+  </tbody>
+ </tgroup>
+</informaltable>
+   In other words the default is measured in <emphasis>seconds</emphasis> at this
+   scale, because the adjacency recheck performs a heap probe per candidate.  If
+   an application issues phrase or NEAR queries against a large table, enable
+   <literal>positions = on</literal> when the index is created.  See
+   <filename>bench/NOTE_PHRASE_PROFILE_2026-09-06.md</filename>.
+  </para>
+  <para>
+   Note that phrase syntax uses <emphasis>double</emphasis> quotes:
+   <literal>to_ftsquery('english', '"united states"')</literal> parses to
+   <literal>('unit' &lt;-&gt; 'state')</literal>.  Single quotes yield a plain
+   conjunction <literal>('unit' &amp; 'state')</literal>, which is a different
+   (much larger) match set.
   </para>
  </sect2>
 

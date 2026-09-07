@@ -138,6 +138,21 @@ Features
     (term~k, Levenshtein DFA), and regex (/re/) terms, with an optional trigram
     pre-filter (`WITH (trigrams = on)`; default off -- regex/long-fuzzy fall
     back to a dictionary scan without it)
+
+    > **Phrase queries need `WITH (positions = on)` to be fast.** The option
+    > defaults to **off**, and without it a phrase cannot be verified from the
+    > index: the scan falls back to AND plus a **heap recheck** of every
+    > candidate document. Measured on 2.19M Wikipedia articles
+    > (`bench/NOTE_PHRASE_PROFILE_2026-09-06.md`): ranked top-10 for
+    > `"united states"` costs **8,385 ms** with the default and **229 ms** with
+    > `positions = on` (**36x**); an exact phrase `count(*)` goes **7,170 ms ->
+    > 132 ms** (**54x**). The cost is a larger index -- 1421 MB -> 2626 MB
+    > (1.85x) on that corpus. If you issue phrase or NEAR queries at scale,
+    > enable it at CREATE INDEX time.
+    >
+    > Note also that phrase syntax uses **double** quotes:
+    > `to_ftsquery('english', '"united states"')`. Single quotes produce a
+    > plain conjunction (`('unit' & 'state')`), which matches many more rows.
   * external-content indexing via an expression index on to_ftsdoc(col)
   * incremental maintenance (INSERT appends to a pending list, no REINDEX);
     background/on-demand merge (fts_merge()) and compaction (fts_vacuum())
