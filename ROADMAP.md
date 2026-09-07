@@ -115,37 +115,42 @@ they are not rediscovered. Ordered roughly by value.
    scoped to achieve together.  P2/P3 were a measured no-op (already banked in
    1.0.x-1.2.x).  Plan complete.
 
-4a. **Common-term ranked top-k — the one clear remaining perf gap (NEW, top
-   priority after 1.5.9).**
-   Measured on 1.5.9 (`bench/RESULTS_5WAY_159b_2026-09-06.md`): common k10
-   **55.97 ms** vs pg_search 2.12 / vchord 3.49 / pg_textsearch 20.71.  This is
-   no longer a doclen-gathering problem -- 1.5.9's block-granular decode and
-   shared resident block fixed rare (1.74x) and multi-term (1.4-1.6x) and left
-   common flat, which is the expected signature.
-   **Diagnosis is already done and three easy answers are already disproven**
-   (`bench/NOTE_WAND_PRUNING_2026-09-04.md`): `year` scores 670,976 of 735k
-   postings with only 500 block-skips.  The block-max bound is TIGHT (measured
-   true per-block max impact equals our `impact(max_tf, min_dl)` bound to 4
-   decimals, so a precomputed block-max score buys nothing), finer 16-posting
-   granularity lowers the max only 3.7-4.6% and stays above the threshold, and
-   pruning is identical at k=1/10/100.  Bound and threshold simply sit ~12% apart
-   across a flat impact plateau, so WAND cannot prune -- the cost IS the posting
-   scan.
-   Also note pg_fts scans ~48% MORE postings than pg_search here because we stem
-   correctly and Tantivy does not (`year` -> 734,896 vs 495,580; regex-confirmed
-   ground truth 733,960).  That accounts for ~1.5x, not 26x.
-   The remaining levers all trade away something we currently guarantee:
-   - **impact-ordered / impact-quantized postings** -- the real fix used by
-     Lucene/Tantivy, but it breaks the docid ordering that `count(*)`, AND,
-     phrase and prefix all depend on (`bench/NOTE_IMPACT_ORDERING.md`), so it
-     likely means a SECOND posting layout per term, i.e. index growth -- against
-     our current best-in-field size.
-   - **early termination** -- rejected: breaks exact top-k, which parity_check
-     enforces as non-negotiable.
-   - **parallel scan (item 7)** -- does not lower work but would cut wall-clock
-     on exactly this shape.
-   Decide deliberately (exactness + size + capability vs common-term latency)
-   rather than drifting into it.  Nothing here is a micro-optimisation.
+4a. **Common-term ranked top-k -- PROFILED 2026-09-06; premise was wrong, no
+   format decision needed yet** (`bench/NOTE_PROFILE_COMMON_TERM_2026-09-06.md`).
+   This item previously asserted "the cost IS the posting scan" and framed the
+   next step as a size-vs-latency trade (impact-ordered postings vs our
+   best-in-field 1421 MB index).  **`perf` on EC2 refuted that.**
+   - 24% of common-term latency was `bm25_doclen_cursor_lookup()`'s binary
+     search -- ~7 branchy iterations per posting on a term whose docids are
+     consecutive.  An **ascending-resume hint** (~8 lines, no format change, no
+     exactness loss) took common k10 **56.3 -> 42.67 ms (1.32x)** and k100
+     **69.78 -> 54.09 (1.29x)**, parity PASS 10/10.  Shipped.
+   - Instrumented counts then showed the bands invert: post-fix `year`'s doclen
+     path is **optimal** (15,220 block loads for ~17,094 blocks, 95.5% hint
+     hits), while **rare/mid decode a 128-entry block to serve ~1.8-2.2 lookups
+     = 71x / 59x amplification** (`perf` on `slovakia`: 61% in
+     `load_page`).  That is a different inefficiency from the one 1.5.9 fixed.
+   - A lazy per-entry decode to exploit it was tried and **REJECTED by
+     measurement** (rare 5.85 -> 8.72 ms): `bm25_for_get()` tests one bit at a
+     time, so per-entry access is >10x costlier than the vectorizable batch
+     `bm25_for_unpack()`, losing even at 2 entries of 128.
+   **Next lever (no format change, no exactness cost): a batch PARTIAL FOR
+   unpack** -- decode the first N entries word-at-a-time -- aimed at the rare/mid
+   amplification, i.e. the band the field actually queries.  Measure before
+   building.
+   The WAND ceiling from `bench/NOTE_WAND_PRUNING_2026-09-04.md` still stands and
+   is unchanged (bound tight, threshold healthy, flat impact plateau => nothing to
+   skip; three easy fixes disproven).  What that note never established -- and
+   what this item wrongly asserted on top of it -- is that the remaining time was
+   irreducible.  Standing gap: common k10 42.67 ms vs pg_search 2.12 / vchord
+   3.49 / pg_textsearch 20.71.
+   **Only if the batch-partial-unpack lever is exhausted** does the real
+   trade-off arrive: impact-ordered/tiered postings are the Lucene/Tantivy fix but
+   break the docid ordering `count(*)`/AND/phrase/prefix rely on
+   (`bench/NOTE_IMPACT_ORDERING.md`), implying a second posting layout per term
+   and spending our size lead; early termination is cheaper but breaks exact
+   top-k, which parity_check enforces.  Do not open that decision on an
+   unprofiled premise again.
 
 5. **`WITH (positions=off)` — heap-side only.**
    An option to omit token positions from the heap `ftsdoc` for phrase-free

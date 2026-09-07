@@ -2096,6 +2096,8 @@ typedef struct BM25DoclenResident
 	int			cap;			/* capacity of docid/byte */
 	uint64		first;			/* lowest docid in the resident block */
 	uint64		last;			/* highest docid in the resident block */
+	int			hint;			/* resume index: the scan probes ASCENDING docids, so the
+								 * next hit is usually at/just after the previous one */
 } BM25DoclenResident;
 
 typedef struct BM25DoclenCursor
@@ -2345,6 +2347,7 @@ bm25_doclen_cursor_init(BM25DoclenCursor *c, Relation index, BlockNumber start,
 			res->n = 0;
 			res->first = 0;
 			res->last = 0;
+			res->hint = 0;
 		}
 		c->res = res;
 	}
@@ -2391,6 +2394,7 @@ bm25_doclen_cursor_load_page(BM25DoclenCursor *c, BlockNumber blkno, uint64 doci
 	r->blk = blkno;
 	r->first = 0;
 	r->last = 0;
+	r->hint = 0;				/* new block: the ascending-resume hint restarts */
 	if (blkno == InvalidBlockNumber || r->docid == NULL ||
 		blkno >= RelationGetNumberOfBlocks(c->index))
 		return;
@@ -2502,10 +2506,36 @@ bm25_doclen_cursor_lookup(BM25DoclenCursor *c, uint64 docid)
 		bm25_doclen_cursor_load_page(c, c->dir_blk[pg], docid);
 	}
 
-	/* binary-search within the resident block */
+	/*
+	 * Locate docid within the resident block.  The WAND scan probes docids in
+	 * strictly ASCENDING order, so the answer is usually at or just after the
+	 * previous hit: try a short linear walk from the resume hint first and only
+	 * fall back to a binary search when that misses (a seek, or a new block).
+	 * Profiling showed the unconditional binary search here was ~45% of the
+	 * common-term ranked query -- 7 branchy iterations per posting, on a term
+	 * whose docids are consecutive.
+	 */
 	{
 		int			rlo = 0,
 					rhi = r->n - 1;
+		int			i = r->hint;
+		int			lim;
+
+		if (i < 0 || i >= r->n)
+			i = 0;
+		lim = i + 8;
+		if (lim > r->n)
+			lim = r->n;
+		for (; i < lim; i++)
+		{
+			if (r->docid[i] == docid)
+			{
+				r->hint = i + 1;
+				return fts_byte_to_doclen(r->byte[i]);
+			}
+			if (r->docid[i] > docid)
+				break;			/* overshot: docid is absent (gap) or behind us */
+		}
 
 		while (rlo <= rhi)
 		{
@@ -2516,7 +2546,10 @@ bm25_doclen_cursor_lookup(BM25DoclenCursor *c, uint64 docid)
 			else if (r->docid[mid] > docid)
 				rhi = mid - 1;
 			else
+			{
+				r->hint = mid + 1;
 				return fts_byte_to_doclen(r->byte[mid]);
+			}
 		}
 	}
 	return 0;
