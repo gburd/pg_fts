@@ -102,3 +102,36 @@ pg_search's phrase (22.86 ms via `###`) is still ~5-10x faster than our
 `positions=on` phrase, on an index 2734 MB vs our 2626 MB -- i.e. at comparable
 size once positions are enabled, and it does not stem. The 36-54x default-vs-tuned
 gap is ours to own; the residual gap to pg_search is the lazy-gate work above.
+
+---
+
+## Sizing the lazy phrase gate before building it (same session)
+
+Feasibility checked: the block header already carries `posbytelen` and the
+position bytes sit immediately after the FOR payload on the page, but
+`wand_load_block()` copies only `bh->bytelen` -- it drops positions. So a lazy
+gate is implementable (copy the position bytes too, verify adjacency at
+admission), and it does not need a format change.
+
+But the profile bounds the payoff. Attributing the 229 ms:
+
+| component | share | ms | under a lazy gate |
+|---|---|---|---|
+| `bm25_collect_matches` | 21.2% | 48.5 | **removed** |
+| `bm25_decode_term` | 14.0% | 32.1 | partly removed (decode feeds collect) |
+| `bm25_topk_candidates_range` | 24.4% | 55.9 | stays -- WAND must still rank |
+| doclen lookup + load_page | 12.8% | 29.3 | stays |
+| `fts_phrase_step_pos` | 4.3% | 9.9 | stays (on ~100 docs, not 361k) |
+
+Optimistic ceiling: **~229 -> ~150 ms, about 1.5x.** That is real but it does
+**not** close the gap to pg_search's 22.9 ms, which needs 5-10x. The work is a
+change to `WandCursor` (carry and lazily decode per-doc positions) on the hot
+scan path that already caused two crash-fix releases in this line
+(1.5.5/1.5.6), and it must preserve the exactness `parity_check` enforces.
+
+**Decision: not built now.** Recorded with its measured ceiling so the trade is
+explicit rather than rediscovered. The far larger phrase win available to users
+today is `positions=on` itself (36-54x), which cost nothing to ship because it
+already existed -- it just was not documented as necessary. Ship the
+documentation, revisit the gate if a field report shows ranked phrase latency
+mattering *after* positions are enabled.
