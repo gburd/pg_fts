@@ -134,10 +134,23 @@ they are not rediscovered. Ordered roughly by value.
      measurement** (rare 5.85 -> 8.72 ms): `bm25_for_get()` tests one bit at a
      time, so per-entry access is >10x costlier than the vectorizable batch
      `bm25_for_unpack()`, losing even at 2 entries of 128.
-   **Next lever (no format change, no exactness cost): a batch PARTIAL FOR
-   unpack** -- decode the first N entries word-at-a-time -- aimed at the rare/mid
-   amplification, i.e. the band the field actually queries.  Measure before
-   building.
+   **Round 2 (same day, measured):** the partial-unpack lever was built and
+   **DISPROVEN**, and it corrected the "71x amplification" figure that motivated
+   it.  The sidecar is keyed by ALL docids, so a rare term's target sits at an
+   arbitrary offset in its 128-entry block -- measured **avg 82.4 entries decoded
+   per block**, not 2.  Those entries are the unavoidable gap-decode prefix
+   (docids are delta-encoded, so no random access), not waste.  Forcing a small
+   window made it worse (rare 5.83 -> 7.74 ms) via ~15k geometric rewalks.
+   What DID land in round 2: **`bm25_for_get()` was still decoding bit-by-bit**
+   while the batch `bm25_for_unpack()` had long since been optimized to
+   word-load/shift/mask.  It is read per-posting for `tf` in `wand_contrib_cur()`.
+   Giving it the same extraction took common k10 **42.67 -> 36.16 ms** and k100
+   **54.09 -> 46.01**, rare/mid/OR flat, parity PASS 10/10, fuzz clean.
+   **rare/mid are now near their floor** -- what remains in `load_page` is the
+   gap-decode prefix, inherent to delta-encoded docids.  Moving them further needs
+   a FORMAT change (periodic absolute docids within a block, to allow a mid-block
+   start) worth at most ~2x of a portion of the query.  Not attempted; likely not
+   worth it.
    The WAND ceiling from `bench/NOTE_WAND_PRUNING_2026-09-04.md` still stands and
    is unchanged (bound tight, threshold healthy, flat impact plateau => nothing to
    skip; three easy fixes disproven).  What that note never established -- and

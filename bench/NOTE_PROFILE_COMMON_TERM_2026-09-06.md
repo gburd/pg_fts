@@ -126,3 +126,74 @@ vchord 3.49 / pg_textsearch 20.71. Still the worst number, and the WAND ceiling
 is still real -- but the next lever to try is a **batch partial FOR unpack** for
 the rare/mid amplification, which costs no format change and no exactness, not an
 impact-ordered posting layout.
+
+---
+
+# Round 2 (same day): the "71x amplification" was an artifact of my arithmetic
+
+Follow-up on the "next lever: batch partial FOR unpack" above. One lever landed,
+one was disproven, and the disproof corrects a number in this very note.
+
+## LANDED: `bm25_for_get()` was still decoding bit-by-bit
+
+`bm25_for_unpack()` (batch) had been optimized to a word-load/shift/mask
+extraction, with a comment saying it "replaces the per-bit inner loop that
+dominated posting decode". **`bm25_for_get()` (random access) never got that
+treatment** and still ran `width` single-bit tests per call. It is on the hot
+path twice: `wand_contrib_cur()` reads `tf` through it for EVERY scored posting,
+and the v3 inline-doclen path reads |D| through it too.
+
+Gave it the same extraction (including the `shift == 0` UB guard the batch
+version documents for a corrupt width byte):
+
+| query | +hint (prev) | +fast for_get | vs 1.5.9 |
+|---|---|---|---|
+| common k10 | 42.67 | **36.16** | **1.56x** |
+| common k100 | 54.09 | **46.01** | **1.52x** |
+| rare k10 | 5.91 | 5.89 | flat |
+| mid k10 | 10.79 | 10.64 | flat |
+| 2-term OR | 4.13 | 4.12 | flat |
+
+Parity PASS 10/10. The `for_get == unpack[i]` equivalence is already asserted by
+both `test/fuzz/fuzz_for.c` and `test/hegel/test_for.c`; fuzz `== ALL CLEAN ==`.
+
+## DISPROVEN: partial block decode for rare/mid -- and the 71x figure was wrong
+
+Built `bm25_for_unpack_n()` (batch extraction, first n entries) and a geometric
+partial decode in `load_page`. Measured: **rare 5.83 ms, mid 10.56** -- a ~1%
+change, not the ~2x the "71x amplification" implied. Instrumenting entries
+decoded per block showed why:
+
+| term | block loads | avg entries decoded | rewalks |
+|---|---|---|---|
+| slovakia | 7,350 | **82.4** | 14,989 |
+| hungary | 16,753 | **80.8** | 33,676 |
+| year | 58,598 | **60.8** | 89,112 |
+
+**The error in this note's Round 1 analysis:** I computed amplification as
+`loads x 128 / lookups` and read it as "we decode 128 entries to use 2". But the
+doclen sidecar is keyed by **ALL docids**, not just the term's matches, so a rare
+term's target docid sits at an **arbitrary offset** within its 128-entry block --
+on average entry ~64. The 128 entries are not waste-per-lookup; ~64 of them are
+the unavoidable delta-decode prefix needed to *reach* the target, because docids
+are gap-encoded and cannot be random-accessed.
+
+So the true ceiling for partial decode is ~2x **of the unpack portion only**, and
+even that is not free: forcing a small starting window made it *worse* (rare
+5.83 -> 7.74, mid 10.56 -> 16.58) because ~15-90k geometric rewalks re-decode the
+prefix repeatedly. A first attempt that fed `r->n` back as the next window's size
+saturated at 128 immediately -- correct behaviour, and a hint that the window was
+never the problem.
+
+`bm25_for_unpack_n()` was removed rather than left unused.
+
+## Corrected standing
+common k10 **36.16 ms** (was 56.30 at 1.5.9, **1.56x**) vs pg_search 2.12 /
+vchord 3.49 / pg_textsearch 20.71. rare/mid unchanged and **already near their
+floor**: the remaining `load_page` cost is the gap-decode prefix, which is
+inherent to delta-encoded docids, not an inefficiency.
+
+To actually move rare/mid further one would have to change what the sidecar
+stores (e.g. periodic absolute docids inside a block, so a probe can start
+mid-block) -- a **format change**, and per the measured 60-82 entry prefix worth
+at most ~2x of a portion of the query. Not obviously worth it; not attempted.
