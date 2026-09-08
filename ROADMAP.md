@@ -21,15 +21,27 @@ they are not rediscovered. Ordered roughly by value.
    without it.  Reference: aether `src/lsm/hanoi.rs` `compute_work_budget` for
    the rate-limited-compaction shape.
 
-1. **Verify parallel merge at scale.**
-   Parallel merge (`bm25_merge_all_parallel`) is implemented and verified
-   correct locally (parallel build → many segments → parallel `fts_merge` → one
-   segment, byte-identical counts). It has not yet been timed on a very large
-   (multi-million-document) corpus. When enough parallel worker slots are
-   available (`max_worker_processes` set high enough that
-   `LaunchParallelWorkers` succeeds), the code takes the parallel path and
-   otherwise falls back to a correct serial merge. TODO: capture the
-   parallel-merge speedup vs the serial path at scale.
+1. **Verify parallel merge at scale. [MEASURED 2026-09-08 -- it is SLOWER; do not
+   enable]** (`bench/RESULTS_PARALLEL_MERGE_2026-09-08.md`)
+   This item asked only for the speedup number, since parallel merge
+   (`bm25_merge_all_parallel`) was already implemented and verified correct.
+   Measured at 2.19M docs on an 8-segment 7,185 MB index: **serial 230.6 s vs
+   parallel 333.5 s = 1.45x SLOWER**, and the parallel path emits a **19% LARGER**
+   index (10,229 MB vs 8,606 MB). W=1 costs the same as W=3, so it is a fixed
+   penalty for taking the path, not a scaling curve.
+   Correctness is fine -- all 7 runs converged nsegments 8 -> 1 with identical
+   match counts (year 734,896 / slovakia 10,875 / hungary 24,097).
+   **Trap found:** at `max_parallel_maintenance_workers = 8` the workers register,
+   start, and exit with code 0 within ~2 ms, so the merge silently runs SERIAL
+   (confirmed with postmaster DEBUG1). Those runs looked fast because they *were*
+   the serial path. Genuine parallel runs are the W=1 and W=3 ones.
+   Likely cause of both effects (unverified): per-worker output streams pack pages
+   independently, so the 19% growth is write amplification that also explains the
+   slowdown -- a merge is sequential-I/O bound, not CPU bound.
+   **Action: leave disabled and document that raising `mpmw` makes merges slower**
+   (the opposite of operator intuition). Then either fix the fragmentation or
+   consider removing the path, which carries real concurrency risk in a line that
+   has already shipped three concurrency-fix releases for a measured negative.
 
 2. **Level-2 recursive parallel merge (W → W/2 → … → 1).**
    The current parallel merge does one parallel pass into (workers+1) segments,
