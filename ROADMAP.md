@@ -289,20 +289,28 @@ they are not rediscovered. Ordered roughly by value.
 
 ## Sparsemap (vendored)
 
-9. **Exercise batch/cached sparsemap APIs under a delete-heavy workload.**
-   The batched tombstone filter (`sm_contains_many`) is integrated into the
-   merge path.  The WAND ranked cursor now uses the forward-resume cursor
-   (`sm_contains` with an `sm_cursor_t`) rather than the 8-way MRU cache
-   (`sm_contains_cached`): the ranked scan visits docids in monotonically
-   non-decreasing order against a read-only tombstone map, so a single-chunk
-   resume cursor is O(postings + chunks), whereas the MRU cache degenerated to
-   an O(chunks) head-walk per lookup once an ascending scan ran past its eight
-   cached chunks -- a segment with millions of tombstones turned a common-term
-   top-k into tens of seconds (fixed in 1.4.1, validated 24s -> 2.5ms at 2M
-   docs / ~4M tombstones).  TODO: quantify the merge-path `sm_contains_many`
-   gain on a delete/update-churn workload where it should help.
-
-## Benchmark / competitive
+9. **Exercise batch/cached sparsemap APIs under a delete-heavy workload.
+   [PARTIAL 2026-09-08 -- still open]** (`bench/RESULTS_SPARSEMAP_2026-09-08.md`)
+   The ranked-scan half was already settled and shipped: the 8-way MRU cache
+   (`sm_contains_cached`) degenerated to an O(chunks) head-walk once an ascending
+   scan ran past its eight cached chunks, so a segment with millions of tombstones
+   turned a common-term top-k into tens of seconds; the forward-resume cursor
+   (`sm_contains` + `sm_cursor_t`) fixed it (24 s -> 2.5 ms at 2M docs / ~4M
+   tombstones, shipped in 1.4.1). Only the MERGE path's `sm_contains_many` was
+   open.
+   Measured at ZERO tombstone density with three separately compiled arms
+   (stock / batched / cursor, each md5-verified at load): merge 231.6 / 233.7 /
+   233.2 s and a **byte-identical** output index. Spread 0.9% -- so the batched
+   filter is **not a regression**, which is all a zero-density run can show.
+   **The delete-heavy measurement did NOT succeed and the TODO stands.** Three rig
+   defects, documented in the note: the `PGFTS_BENCH_NO_CLEANUP_MERGE=1` control
+   the rig relies on **does not exist in our source** (a no-op, so timed merges may
+   have been racing autovacuum compaction); every delete-heavy cycle recorded
+   `tombstones_in_index=0`; and the rig double-launches each cycle so the two
+   copies stop each other's cluster. A redo needs a real suppression mechanism, a
+   verified non-zero tombstone count before the timed merge, one cycle per
+   invocation, and unbuffered output -- build it fresh rather than repairing that
+   rig.
 
 10. **Multi-engine real-corpus comparison — done; iterate.**
     Latest: `bench/RESULTS_5WAY_159b_2026-09-06.md` (1.5.9, identical single
