@@ -5832,3 +5832,40 @@ SELECT 'bravo alpha'::ftsdoc @@@ to_ftsquery('simple','alpha & bravo') AS nopos_
  t
 (1 row)
 
+-- THREE live producers of a positionless ftsdoc, each of which makes a PHRASE
+-- query silently return CONJUNCTION results (phrase_step's presence-only
+-- fallback).  These assertions record the CURRENT (WRONG) behaviour so that a
+-- fix is visible as a diff rather than slipping past; see
+-- bench/REVIEW_PHRASE_NOPOS.md.  A non-adjacent phrase SHOULD be false.
+SELECT to_ftsdoc('simple','brown quick') @@@ '"quick brown"'::ftsquery AS nopos_control_positioned_f;  -- f (correct)
+ nopos_control_positioned_f 
+----------------------------
+ f
+(1 row)
+
+SELECT to_ftsdoc(strip(to_tsvector('simple','brown quick'))) @@@ '"quick brown"'::ftsquery AS nopos_via_strip_tsvector;   -- t (WRONG: should be f)
+ nopos_via_strip_tsvector 
+--------------------------
+ t
+(1 row)
+
+SELECT ($$'brown':1$$::ftsdoc || to_ftsdoc('simple','quick')) @@@ '"quick brown"'::ftsquery AS nopos_via_concat;          -- t (WRONG: should be f)
+ nopos_via_concat 
+------------------
+ t
+(1 row)
+
+-- field-zone labels live in position high bits, so a positionless doc cannot be
+-- zone-filtered: :A matches nothing, :D matches everything.
+SELECT $$'quick':1$$::ftsdoc @@@ 'quick:A'::ftsquery AS nopos_zone_A_never_matches;   -- f
+ nopos_zone_a_never_matches 
+----------------------------
+ f
+(1 row)
+
+SELECT $$'quick':1$$::ftsdoc @@@ 'quick:D'::ftsquery AS nopos_zone_D_always_matches;  -- t
+ nopos_zone_d_always_matches 
+-----------------------------
+ t
+(1 row)
+

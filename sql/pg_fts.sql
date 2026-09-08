@@ -2959,3 +2959,16 @@ SELECT 'bravo alpha'::ftsdoc::text AS nopos_synthesizes_positions;              
 SELECT 'bravo alpha'::ftsdoc @@@ to_ftsquery('simple','"alpha bravo"') AS nopos_reversed_phrase_false;    -- f
 SELECT 'alpha bravo'::ftsdoc @@@ to_ftsquery('simple','"alpha bravo"') AS nopos_forward_phrase_true;      -- t
 SELECT 'bravo alpha'::ftsdoc @@@ to_ftsquery('simple','alpha & bravo') AS nopos_conjunction_true;         -- t
+
+-- THREE live producers of a positionless ftsdoc, each of which makes a PHRASE
+-- query silently return CONJUNCTION results (phrase_step's presence-only
+-- fallback).  These assertions record the CURRENT (WRONG) behaviour so that a
+-- fix is visible as a diff rather than slipping past; see
+-- bench/REVIEW_PHRASE_NOPOS.md.  A non-adjacent phrase SHOULD be false.
+SELECT to_ftsdoc('simple','brown quick') @@@ '"quick brown"'::ftsquery AS nopos_control_positioned_f;  -- f (correct)
+SELECT to_ftsdoc(strip(to_tsvector('simple','brown quick'))) @@@ '"quick brown"'::ftsquery AS nopos_via_strip_tsvector;   -- t (WRONG: should be f)
+SELECT ($$'brown':1$$::ftsdoc || to_ftsdoc('simple','quick')) @@@ '"quick brown"'::ftsquery AS nopos_via_concat;          -- t (WRONG: should be f)
+-- field-zone labels live in position high bits, so a positionless doc cannot be
+-- zone-filtered: :A matches nothing, :D matches everything.
+SELECT $$'quick':1$$::ftsdoc @@@ 'quick:A'::ftsquery AS nopos_zone_A_never_matches;   -- f
+SELECT $$'quick':1$$::ftsdoc @@@ 'quick:D'::ftsquery AS nopos_zone_D_always_matches;  -- t

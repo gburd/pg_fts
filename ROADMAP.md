@@ -204,22 +204,37 @@ they are not rediscovered. Ordered roughly by value.
    default-built index.
 
    Note what `phrase_step()` does when a side lacks positions: it falls back to
-   presence-only AND ("recall preserved, precision degraded", per its comment) —
-   i.e. it would answer a phrase with a conjunction and report it as a phrase
-   match.  **Verified 2026-09-06 that this is currently unreachable**, so it is
-   not a live bug: the `ftsdoc` text-input parser *synthesizes* positions from
-   token order when the literal supplies none (`'bravo alpha'::ftsdoc` →
-   `'alpha':1@2 'bravo':1@1`), so `FTS_DOC_HAS_POS` holds for every parsed doc,
-   and adjacency is enforced (reversed-order phrase → false, forward → true).
-   `to_ftsdoc()` and the tsvector path both set the flag unconditionally too.
+   presence-only AND ("recall preserved, precision degraded", per its comment) --
+   i.e. it answers a phrase with a conjunction and reports it as a phrase match.
 
-   So the constraint on this item is: a heap-side `positions=off` would be the
-   **first** way to construct a positionless doc in practice, converting that
-   dormant fallback into a live silent-wrong-answer path.  Implement it only with
-   either (a) index `positions=on` required before heap positions may be dropped,
-   or (b) a clear error for phrase/NEAR when neither side carries positions — and
-   consider changing the `phrase_step` fallback to an error at the same time, so
-   it cannot degrade silently if some future path does produce such a doc.
+   **CORRECTION (2026-09-08): I previously recorded this as "verified
+   unreachable". That was WRONG, and the error was mine.** I tested only the
+   raw-text cast (`'bravo alpha'::ftsdoc`), which synthesizes positions from token
+   order -- so it appeared safe. A sub-agent review found three OTHER live
+   SQL-visible producers of positionless docs, all confirmed on HEAD returning
+   `t` for the NON-ADJACENT phrase `"quick brown"`:
+     1. the canonical literal form without `@`: `$$'brown':1 'quick':1$$::ftsdoc`
+     2. `to_ftsdoc(strip(to_tsvector(...)))` -- `pg_fts_tsanalyze.c:264-272` clears
+        `has_pos` if ANY entry is positionless
+     3. `ftsdoc || ftsdoc` -- `pg_fts_doc.c:904` ANDs the two flags
+   Control confirmed correct: `to_ftsdoc('simple','brown quick')` gives `f`.
+   Field-zone filtering degrades too (`pg_fts_match.c:88-95`): on a positionless
+   doc `term:A` matches nothing and `term:D` matches everything.
+
+   **Worse, our own suite pins the wrong answer as expected** --
+   `sql/pg_fts.sql:2800` / `expected/pg_fts.out:5423-5426` assert `t` for the
+   non-adjacent phrase, with a comment presenting the degradation as intended.
+
+   So this is a LIVE correctness bug that does not need item 5 as a reason to
+   exist, and it is tracked separately (see `bench/REVIEW_PHRASE_NOPOS.md`). The
+   complication for any fix: prefix-inside-phrase (`"quick bro*"`) takes the same
+   `pos == NULL` branch on a fully-positioned doc
+   (`pg_fts_match.c:65-70`, "phrase-with-prefix is not tracked positionally"), so
+   a blanket error would break a shipped behaviour.
+
+   For item 5 itself the consequence is simpler: a heap-side `positions=off`
+   would MULTIPLY the exposure of an already-live bug, so the bug must be fixed
+   first regardless of whether this item ever ships.
 
 6. **COUNT / aggregation Custom Scan pushdown. [DONE]**
    Implemented in `pg_fts_customscan.c`: `_PG_init` installs
