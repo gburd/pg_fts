@@ -2,6 +2,99 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.6.0
+
+**Correctness release: an unverifiable phrase no longer silently answers as a
+conjunction.** C-only -- no SQL objects change, no on-disk index format change
+(BM25_VERSION stays 4), **no REINDEX**. MINOR rather than patch because query
+results change, for the better.
+
+Also re-vendors sparsemap 5.4.0 -> 5.5.0, which fixes a big-endian corruption
+that reaches our tombstone iteration.
+
+### 1. A phrase whose adjacency cannot be verified now returns false
+
+`phrase_step()` fell back to presence-only AND whenever either operand lacked
+positions -- "recall preserved, precision degraded" -- so a **phrase query could
+report a NON-ADJACENT document as a match**, with nothing to distinguish it from a
+real phrase hit.
+
+This is now false, which is what PostgreSQL does: absent
+`TS_EXEC_PHRASE_NO_POS`, `OP_PHRASE` "always returns false if lexeme position
+information is not available" (`tsearch/ts_utils.h`). Upstream returns false for
+`strip(to_tsvector('simple','quick brown')) @@ 'quick <-> brown'` even though the
+words *are* adjacent; `pg_fts_match.c` claims to mirror `TS_execute` and on this
+branch did the opposite.
+
+Four routes reached the bad path, all confirmed on 1.5.10:
+
+| input | 1.5.10 | 1.6.0 |
+|---|---|---|
+| `$$'brown':1 'quick':1$$::ftsdoc` (canonical literal, no `@`) | t | **f** |
+| `to_ftsdoc(strip(to_tsvector(...)))` | t | **f** |
+| `ftsdoc \|\| ftsdoc` where one side lacks positions | t | **f** |
+| `quick <-> (brown & fox)` on a **fully positioned** doc, via the tsquery cast | t | **f** |
+
+The fourth is the important one: the boolean arms null out positions, so the
+document's own flag cannot distinguish "no positions anywhere" from "this operand
+lost them". The fix therefore carries an explicit reason flag on the operand, set
+at exactly one producer.
+
+**Prefix-inside-phrase is unchanged.** `"quick bro*"` stays deliberately
+permissive, because prefix positions are genuinely not tracked -- that is shipped,
+documented lossiness rather than a bug, and it now has test coverage it lacked.
+
+Why false and not an error: `@@@` is a match operator, so raising an error would
+be order-dependent (a predicate that errors on a full scan can succeed under a
+`LIMIT`) and would turn a handful of unverifiable rows into a whole-table failure.
+
+### 2. Field-zone restrictions on a positionless document match nothing
+
+Zone labels are carried in each position's high bits, so a document without
+positions carries no label information -- it is *unknown*, not "D". Previously
+`term:D` matched **every** positionless document while `term:A` matched none, and
+a concatenation that dropped one side's labels silently answered `term:D` = true.
+A zone restriction that cannot be evaluated now does not match.
+
+### 3. sparsemap 5.4.0 -> 5.5.0
+
+Re-vendored as exactly upstream 5.5.0 plus our one namespacing block
+(`SPARSEMAP_PREFIX=__pg_bm25_`); `vendor/sm.h` is byte-identical to upstream.
+Header change is purely additive (one new function), so it is a drop-in.
+
+The fix that reaches pg_fts is **chunk-descriptor flag reads on big-endian
+hosts**: ten sites aliased the 64-bit descriptor as `uint8_t *`, walking the 2-bit
+flags in reverse on big-endian and breaking every counting and navigation path.
+`sm_contains` was unaffected because it shifts the word directly -- which is
+precisely why the bug hid behind a working membership test. pg_fts is exposed
+through `sm_next_member`, used to iterate tombstones, so on a big-endian host that
+iteration could silently go wrong. Upstream measured a map with bits 42 and 1024
+set reporting cardinality 1, minimum 768, maximum 1792 on sparcv9.
+
+The three headline 5.5.0 fixes (`sm_difference` RLE data loss, `sm_offset`
+structurally invalid maps, `sm_split` ENOSPC) are in functions pg_fts does not
+call -- included, but not our exposure.
+
+### Upgrade notes
+
+`ALTER EXTENSION pg_fts UPDATE TO '1.6.0'` is the whole upgrade. No REINDEX, no
+data migration.
+
+If an application relied on the old lossy phrase behaviour as a cheap
+conjunction, write the conjunction explicitly (`'quick & brown'`). If you issue
+phrase or NEAR queries at scale, note separately that
+`WITH (positions = on)` is what makes them fast -- 36x on a 2.19M-document corpus
+(see 1.5.10's notes and `bench/NOTE_PHRASE_PROFILE_2026-09-06.md`).
+
+### Validation
+
+All three phrase evaluation paths were checked for agreement on a 3,000-row corpus
+where only a third of rows have the phrase adjacent: sequential scan (heap
+matcher) **1000**, index scan with `positions=off` **1000**, index scan with
+`positions=on` **1000**, regex ground truth **1000**. installcheck (PG 17/18),
+full TAP set, alloc/ascii guards, block fuzzer all pass; upstream sparsemap's own
+suite passes 10/10 including its property tests.
+
 ## 1.5.10
 
 Performance release: **common-term ranked top-k is 1.56x faster.** C-only, no SQL
