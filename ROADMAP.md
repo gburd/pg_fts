@@ -248,11 +248,42 @@ they are not rediscovered. Ordered roughly by value.
    model was repriced as the index-only visibility-map count it performs so the
    planner picks it at scale.  This item was simply never marked done.
 
-7. **Parallel scan (`amcanparallel`).**
-   Query execution is single-threaded. A parallel bitmap / ordering scan would
-   help large scans, and underpins the flat common-term latency described in #4.
-   Warm-cache selective queries benefit little, so this targets large or
-   common-term workloads.
+7. **Parallel scan (`amcanparallel`). [ALREADY BUILT AND REVERTED -- NOT OPEN]**
+   **This item was stale and I left it looking open for months.** A complete
+   parallel ranked CustomScan was implemented, verified byte-exact, measured, and
+   deliberately reverted -- see `bench/NOTE_PARALLEL_RANKED.md`, whose first line
+   is "built, measured, reverted". Two reasons, both still valid:
+   (a) an Amdahl ceiling around 30% of the query, and (b) parallel workers refused
+   to launch from inside `ExecCustomScan` on EC2 (0 workers, silent serial
+   fallback). The docid-range plumbing was deliberately KEPT and is still in the
+   tree (`pg_fts_am_scan.c:3851`, `:2759-2761`, `:2932-2933`, `:3000-3001`) as a
+   foundation if a future design beats that ceiling.
+
+   Re-analysed 2026-09-08 against the post-1.5.10 numbers
+   (`bench/PLAN_PARALLEL_SCAN.md`): still a **NO-GO as a latency fix**. Amdahl at
+   p=0.88 gives W=2 -> 20.3 ms, W=4 -> 12.3, W=8 -> 8.3 (realistically ~11.8),
+   against pg_search's **2.12 ms** -- it closes at most ~4.4x of a ~17x gap while
+   burning 8 CPUs, and the shipped default `max_parallel_workers_per_gather = 2`
+   would give real users ~20 ms.
+   Additional blockers that analysis surfaced: `nsegments=1` is *enforced* by
+   insert-time tiered merge (`pg_fts_am.c:5234`) and autovacuum compaction
+   (`:5965`), so per-segment parallelism divides by one on every healthy index;
+   intra-segment docid ranges need O(W^2/2) header walks because posting chains
+   are singly-linked with gap-encoded docids; the 1.5.7 generation guard becomes W
+   independent guards whose failure mode is an intermittently-truncated top-k that
+   `parity_check.sh` would NOT catch; and no core AM combines `amcanorderbyop`
+   with `amcanparallel`, so we would be first with no reference implementation.
+   (Exactness itself is sound: `idf` is summed globally before partitioning
+   (`:3999-4003`), so a worker's local threshold is always <= the global one and
+   it under-prunes rather than losing results.)
+
+   **Caveat on my own numbers:** the "39% candidates / 43% doclen" split I had
+   been quoting for 1.5.10 was never written down from a real run -- the recorded
+   profile in `NOTE_PROFILE_COMMON_TERM_2026-09-06.md` is the *intermediate*
+   42.67 ms build (candidates 46.58%, doclen 21.33% + 4.44%). A fresh `perf` on
+   the shipped 36.16 ms build is a prerequisite for any further common-term work.
+   The ceilings above differ by <1 ms between the two splits, so this verdict
+   stands either way.
 
 8. **Storage AIO / `read_stream` prefetch for the cold merge full-scan.**
    The build heap scan already gets core `read_stream` prefetch for free. The
