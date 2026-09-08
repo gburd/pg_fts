@@ -2795,10 +2795,12 @@ SELECT to_ftsdoc('') @@@ 'anything'::ftsquery AS empty_doc_no_match;
 -- empty query against an empty doc
 SELECT to_ftsdoc('') @@@ ''::ftsquery AS empty_query_empty_doc;
 -- phrase/NEAR on a doc built WITHOUT positions (canonical literal, no '@'):
--- phrase_step's "either side lacks positions" branch degrades to plain AND,
--- so a non-adjacent phrase still matches when both terms are merely present.
-SELECT $$'brown':1 'quick':1$$::ftsdoc @@@ '"quick brown"'::ftsquery AS phrase_nopos_degrades_to_and;
-SELECT $$'fox':1 'quick':1$$::ftsdoc @@@ 'NEAR(quick fox, 1)'::ftsquery AS near_nopos_degrades_to_and;
+-- adjacency is unverifiable, so the phrase is FALSE (as PostgreSQL does without
+-- TS_EXEC_PHRASE_NO_POS).  This previously degraded to plain AND and answered
+-- true for a NON-adjacent phrase -- a silent wrong answer; see
+-- bench/REVIEW_PHRASE_NOPOS.md.
+SELECT $$'brown':1 'quick':1$$::ftsdoc @@@ '"quick brown"'::ftsquery AS phrase_nopos_is_false;
+SELECT $$'fox':1 'quick':1$$::ftsdoc @@@ 'NEAR(quick fox, 1)'::ftsquery AS near_nopos_is_false;
 -- the commutator form (ftsquery @@@ ftsdoc) agrees with fts_match in both
 -- directions for the same boolean/phrase/NEAR cases above
 SELECT ('alpha & beta'::ftsquery @@@ to_ftsdoc('alpha beta'))
@@ -2960,15 +2962,24 @@ SELECT 'bravo alpha'::ftsdoc @@@ to_ftsquery('simple','"alpha bravo"') AS nopos_
 SELECT 'alpha bravo'::ftsdoc @@@ to_ftsquery('simple','"alpha bravo"') AS nopos_forward_phrase_true;      -- t
 SELECT 'bravo alpha'::ftsdoc @@@ to_ftsquery('simple','alpha & bravo') AS nopos_conjunction_true;         -- t
 
--- THREE live producers of a positionless ftsdoc, each of which makes a PHRASE
--- query silently return CONJUNCTION results (phrase_step's presence-only
--- fallback).  These assertions record the CURRENT (WRONG) behaviour so that a
--- fix is visible as a diff rather than slipping past; see
--- bench/REVIEW_PHRASE_NOPOS.md.  A non-adjacent phrase SHOULD be false.
-SELECT to_ftsdoc('simple','brown quick') @@@ '"quick brown"'::ftsquery AS nopos_control_positioned_f;  -- f (correct)
-SELECT to_ftsdoc(strip(to_tsvector('simple','brown quick'))) @@@ '"quick brown"'::ftsquery AS nopos_via_strip_tsvector;   -- t (WRONG: should be f)
-SELECT ($$'brown':1$$::ftsdoc || to_ftsdoc('simple','quick')) @@@ '"quick brown"'::ftsquery AS nopos_via_concat;          -- t (WRONG: should be f)
--- field-zone labels live in position high bits, so a positionless doc cannot be
--- zone-filtered: :A matches nothing, :D matches everything.
+-- A phrase over an operand whose positions are unavailable is UNVERIFIABLE, so
+-- it must be false -- matching PostgreSQL, which without TS_EXEC_PHRASE_NO_POS
+-- has OP_PHRASE "always return false if lexeme position information is not
+-- available".  Four routes reach that state; all must agree.  See
+-- bench/REVIEW_PHRASE_NOPOS.md.
+SELECT to_ftsdoc('simple','brown quick') @@@ '"quick brown"'::ftsquery AS nopos_control_positioned_f;  -- f
+SELECT to_ftsdoc(strip(to_tsvector('simple','brown quick'))) @@@ '"quick brown"'::ftsquery AS nopos_via_strip_tsvector;   -- f
+SELECT ($$'brown':1$$::ftsdoc || to_ftsdoc('simple','quick')) @@@ '"quick brown"'::ftsquery AS nopos_via_concat;          -- f
+-- a positioned doc still matches a genuine adjacency, so this is not a blanket false
+SELECT to_ftsdoc('simple','quick brown') @@@ '"quick brown"'::ftsquery AS positioned_phrase_still_true;   -- t
+-- boolean UNDER a phrase: positions are nulled by the AND arm even though the
+-- DOCUMENT is fully positioned, so the doc's own flag cannot discriminate.
+-- PostgreSQL answers f here; we must too.
+SELECT to_ftsdoc('simple','fox brown zzz quick') @@@ (to_tsquery('simple','quick <-> (brown & fox)'))::ftsquery AS bool_under_phrase_f;  -- f
+-- prefix-inside-phrase is DELIBERATELY lossy (positions are not tracked for a
+-- prefix operand), and that shipped behaviour is preserved: still permissive.
+SELECT to_ftsdoc('simple','brown quick') @@@ '"quick bro*"'::ftsquery AS prefix_in_phrase_stays_lossy;   -- t
+-- field-zone labels live in position high bits, so a positionless doc carries no
+-- label information: a zone restriction we cannot evaluate must not match.
 SELECT $$'quick':1$$::ftsdoc @@@ 'quick:A'::ftsquery AS nopos_zone_A_never_matches;   -- f
-SELECT $$'quick':1$$::ftsdoc @@@ 'quick:D'::ftsquery AS nopos_zone_D_always_matches;  -- t
+SELECT $$'quick':1$$::ftsdoc @@@ 'quick:D'::ftsquery AS nopos_zone_D_no_longer_matches;  -- f
