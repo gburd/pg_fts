@@ -190,51 +190,33 @@ they are not rediscovered. Ordered roughly by value.
    that already caused 1.5.5/1.5.6.  Revisit only if a field report shows ranked
    phrase latency mattering AFTER positions are enabled.
 
-5. **`WITH (positions=off)` — heap-side only.**
-   An option to omit token positions from the heap `ftsdoc` for phrase-free
-   workloads: smaller heap column, faster build/insert/merge. It does **not**
-   shrink the bm25 index (which stores no positions — see #4); the earlier
-   "smaller index" framing was wrong. Phrase/NEAR require positions, so opt-in.
+5. **`WITH (positions=off)` — heap-side only. [NO-GO as scoped, 2026-09-08]**
+   Analysed in `bench/PLAN_HEAP_POSITIONS_OFF.md`. The idea: omit token positions
+   from the heap `ftsdoc` for phrase-free workloads (smaller heap column, faster
+   build/insert/merge). It does NOT shrink the bm25 index, which stores no
+   positions by default; the old "smaller index" framing was wrong.
 
-   **Interaction found while profiling phrase (2026-09-06) — read before
-   implementing.** With index `positions=off` (the default), a phrase is answered
-   by AND + a **heap recheck**, and that recheck (`fts_doc_matches` →
-   `phrase_step`) derives adjacency from the heap `ftsdoc` positions.  Dropping
-   heap positions therefore removes the only adjacency source for a
-   default-built index.
+   **Rejected on measured size vs. measured risk.** The saving is exactly
+   `4 x doclen` bytes -- about **16%** of a short doc's `ftsdoc` and 30-41% on a
+   2000-token one -- and because `ftsdoc` is `STORAGE = extended`, the on-disk
+   delta is the *compressed* one, smaller still. Meanwhile the corpus that would
+   benefit most (long documents) is precisely the one our own measurements show
+   pays **36x** for losing positional phrase (see 4b). Bad trade.
 
-   Note what `phrase_step()` does when a side lacks positions: it falls back to
-   presence-only AND ("recall preserved, precision degraded", per its comment) --
-   i.e. it answers a phrase with a conjunction and reports it as a phrase match.
+   It also cannot be expressed cleanly: the heap value is produced by a function
+   call (`to_ftsdoc(...)`), not index DDL, so a `WITH (...)` reloption cannot
+   control it.
 
-   **CORRECTION (2026-09-08): I previously recorded this as "verified
-   unreachable". That was WRONG, and the error was mine.** I tested only the
-   raw-text cast (`'bravo alpha'::ftsdoc`), which synthesizes positions from token
-   order -- so it appeared safe. A sub-agent review found three OTHER live
-   SQL-visible producers of positionless docs, all confirmed on HEAD returning
-   `t` for the NON-ADJACENT phrase `"quick brown"`:
-     1. the canonical literal form without `@`: `$$'brown':1 'quick':1$$::ftsdoc`
-     2. `to_ftsdoc(strip(to_tsvector(...)))` -- `pg_fts_tsanalyze.c:264-272` clears
-        `has_pos` if ANY entry is positionless
-     3. `ftsdoc || ftsdoc` -- `pg_fts_doc.c:904` ANDs the two flags
-   Control confirmed correct: `to_ftsdoc('simple','brown quick')` gives `f`.
-   Field-zone filtering degrades too (`pg_fts_match.c:88-95`): on a positionless
-   doc `term:A` matches nothing and `term:D` matches everything.
+   And the safety argument that motivated a guard here is now moot in the right
+   way: the silent phrase-degradation bug it would have amplified **has been
+   fixed** (an unverifiable phrase returns false, matching PostgreSQL's
+   documented `OP_PHRASE` behaviour; see commit "fix: an unverifiable phrase must
+   be FALSE"). Note the guard idea "require index `positions=on`" was itself
+   unworkable -- `fts_doc_matches` is reachable by seq scan with no index at all.
 
-   **Worse, our own suite pins the wrong answer as expected** --
-   `sql/pg_fts.sql:2800` / `expected/pg_fts.out:5423-5426` assert `t` for the
-   non-adjacent phrase, with a comment presenting the degradation as intended.
-
-   So this is a LIVE correctness bug that does not need item 5 as a reason to
-   exist, and it is tracked separately (see `bench/REVIEW_PHRASE_NOPOS.md`). The
-   complication for any fix: prefix-inside-phrase (`"quick bro*"`) takes the same
-   `pos == NULL` branch on a fully-positioned doc
-   (`pg_fts_match.c:65-70`, "phrase-with-prefix is not tracked positionally"), so
-   a blanket error would break a shipped behaviour.
-
-   For item 5 itself the consequence is simpler: a heap-side `positions=off`
-   would MULTIPLY the exposure of an already-live bug, so the bug must be fixed
-   first regardless of whether this item ever ships.
+   Revisit only if a field report shows heap `ftsdoc` size actually dominating a
+   phrase-free workload, and then as an explicit function variant rather than a
+   reloption.
 
 6. **COUNT / aggregation Custom Scan pushdown. [DONE]**
    Implemented in `pg_fts_customscan.c`: `_PG_init` installs
