@@ -43,18 +43,33 @@ they are not rediscovered. Ordered roughly by value.
    consider removing the path, which carries real concurrency risk in a line that
    has already shipped three concurrency-fix releases for a measured negative.
 
-2. **Level-2 recursive parallel merge (W → W/2 → … → 1).**
-   The current parallel merge does one parallel pass into (workers+1) segments,
-   then a serial final combine to one. For very large indexes that final
-   combine is still O(index) single-threaded. Recursing the parallel merge so
-   the final combine also parallelizes would remove it. Deferred — one parallel
-   pass already removes the dominant per-segment decode cost.
+2. **Level-2 recursive parallel merge (W → W/2 → … → 1). [BLOCKED by item 1's
+   measurement -- do not start]**
+   The idea: the current parallel merge does one parallel pass into
+   (workers+1) segments then a serial final combine, so recursing would remove
+   that O(index) single-threaded tail.
+   **This is now moot until item 1 is fixed.** Measured 2026-09-08: taking the
+   parallel path AT ALL is 1.45x slower than serial (333.5 s vs 230.6 s) and emits
+   a 19% larger index, and W=1 costs the same as W=3 -- so the penalty is not in
+   the serial tail this item targets, it is in going parallel in the first place.
+   Parallelizing more of a path that loses to serial makes it worse.
+   Prerequisite: understand and fix the per-worker output fragmentation (the 19%
+   growth) so that parallel merge beats serial on a single pass. Only then does
+   recursion have anything to add.
 
-3. **Parallel build: fewer, larger per-worker segments.**
+3. **Parallel build: fewer, larger per-worker segments. [STILL VALID -- and now
+   the better half of this cluster]**
    Each worker currently flushes several segments (budget-triggered), so a
    parallel build leaves many segments needing a merge. Giving each worker a
    larger flush budget (its share of `maintenance_work_mem`) would leave ~1
-   segment per worker, shrinking the post-build merge input. Complements #1/#2.
+   segment per worker, shrinking the post-build merge input.
+   Note this survives item 1's bad result while #2 does not: it reduces the
+   AMOUNT of merging needed rather than trying to parallelize the merge itself.
+   With parallel merge measured as a 1.45x regression, "produce fewer segments to
+   merge" is strictly more attractive than "merge them in parallel". Unmeasured;
+   size the win before building (how many segments does a parallel build actually
+   leave at realistic `maintenance_work_mem`, and what does the subsequent serial
+   merge cost?).
 
 4. **Index size and ranked latency — the competitive gap (see
    `bench/RESULTS_VS_CURRENT.md` for the current 0.3.5 3-way; `bench/NOTE_SIZE_AND_SPEED.md`
