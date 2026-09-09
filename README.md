@@ -156,6 +156,24 @@ Features
   * external-content indexing via an expression index on to_ftsdoc(col)
   * incremental maintenance (INSERT appends to a pending list, no REINDEX);
     background/on-demand merge (fts_merge()) and compaction (fts_vacuum())
+
+    > **Two build-tuning facts worth knowing before your first large index**
+    > (measured on 2.19M Wikipedia articles;
+    > `bench/RESULTS_GATING_2026-09-09.md`):
+    >
+    > **1. Raise `maintenance_work_mem` to >= 1GB and the post-build merge
+    > disappears.** At that setting this corpus builds straight to a single
+    > segment. At PostgreSQL's 64MB default the same build leaves 8 segments plus
+    > a **216 s** merge, and the index lands **twice as large** (8,613 MB vs
+    > 4,605 MB). If a build is followed by a long merge, this is the first knob to
+    > reach for.
+    >
+    > **2. `max_parallel_maintenance_workers` trades index size for build speed,
+    > and makes *merges* slower.** Workers pack their output pages independently,
+    > so a parallel build is faster but bigger (at 1GB: 464 s / 5,386 MB with 4
+    > workers vs 523 s / 4,605 MB serial). The same effect makes a parallel
+    > `fts_merge` **1.45x slower** than serial and 19% larger, so do not raise
+    > this setting hoping to speed up a merge.
   * block-max WAND / MaxScore top-k with lazy per-column decode; fts_search()
     index-only BM25 top-k
   * fts_count(): MVCC-correct bulk count via the index, plus a transparent

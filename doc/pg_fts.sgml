@@ -556,6 +556,53 @@ SELECT * FROM messages
   </para>
 
   <para>
+   How much it matters is easy to underestimate, so here it is measured on
+   2,188,038 Wikipedia articles (16 vCPU, 128&nbsp;GB;
+   <filename>bench/RESULTS_GATING_2026-09-09.md</filename>).  <quote>Merge</quote>
+   is the <function>fts_merge</function> that consolidates whatever the build left:
+<informaltable>
+ <tgroup cols="5">
+  <thead>
+   <row>
+    <entry><varname>maintenance_work_mem</varname></entry>
+    <entry>build</entry>
+    <entry>segments after build</entry>
+    <entry>follow-up merge</entry>
+    <entry>final index</entry>
+   </row>
+  </thead>
+  <tbody>
+   <row><entry>64&nbsp;MB (the PostgreSQL default)</entry><entry>475&nbsp;s</entry><entry>8</entry><entry>216&nbsp;s</entry><entry>8,613&nbsp;MB</entry></row>
+   <row><entry>256&nbsp;MB</entry><entry>367&nbsp;s</entry><entry>6</entry><entry>223&nbsp;s</entry><entry>5,793&nbsp;MB</entry></row>
+   <row><entry><emphasis>1&nbsp;GB</emphasis></entry><entry>523&nbsp;s</entry><entry><emphasis>1</emphasis></entry><entry><emphasis>none needed</emphasis></entry><entry>4,605&nbsp;MB</entry></row>
+   <row><entry><emphasis>2&nbsp;GB</emphasis></entry><entry>527&nbsp;s</entry><entry><emphasis>1</emphasis></entry><entry><emphasis>none needed</emphasis></entry><entry>4,323&nbsp;MB</entry></row>
+  </tbody>
+ </tgroup>
+</informaltable>
+   At <literal>1&nbsp;GB</literal> and above this corpus builds straight to a
+   single segment, so the post-build merge disappears entirely &mdash; saving both
+   the ~220&nbsp;s merge and about 4&nbsp;GB of transient index size.  At the 64&nbsp;MB
+   default the same corpus needs 8 segments plus a 216&nbsp;s merge and lands
+   <emphasis>twice as large</emphasis>.  If a build is followed by a long merge,
+   raising <varname>maintenance_work_mem</varname> is the first thing to try.
+  </para>
+
+  <para>
+   <emphasis role="bold">A caveat on parallel builds.</emphasis>
+   <varname>max_parallel_maintenance_workers</varname> makes the build faster but
+   the resulting index <emphasis>larger</emphasis>, because each worker packs its
+   own output pages independently.  Measured on the same corpus: at 256&nbsp;MB,
+   308&nbsp;s with 4 workers versus 367&nbsp;s serial, but 5,466&nbsp;MB versus
+   4,373&nbsp;MB; at 1&nbsp;GB, 464&nbsp;s versus 523&nbsp;s but 5,386&nbsp;MB versus
+   4,605&nbsp;MB.  The effect shrinks as <varname>maintenance_work_mem</varname>
+   grows (at 2&nbsp;GB it is under 1%).  The same per-worker fragmentation makes
+   <emphasis>parallel merge slower than serial</emphasis> &mdash; see
+   <xref linkend="pgfts-parallel-merge"/>.  Trade build wall-clock against index
+   size deliberately, and run <function>fts_vacuum</function> afterwards if size
+   matters more.
+  </para>
+
+  <para>
    <emphasis role="bold">Fewer segments on a very large build.</emphasis> A build
    flushes a new segment each time a participant's in-memory buffer reaches its
    budget; by default that budget grows only up to
@@ -602,6 +649,33 @@ SELECT * FROM messages
    trades throughput for a smaller, more predictable peak memory and segment
    count; combined with leaving the index tiered (the default above the cap) it
    completes in a bounded, observable time rather than one open-ended collapse.
+  </para>
+
+  <para id="pgfts-parallel-merge">
+   <emphasis role="bold">Do not raise
+   <varname>max_parallel_maintenance_workers</varname> to speed up a merge.</emphasis>
+   <function>fts_merge</function> can take a parallel path, and it is
+   <emphasis>slower</emphasis> than the serial one.  Measured on 2,188,038
+   Wikipedia articles, merging an 8-segment 7,185&nbsp;MB index
+   (<filename>bench/RESULTS_PARALLEL_MERGE_2026-09-08.md</filename>):
+   serial <emphasis>230.6&nbsp;s</emphasis> producing 8,606&nbsp;MB, versus parallel
+   <emphasis>333.5&nbsp;s</emphasis> producing 10,229&nbsp;MB &mdash; 1.45x slower
+   and 19% larger.  One worker costs the same as three, so this is a fixed penalty
+   for taking the parallel path rather than a scaling curve; a merge is
+   sequential-I/O bound, and per-worker output streams pack pages independently.
+   Results are unaffected (every run converged to one segment with identical match
+   counts).
+  </para>
+
+  <para>
+   There is also a trap worth knowing: at
+   <literal>max_parallel_maintenance_workers = 8</literal> on the test host the
+   workers registered, started, and exited within about 2&nbsp;ms, so the merge
+   silently ran <emphasis>serially</emphasis> &mdash; which is why that setting
+   looked fast.  Do not infer from a fast merge that parallelism helped; check for
+   parallel workers in <structname>pg_stat_activity</structname> if it matters.
+   The safe configuration for merges is the default (leave the setting alone, or
+   <literal>0</literal>).
   </para>
 
   <para>
