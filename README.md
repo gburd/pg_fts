@@ -317,7 +317,21 @@ Query execution
     it compacts to a single segment (relocating live pages toward the front of
     the file) and truncates the freed tail back to the OS, converging to the
     size floor in one call (runs automatically during VACUUM when the index is
-    substantially bloated).  Compaction rewrites the live data before freeing
+    substantially bloated).
+
+    > **How much space this is, measured.** After a 2.19M-document build at
+    > `maintenance_work_mem=1GB`, `pg_relation_size` was **4,406 MB** but only
+    > 173,529 pages were live (**1,355 MB**) — 69% of the file was already-freed
+    > pages. `fts_vacuum` reclaimed all of it: **4,406 → 1,355 MB**. Live pages
+    > average **98.8% full**, so this is not a packing problem; it is that a merge
+    > allocates its output by extending the file, and the truncation step can only
+    > return a *contiguous free tail* — with the final output sitting at the top of
+    > the file, the freed pages beneath it need the compaction pass to move live
+    > data down before anything can be truncated.
+    >
+    > **Practical rule: run `fts_vacuum` once after a large initial build**, and do
+    > not judge the index's real size before you do. Measurements in
+    > `bench/DIAG_WORKER_FRAGMENTATION.md`.  Compaction rewrites the live data before freeing
     the old copy (write-before-free, for crash safety), so it transiently needs
     free disk space of roughly the live index size -- like VACUUM FULL / CLUSTER
     / pg_repack.  It is interruptible: pg_cancel_backend and statement_timeout
