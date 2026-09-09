@@ -57,19 +57,32 @@ they are not rediscovered. Ordered roughly by value.
    growth) so that parallel merge beats serial on a single pass. Only then does
    recursion have anything to add.
 
-3. **Parallel build: fewer, larger per-worker segments. [STILL VALID -- and now
-   the better half of this cluster]**
-   Each worker currently flushes several segments (budget-triggered), so a
-   parallel build leaves many segments needing a merge. Giving each worker a
-   larger flush budget (its share of `maintenance_work_mem`) would leave ~1
-   segment per worker, shrinking the post-build merge input.
-   Note this survives item 1's bad result while #2 does not: it reduces the
-   AMOUNT of merging needed rather than trying to parallelize the merge itself.
-   With parallel merge measured as a 1.45x regression, "produce fewer segments to
-   merge" is strictly more attractive than "merge them in parallel". Unmeasured;
-   size the win before building (how many segments does a parallel build actually
-   leave at realistic `maintenance_work_mem`, and what does the subsequent serial
-   merge cost?).
+3. **Parallel build: fewer, larger per-worker segments. [CLOSED as scoped
+   2026-09-09 -- premise is false]** (`bench/RESULTS_GATING_2026-09-09.md`)
+   The premise was "a parallel build leaves many segments needing a merge".
+   Measured across `maintenance_work_mem` x workers at 2.19M docs: **at
+   `maintenance_work_mem >= 1GB` the build already leaves `nsegments = 1` and the
+   follow-on merge is a 0.0 s no-op.** There is nothing to fix at realistic
+   settings; the item was scoped against 64MB-era behaviour. At the 64MB default
+   the same build leaves 8 segments plus a 216 s merge and lands twice as large
+   (8,613 vs 4,605 MB) -- so the remedy is **raise `maintenance_work_mem`**, which
+   is documentation (now in README + `doc/pg_fts.sgml`), not code.
+
+3a. **Per-worker output fragmentation. [NEW -- the best remaining perf target]**
+   Surfaced by the item 3 sweep and it explains an earlier result. Parallel
+   workers make a build **faster but the index bigger, every time**: at
+   `maintenance_work_mem=1GB`, 464 s / 5,386 MB with 4 workers vs 523 s /
+   4,605 MB serial; at 256MB, 308 s / 5,466 MB vs 367 s / 4,373 MB. The effect
+   nearly vanishes at 2GB (4,328 vs 4,323 MB), consistent with per-worker flush
+   granularity.
+   **This is the same defect that makes parallel merge 1.45x slower and 19%
+   larger** (`bench/RESULTS_PARALLEL_MERGE_2026-09-08.md`) -- one cause showing up
+   in two places, not two coincidences. Fixing it would make parallel build a
+   clean win AND potentially rescue parallel merge (and with it item 2, currently
+   blocked).
+   Unstarted. First step is to find where per-worker output diverges from the
+   serial packer -- compare page fill factors in a serial vs parallel build of the
+   same corpus rather than guessing.
 
 4. **Index size and ranked latency — the competitive gap (see
    `bench/RESULTS_VS_CURRENT.md` for the current 0.3.5 3-way; `bench/NOTE_SIZE_AND_SPEED.md`
@@ -192,6 +205,21 @@ they are not rediscovered. Ordered roughly by value.
    top-k, which parity_check enforces.  Do not open that decision on an
    unprofiled premise again.
 
+
+   **RE-PROFILED on the shipped build 2026-09-09** (`bench/RESULTS_GATING_2026-09-09.md`):
+   doclen is the dominant cost in every band, and far more so than I had recorded --
+   rare 68.9%, mid 71.6%, common 45.2%, versus `topk_candidates_range` at 6.8% /
+   6.0% / 37.2%. So the target is `bm25_doclen_cursor_load_page`, not the WAND
+   driver.
+   That also **re-sizes the sidecar format change upward**: 1.5.10's CHANGELOG
+   called a mid-block start "worth at most ~2x of a portion of the query", reasoning
+   from the common profile where `load_page` is 28.3%. On rare/mid it is ~65%, so
+   halving the gap-decode prefix is worth roughly **1.5x on the two bands the field
+   actually queries** (rare 5.89 -> 3.99 ms, mid 10.64 -> 7.14 ms). Still a format
+   change requiring dual-read + an upgrade path + a MINOR release under our
+   format-preservation rule -- but it is now the best-sized remaining performance
+   item and should be judged on that basis rather than dismissed.
+
 4b. **Phrase queries — PROFILED 2026-09-06; the win was documentation, not code**
    (`bench/NOTE_PHRASE_PROFILE_2026-09-06.md`).
    Two findings.  First, **our published "phrase 90.70 ms" was not a phrase**: it
@@ -286,13 +314,14 @@ they are not rediscovered. Ordered roughly by value.
    (`:3999-4003`), so a worker's local threshold is always <= the global one and
    it under-prunes rather than losing results.)
 
-   **Caveat on my own numbers:** the "39% candidates / 43% doclen" split I had
-   been quoting for 1.5.10 was never written down from a real run -- the recorded
-   profile in `NOTE_PROFILE_COMMON_TERM_2026-09-06.md` is the *intermediate*
-   42.67 ms build (candidates 46.58%, doclen 21.33% + 4.44%). A fresh `perf` on
-   the shipped 36.16 ms build is a prerequisite for any further common-term work.
-   The ceilings above differ by <1 ms between the two splits, so this verdict
-   stands either way.
+   **Caveat on my own numbers -- now RESOLVED (2026-09-09).** The "39% candidates /
+   43% doclen" split I had been quoting was never captured from a real run. A fresh
+   `perf` on the shipped build (`bench/RESULTS_GATING_2026-09-09.md`) gives, for
+   common `year`: candidates 37.2%, doclen 45.2% (`load_page` 28.3% + `lookup`
+   16.9%), `wand_load_block` 6.4%. So doclen is the LARGER half, not candidates.
+   The NO-GO above is unaffected (the ceilings differ by <1 ms between splits), but
+   the target for further work is `bm25_doclen_cursor_load_page`, and rare/mid are
+   far more doclen-dominated still (68.9% and 71.6%).
 
 8. **Storage AIO / `read_stream` prefetch for the cold merge full-scan.**
    The build heap scan already gets core `read_stream` prefetch for free. The
