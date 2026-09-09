@@ -49,6 +49,24 @@ Notes:
   predicate (`@@@`), an index-native `count(*)`, and phrase / prefix / fuzzy /
   regex queries. These are the reason for the explicit `ftsdoc`/`ftsquery`
   types.
+- **If you use phrase queries, read this before benchmarking pg_fts against
+  pg_textsearch.** Two things will otherwise surprise you:
+  1. **Phrase syntax uses double quotes.** `to_ftsquery('english', '"united
+     states"')` is a phrase; single quotes give a plain conjunction
+     (`'unit' & 'state'`), which matches far more rows. We published a benchmark
+     number that was wrong for exactly this reason.
+  2. **Add `WITH (positions = on)` at `CREATE INDEX` time.** It defaults to *off*,
+     and without it a phrase cannot be verified from the index — the scan falls
+     back to a conjunction plus a heap recheck of every candidate. On 2.19M
+     articles a ranked phrase costs **8,385 ms** with the default and **229 ms**
+     with positions on (36x); an exact phrase `count(*)` goes 7,170 ms → 132 ms.
+     The cost is a larger index (1,421 MB → 2,626 MB on that corpus). See
+     `bench/NOTE_PHRASE_PROFILE_2026-09-06.md`.
+- **Build tuning:** raise `maintenance_work_mem` to >= 1GB for a large initial
+  build. At PostgreSQL's 64MB default a 2.19M-document build leaves 8 segments
+  plus a ~216 s merge and an index twice the necessary size. Do *not* raise
+  `max_parallel_maintenance_workers` to speed up a merge — it makes merges 1.45x
+  slower and 19% larger (`bench/RESULTS_PARALLEL_MERGE_2026-09-08.md`).
 
 ## Multi-column search
 

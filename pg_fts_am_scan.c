@@ -1543,6 +1543,14 @@ bm25_gettuple(IndexScanDesc scan, ScanDirection dir)
  * the result is identical.  need_recheck is then false and the recheck cliff is
  * gone.
  *
+ * "Identical" is verified, not assumed: on a corpus where only a third of rows
+ * have the phrase adjacent, seq scan (heap matcher), index scan with
+ * positions=off (heap recheck) and index scan with positions=on (this path) all
+ * return the same count, matching a regex ground truth (2026-09-08; see
+ * bench/NOTE_PHRASE_PROFILE_2026-09-06.md).  The recheck fallback is also
+ * genuinely correct rather than merely slower, as of the 1.6.0 fix that made an
+ * UNVERIFIABLE phrase return false instead of degrading to a conjunction.
+ *
  * This fast path handles a PURE PHRASE CHAIN: an RPN of plain (non prefix/
  * fuzzy/regex) term operands combined only by FTS_OP_PHRASE -- i.e. the shape
  * to_ftsquery produces for "a b c" and NEAR(a b c, k).  Anything mixing phrase
