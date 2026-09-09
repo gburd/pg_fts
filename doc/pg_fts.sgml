@@ -595,7 +595,13 @@ SELECT * FROM messages
    308&nbsp;s with 4 workers versus 367&nbsp;s serial, but 5,466&nbsp;MB versus
    4,373&nbsp;MB; at 1&nbsp;GB, 464&nbsp;s versus 523&nbsp;s but 5,386&nbsp;MB versus
    4,605&nbsp;MB.  The effect shrinks as <varname>maintenance_work_mem</varname>
-   grows (at 2&nbsp;GB it is under 1%).  The same per-worker fragmentation makes
+   grows (at 2&#160;GB it is under 1%).  <emphasis>Caveat (2026-09-09):</emphasis>
+   those sizes were measured before running <function>fts_vacuum</function>, and
+   early investigation indicates a build leaves a large volume of freed pages that
+   <function>fts_vacuum</function> reclaims completely (live pages measure ~98.8%
+   full), so the <emphasis>durable</emphasis> size cost may be zero &mdash; run
+   <function>fts_vacuum</function> and compare before planning around this.  The
+   merge finding below is unaffected.  The same per-worker fragmentation makes
    <emphasis>parallel merge slower than serial</emphasis> &mdash; see
    <xref linkend="pgfts-parallel-merge"/>.  Trade build wall-clock against index
    size deliberately, and run <function>fts_vacuum</function> afterwards if size

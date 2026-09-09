@@ -186,6 +186,19 @@ serial path.
 
 ### Parallel build: faster but larger
 
+> **UNDER REVIEW (2026-09-09):** the parallel-build size figures below
+> (`4,605 MB serial vs 5,386 MB with 4 workers`) were measured **without running
+> `fts_vacuum`**. Early results from the ROADMAP 3a investigation show a serial 1GB
+> build carries 69% `BM25_FREED` pages that `fts_vacuum` fully reclaims
+> (4,406 -> 1,355 MB), and that live pages are ~98.8% full — i.e. the working
+> "partially-filled per-worker pages" hypothesis is likely **wrong**. If the
+> post-vacuum sizes match, "parallel build produces a larger index" is false as a
+> durable property and this table will be corrected. The 1,421 MB headline index
+> size elsewhere in this document is **unaffected** (that build did run
+> `fts_vacuum`). Verification in progress; see
+> `bench/DIAG_WORKER_FRAGMENTATION.md`.
+
+
 | `mwm` | serial | 4 workers |
 |---|---|---|
 | 256MB | 367 s / 4,373 MB | 308 s / **5,466 MB** |

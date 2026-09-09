@@ -178,12 +178,14 @@ Features
     > 4,605 MB). If a build is followed by a long merge, this is the first knob to
     > reach for.
     >
-    > **2. `max_parallel_maintenance_workers` trades index size for build speed,
-    > and makes *merges* slower.** Workers pack their output pages independently,
+    > **2. `max_parallel_maintenance_workers` makes *merges* slower, and may cost
+    > build index size (under review).** Workers pack their output pages independently,
     > so a parallel build is faster but bigger (at 1GB: 464 s / 5,386 MB with 4
-    > workers vs 523 s / 4,605 MB serial). The same effect makes a parallel
-    > `fts_merge` **1.45x slower** than serial and 19% larger, so do not raise
-    > this setting hoping to speed up a merge.
+    > workers vs 523 s / 4,605 MB serial) -- **but those sizes were measured before
+    > `fts_vacuum`, which may reclaim the entire difference; see
+    > `bench/DIAG_WORKER_FRAGMENTATION.md`**. The merge finding is solid regardless:
+    > a parallel `fts_merge` is **1.45x slower** than serial and 19% larger, so do
+    > not raise this setting hoping to speed up a merge.
   * block-max WAND / MaxScore top-k with lazy per-column decode; fts_search()
     index-only BM25 top-k
   * fts_count(): MVCC-correct bulk count via the index, plus a transparent

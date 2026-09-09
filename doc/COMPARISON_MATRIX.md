@@ -82,11 +82,18 @@ like-for-like comparator, and clearly trails on common-term ranked and phrase.
 | Extra build dependencies | none | none | openblas, pgvector, pgrx | pgrx |
 | Incremental maintenance (no REINDEX to add rows) | **Yes** (pending list) | *n/t* | *n/t* | *n/t* |
 | `CREATE INDEX CONCURRENTLY` | **Yes** (verified) | *n/t* | *n/t* | *n/t* |
-| Parallel index build | **Yes** (costs ~17% size) | *n/t* | *n/t* | *n/t* |
+| Parallel index build | **Yes** (size cost **under review** — see note) | *n/t* | *n/t* | *n/t* |
 | Parallel scan | No (built, measured, reverted) | *n/t* | *n/t* | *n/t* |
 | Managed-service safe (replica guard, privileges) | **Yes** | *n/t* | *n/t* | *n/t* |
 | Non-UTF-8 server encodings | **Yes** (fixed 1.5.9) | *n/t* | *n/t* | *n/t* |
 | Big-endian hosts | **Untested** (no CI) | *n/t* | *n/t* | *n/t* |
+
+> **Note on the parallel-build size cost (2026-09-09):** an earlier sweep measured a
+> parallel build as ~17% larger than serial, but that sweep did **not** run
+> `fts_vacuum`. Early ROADMAP 3a results show a build leaves a large volume of
+> `BM25_FREED` pages that `fts_vacuum` reclaims completely, and that live pages are
+> ~98.8% full. The durable size cost may therefore be zero. Do not rely on the 17%
+> figure until `bench/DIAG_WORKER_FRAGMENTATION.md` lands.
 
 **Read:** not needing `shared_preload_libraries` is a genuine deployment
 advantage — the other three all require a restart to install, and on a managed
