@@ -315,9 +315,11 @@ Query execution
     a Custom Scan (FtsCount) -- no need to call fts_count() explicitly.
   * fts_vacuum(regclass) reclaims the physical space left by builds and merges:
     it compacts to a single segment (relocating live pages toward the front of
-    the file) and truncates the freed tail back to the OS, converging to the
-    size floor in one call (runs automatically during VACUUM when the index is
-    substantially bloated).
+    the file) and truncates the freed tail back to the OS (runs automatically
+    during VACUUM when the index is substantially bloated).  A single call
+    reclaims most of the space; a second converges to the floor -- measured
+    2026-09-09, one call left ~4.7% above the live floor on a 2.19M-doc index,
+    which matches what the reference documentation already stated.
 
     > **How much space this is, measured.** After a 2.19M-document build at
     > `maintenance_work_mem=1GB`, `pg_relation_size` was **4,406 MB** but only
