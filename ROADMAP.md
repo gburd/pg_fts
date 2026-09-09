@@ -68,21 +68,48 @@ they are not rediscovered. Ordered roughly by value.
    (8,613 vs 4,605 MB) -- so the remedy is **raise `maintenance_work_mem`**, which
    is documentation (now in README + `doc/pg_fts.sgml`), not code.
 
-3a. **Per-worker output fragmentation. [NEW -- the best remaining perf target]**
-   Surfaced by the item 3 sweep and it explains an earlier result. Parallel
-   workers make a build **faster but the index bigger, every time**: at
-   `maintenance_work_mem=1GB`, 464 s / 5,386 MB with 4 workers vs 523 s /
-   4,605 MB serial; at 256MB, 308 s / 5,466 MB vs 367 s / 4,373 MB. The effect
-   nearly vanishes at 2GB (4,328 vs 4,323 MB), consistent with per-worker flush
-   granularity.
-   **This is the same defect that makes parallel merge 1.45x slower and 19%
-   larger** (`bench/RESULTS_PARALLEL_MERGE_2026-09-08.md`) -- one cause showing up
-   in two places, not two coincidences. Fixing it would make parallel build a
-   clean win AND potentially rescue parallel merge (and with it item 2, currently
-   blocked).
-   Unstarted. First step is to find where per-worker output diverges from the
-   serial packer -- compare page fill factors in a serial vs parallel build of the
-   same corpus rather than guessing.
+3a. **Per-worker output fragmentation. [CLOSED 2026-09-09 -- hypothesis disproven,
+   claim withdrawn]** (`bench/DIAG_WORKER_FRAGMENTATION.md`,
+   `bench/REVIEW_WORKER_FRAGMENTATION.md`, `bench/BENCHMARK_SUMMARY.md`)
+   I opened this on a measured "parallel build is ~17% larger" delta. **That delta
+   was measured before `fts_vacuum` and does not survive it.** Re-measured in an
+   isolated database at `maintenance_work_mem=1GB`: serial 4,605 MB pre-vacuum ->
+   **1,420 MB** post; 4 workers 5,365 MB pre-vacuum -> **1,420 MB** post. Identical
+   to the megabyte, identical match counts, both `nsegments=1`. A parallel build is
+   faster (464 s vs 523 s) and leaves more *reclaimable residue*, not a bigger
+   index. **The claim is withdrawn from README, CAPABILITIES, the SGML reference
+   and the benchmark summary.**
+   The "per-worker partial pages" hypothesis is disproven twice over: empirically
+   (live pages measure **98.8% full**, 173,521 of 173,529 above 90%) and
+   arithmetically (a segment writes at most ~4 chain-tail partial pages because
+   writers advance only when the next item does not fit and all terms share ONE
+   posting chain, bounding total slack at ~4 MB against deltas of 781-1,623 MB).
+   The residue is a **deliberate safety property**: merge output is allocated
+   extend-only (`pg_fts_am.c:4665-4672`) so a committed merge's freed inputs cannot
+   be recycled as the next merge's output while in-flight read chains still point
+   through them -- the comment says the alternative is "a wrong read or a SIGBUS".
+   `bm25_truncate_free_tail` reclaims only a contiguous tail (`:4446-4449`), so
+   buried freed pages wait for compaction. Nothing to fix; documented instead.
+
+3b. **`bm25_merge_all` runs the parallel pass AND THEN the serial collapse. [NEW,
+   small, worth doing]**
+   Verified at `pg_fts_am.c:4191`: the `if (try_parallel ...)` block calls
+   `bm25_merge_all_parallel()`, sets `didwork`, and **falls straight through** to the
+   serial collapse loop -- there is no early return. So a parallel `fts_merge`
+   performs the parallel pass *plus* the same full serial collapse a serial merge
+   does, which is a sufficient single explanation for the measured 1.45x wall-clock
+   and the extra residue.
+   This will **not** make parallel merge beat serial -- the final combine is
+   single-backend by construction (`:4665-4672`) -- but doing the work twice is
+   indefensible regardless, and it should at least stop us paying for a pass whose
+   benefit is then discarded. Est. ~5 lines plus a careful look at what
+   `bm25_merge_all_parallel` guarantees about its output state.
+   Also noted: at `max_parallel_maintenance_workers = 8` the workers register, start
+   and exit within ~2 ms. That is the gate `ParallelWorkerNumber + 1 < ngroups`
+   (`:3987`) with `ngroups = min(request+1, nsrc)` (`:4077-4080`) working as designed
+   -- the DEBUG1 log shows every run doing a single "merging 8 of 8 segments into
+   one" with no group split at all. Not a defect; just launch/teardown paid for zero
+   work.
 
 4. **Index size and ranked latency — the competitive gap (see
    `bench/RESULTS_VS_CURRENT.md` for the current 0.3.5 3-way; `bench/NOTE_SIZE_AND_SPEED.md`

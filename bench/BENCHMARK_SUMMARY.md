@@ -184,29 +184,41 @@ register, start and **exit within ~2 ms**, so the merge silently runs *serially*
 confirmed with postmaster `DEBUG1`. Those runs looked fast because they were the
 serial path.
 
-### Parallel build: faster but larger
+### Parallel build: faster, and NOT durably larger (corrected 2026-09-09)
 
-> **UNDER REVIEW (2026-09-09):** the parallel-build size figures below
-> (`4,605 MB serial vs 5,386 MB with 4 workers`) were measured **without running
-> `fts_vacuum`**. Early results from the ROADMAP 3a investigation show a serial 1GB
-> build carries 69% `BM25_FREED` pages that `fts_vacuum` fully reclaims
-> (4,406 -> 1,355 MB), and that live pages are ~98.8% full — i.e. the working
-> "partially-filled per-worker pages" hypothesis is likely **wrong**. If the
-> post-vacuum sizes match, "parallel build produces a larger index" is false as a
-> durable property and this table will be corrected. The 1,421 MB headline index
-> size elsewhere in this document is **unaffected** (that build did run
-> `fts_vacuum`). Verification in progress; see
-> `bench/DIAG_WORKER_FRAGMENTATION.md`.
+An earlier sweep reported parallel builds as ~17% larger. **That was measured before
+`fts_vacuum` and is wrong as a durable claim.** Re-measured with the vacuum step, in
+an isolated database, at `maintenance_work_mem=1GB`
+(`bench/data_gating_2026-09-09/vacuum_comparison.log`):
 
+| workers | pre-vacuum | **post-vacuum** | segments | `year` count |
+|---|---|---|---|---|
+| 0 (serial) | 4,605 MB | **1,420 MB** | 1 | 734,896 |
+| 4 | 5,365 MB | **1,420 MB** | 1 | 734,896 |
 
-| `mwm` | serial | 4 workers |
-|---|---|---|
-| 256MB | 367 s / 4,373 MB | 308 s / **5,466 MB** |
-| 1GB | 523 s / 4,605 MB | 464 s / **5,386 MB** |
-| 2GB | 527 s / 4,323 MB | 360 s / 4,328 MB |
+**Post-vacuum sizes are identical.** A parallel build is faster (464 s vs 523 s at
+1GB) and leaves *more reclaimable residue*, not a bigger index. Both converge to the
+same 1,420 MB floor with identical match counts.
 
-The same per-worker output fragmentation as the merge regression — one defect
-surfacing in two places. Under investigation as ROADMAP 3a.
+Why the residue exists at all, and why it is not a bug: merge output is allocated
+**extend-only** on purpose (`pg_fts_am.c:4665-4672`) so that a committed merge's
+freed input pages cannot be recycled as the next merge's output while in-flight read
+chains still thread through them -- the comment is explicit that the alternative is
+"a wrong read or a SIGBUS". `bm25_truncate_free_tail` then reclaims only a
+*contiguous* free tail (`:4446-4449`, it breaks at the first live block from EOF), so
+freed pages buried under the final output survive until a compaction pass relocates
+live data downward. Measured on a serial build: 4,406 MB file, 173,529 live pages
+(1,355 MB), 390,483 freed pages -- and live pages **98.8% full**, with 173,521 of
+173,529 above 90%.
+
+**So the original "per-worker partial pages" hypothesis is disproven twice over** --
+empirically (pages are ~99% full) and arithmetically (a segment writes at most ~4
+chain-tail partial pages, bounding total slack at ~4 MB against measured deltas of
+781-1,623 MB). See `bench/DIAG_WORKER_FRAGMENTATION.md` and
+`bench/REVIEW_WORKER_FRAGMENTATION.md`.
+
+**Operational rule: run `fts_vacuum` once after a large build, and do not judge
+index size before you do.**
 
 ### Sparsemap tombstone filter (partial)
 At zero tombstone density, three separately compiled arms (stock / batched

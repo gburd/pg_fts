@@ -588,73 +588,31 @@ SELECT * FROM messages
   </para>
 
   <para>
-   <emphasis role="bold">A caveat on parallel builds.</emphasis>
-   <varname>max_parallel_maintenance_workers</varname> makes the build faster but
-   the resulting index <emphasis>larger</emphasis>, because each worker packs its
-   own output pages independently.  Measured on the same corpus: at 256&nbsp;MB,
-   308&nbsp;s with 4 workers versus 367&nbsp;s serial, but 5,466&nbsp;MB versus
-   4,373&nbsp;MB; at 1&nbsp;GB, 464&nbsp;s versus 523&nbsp;s but 5,386&nbsp;MB versus
-   4,605&nbsp;MB.  The effect shrinks as <varname>maintenance_work_mem</varname>
-   grows (at 2&#160;GB it is under 1%).  <emphasis>Caveat (2026-09-09):</emphasis>
-   those sizes were measured before running <function>fts_vacuum</function>, and
-   early investigation indicates a build leaves a large volume of freed pages that
-   <function>fts_vacuum</function> reclaims completely (live pages measure ~98.8%
-   full), so the <emphasis>durable</emphasis> size cost may be zero &mdash; run
-   <function>fts_vacuum</function> and compare before planning around this.  The
-   merge finding below is unaffected.  The same per-worker fragmentation makes
-   <emphasis>parallel merge slower than serial</emphasis> &mdash; see
-   <xref linkend="pgfts-parallel-merge"/>.  Trade build wall-clock against index
-   size deliberately, and run <function>fts_vacuum</function> afterwards if size
-   matters more.
+   <emphasis role="bold">Parallel builds: faster, same final size.</emphasis>
+   <varname>max_parallel_maintenance_workers</varname> speeds a build up
+   (464&nbsp;s versus 523&nbsp;s serial at
+   <literal>maintenance_work_mem = 1GB</literal> on 2.19M articles) and, once
+   <function>fts_vacuum</function> has run, produces an
+   <emphasis>identically sized</emphasis> index &mdash; 1,420&nbsp;MB either way,
+   with identical match counts.  What a parallel build leaves behind is more
+   <emphasis>reclaimable residue</emphasis>, not a larger index: immediately after
+   the build the file measures 5,365&nbsp;MB versus 4,605&nbsp;MB serial, and
+   <function>fts_vacuum</function> collapses both to the same floor.  (An earlier
+   revision of this documentation reported a durable ~17% size penalty; that figure
+   was measured before vacuuming and is withdrawn.)
   </para>
 
   <para>
-   <emphasis role="bold">Fewer segments on a very large build.</emphasis> A build
-   flushes a new segment each time a participant's in-memory buffer reaches its
-   budget; by default that budget grows only up to
-   <literal>2 x maintenance_work_mem</literal>, so a very large corpus can
-   produce many segments.  If you have spare RAM and want fewer, larger segments
-   (less post-scan merging, and staying comfortably under the internal
-   128-segment limit), raise <varname>pg_fts.build_mem_ceiling_mb</varname> (the
-   per-participant flush-budget ceiling, in MB; <literal>0</literal> keeps the
-   default).  Peak build memory is then about
-   <literal>shared_buffers + (max_parallel_maintenance_workers + 1) x pg_fts.build_mem_ceiling_mb</literal>
-   &mdash; size it against your host's free RAM.
-  </para>
-
-  <para>
-   <emphasis role="bold">Merge / finalization.</emphasis> After the scan the
-   build compacts the many per-worker segments.  Rather than always collapsing
-   to a single segment (a single-backend pass over the whole index that can run
-   for a long time on a very large corpus), a build whose total index size
-   exceeds <varname>pg_fts.build_collapse_max_mb</varname> (default
-   <literal>4096</literal> MB) stops at a bounded, size-tiered set of segments.
-   The index is valid and fully queryable; ranked scans traverse a bounded
-   handful of segments (a small, fixed cost).  Run
-   <function>fts_merge(<replaceable>index</replaceable>)</function> in a
-   maintenance window to collapse to one segment when you want the smallest
-   index and the lowest ranked-scan latency.  Set
-   <varname>pg_fts.build_collapse_max_mb</varname> to <literal>0</literal> to
-   always collapse (regardless of size), or raise it if you have the time and
-   memory to collapse a large index during the build itself.
-  </para>
-
-  <para>
-   <emphasis role="bold">Time, and planning a window.</emphasis> The scan phase
-   parallelizes across <varname>max_parallel_maintenance_workers</varname>; the
-   final single-segment collapse (whether at the end of a build under the cap,
-   or an explicit <function>fts_merge</function>) is a single-backend pass that
-   reads and rewrites the whole index once, so its cost is roughly linear in the
-   index size.  As an order-of-magnitude planning figure, that collapse writes
-   on the order of tens of MB of index per second per core (measured ~40-60
-   MB/s on a commodity NVMe box; your hardware and vocabulary will vary), so a
-   multi-GB index takes minutes, not hours &mdash; but budget for it in a
-   maintenance window and watch the progress (below).  If a build must be
-   predictable on a modest box, a serial or low-parallelism build
-   (<literal>max_parallel_maintenance_workers = 0</literal> or a small value)
-   trades throughput for a smaller, more predictable peak memory and segment
-   count; combined with leaving the index tiered (the default above the cap) it
-   completes in a bounded, observable time rather than one open-ended collapse.
+   The residue is intentional.  Merge output is allocated by extending the file so
+   that a committed merge's freed input pages can never be handed out as the next
+   merge's output while in-flight read chains still point through them; the
+   alternative is a wrong read or a crash.  Truncation then reclaims only a
+   <emphasis>contiguous</emphasis> free tail, so pages freed underneath the final
+   output survive until <function>fts_vacuum</function>'s compaction pass relocates
+   live data toward the front of the file.  Live pages are ~98.8% full, so this is
+   not a packing inefficiency.  <emphasis role="bold">Run
+   <function>fts_vacuum</function> once after a large build, and do not judge the
+   index's size before you do.</emphasis>
   </para>
 
   <para id="pgfts-parallel-merge">
