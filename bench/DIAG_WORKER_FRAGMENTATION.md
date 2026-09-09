@@ -110,6 +110,56 @@ index size.** It is live data plus intentional, reclaimable residue.
 
 ---
 
+## The merge slowdown mechanism, recovered from the agent's transcript
+
+The empirical arm's last action before it ran out was to look at what the merge
+actually logs. It never reported this, but the evidence is in its transcript and it
+explains the 1.45x parallel-merge slowdown better than the code-reading arm's theory
+did.
+
+Its capture, labelled "parallel merge (mp3, first run)":
+
+```
+merging 8 of 128 segments (11,419 live docs) into one
+merging 8 of 121 segments (27,568 live docs) into one
+merging 8 of 114 segments (30,810 live docs) into one
+merging 8 of 107 segments (32,132 live docs) into one
+merging 8 of 100 segments (32,949 live docs) into one
+merging 8 of  93 segments (33,516 live docs) into one
+merging 8 of  86 segments (33,982 live docs) into one
+merging 8 of  79 segments (34,393 live docs) into one
+merging 8 of  72 segments (34,895 live docs) into one
+merging 8 of  65 segments (35,312 live docs) into one
+    ... (continuing down)
+```
+
+**A parallel merge starts from 128 segments and grinds them down eight at a time.**
+Compare the serial runs, which log a single `merging 8 of 8 segments (2,188,038 live
+docs) into one`.
+
+Verified against the code: `BM25_MERGE_FANOUT = 8` (`pg_fts_am.c:3703`) is the
+leveled LSM merge policy, which deliberately bounds any single merge's fan-in to ~8
+segments — the design comment (`:3691-3702`) explains this is *intentional*, to avoid
+"one giant single-backend pass over the whole index" and to give bounded write
+amplification with small observable merges.
+
+So the policy is working exactly as designed. The problem is its **input**: the
+parallel pass leaves the index at ~128 segments, so the bounded-fan-in policy needs
+~18 sequential passes to collapse it, each writing extend-only output. A serial merge
+hands the same policy 8 segments and finishes in one pass.
+
+That is a more complete explanation than "the parallel pass is an extra pass"
+(`bench/REVIEW_WORKER_FRAGMENTATION.md`): the extra work is not one duplicate pass
+but **O(nsegments/FANOUT) passes**, which also accounts for why the freed-page volume
+is higher under parallelism (484,323 vs 390,483 pages) and why W=1 costs the same as
+W=3 — the pass count is driven by how many segments exist, not by how many workers
+split them.
+
+**This strengthens ROADMAP 3b** and slightly re-aims it: the fix is not merely "return
+early after the parallel pass", it is that the parallel pass should not hand the
+collapse loop a 128-segment index in the first place. Worth confirming with a direct
+measurement of `nsegments` immediately after `bm25_merge_all_parallel` returns.
+
 ## Consequences
 
 - **ROADMAP 3a: closed.** Nothing to fix. The bytes are intentional and fully

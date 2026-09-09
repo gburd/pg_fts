@@ -99,11 +99,26 @@ they are not rediscovered. Ordered roughly by value.
    performs the parallel pass *plus* the same full serial collapse a serial merge
    does, which is a sufficient single explanation for the measured 1.45x wall-clock
    and the extra residue.
-   This will **not** make parallel merge beat serial -- the final combine is
-   single-backend by construction (`:4665-4672`) -- but doing the work twice is
-   indefensible regardless, and it should at least stop us paying for a pass whose
-   benefit is then discarded. Est. ~5 lines plus a careful look at what
-   `bm25_merge_all_parallel` guarantees about its output state.
+   **Sharper diagnosis recovered from the empirical arm's transcript
+   (`bench/DIAG_WORKER_FRAGMENTATION.md`):** the extra cost is not one duplicate pass
+   but **O(nsegments/FANOUT) passes**. A parallel merge logs
+   `merging 8 of 128 segments` -> `8 of 121` -> `8 of 114` ... grinding down eight at
+   a time, where a serial merge logs a single `merging 8 of 8 segments (2,188,038
+   live docs) into one`.
+   `BM25_MERGE_FANOUT = 8` (`:3703`) is the leveled LSM policy and is working exactly
+   as designed -- the comment at `:3691-3702` says bounded fan-in is deliberate, to
+   avoid one giant single-backend pass. The defect is its **input**: the parallel
+   pass leaves ~128 segments, so the policy needs ~18 sequential extend-only passes
+   to collapse them.
+   That also explains why W=1 costs the same as W=3 (pass count follows segment
+   count, not worker count) and why parallel leaves more freed pages (484,323 vs
+   390,483).
+   So the fix is not just "return early after the parallel pass" -- it is that the
+   parallel pass should not hand the collapse loop a 128-segment index. **Next step:
+   measure `nsegments` immediately after `bm25_merge_all_parallel` returns** to
+   confirm, before writing any code. This will still not make parallel merge beat
+   serial (the final combine is single-backend by construction, `:4665-4672`), so the
+   realistic goal is removing a pathology, not a win.
    Also noted: at `max_parallel_maintenance_workers = 8` the workers register, start
    and exit within ~2 ms. That is the gate `ParallelWorkerNumber + 1 < ngroups`
    (`:3987`) with `ngroups = min(request+1, nsrc)` (`:4077-4080`) working as designed
