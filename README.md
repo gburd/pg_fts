@@ -12,6 +12,16 @@ BM25 needs (document count, average length, per-term document frequency) and
 stores term frequency + document length in the posting lists, so ranking is
 answered from the index with no heap recheck.
 
+## Benchmarks and comparison
+
+* `bench/BENCHMARK_SUMMARY.md` — current measured results with full methodology
+  (rig, corpus, 8-run timing protocol, correctness gate), plus the list of
+  optimisations that were tried and **rejected by measurement**, and the record of
+  benchmark numbers we published wrong and corrected.
+* `doc/COMPARISON_MATRIX.md` — feature/performance matrix against pg_textsearch,
+  pg_search (ParadeDB), VectorChord-bm25 and built-in tsvector/GIN, marking
+  untested competitor capabilities as untested rather than absent.
+
 ## Requirements
 
 - PostgreSQL **17 and 18** are fully supported and gated in CI (build +
