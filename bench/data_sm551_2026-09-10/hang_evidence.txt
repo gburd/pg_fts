@@ -1,0 +1,30 @@
+sparsemap 5.5.1 qualification run, 2026-09-10
+EC2 r6id.4xlarge, PG 17.10, pg_fts 1.6.0 + vendored sparsemap 5.5.1
+Corpus: 2,188,038 Wikipedia articles, index on stored ftsdoc column, mwm=1GB
+
+Baseline (clean):
+  rows                 = 2,188,038
+  index year count     = 734,896  (correct)
+
+Then: DELETE FROM docs WHERE id % 7 = 0   (312,166 rows deleted)
+      VACUUM docs                          <-- HUNG
+
+Hung VACUUM after 4h39m:
+  ps state             = Rs (running, on CPU)
+  CPU time consumed    = 04:36:43  (i.e. ~100% CPU the entire time, not blocked)
+  live rows            = 1,875,872  (the delete committed)
+  nsegments            = 1
+  perf, 1K samples over 8s, --no-children:
+      99.75%  postgres  pg_fts.so  [.] __sm_get_chunk_offset
+      (no other symbol above 1%)
+
+Diagnosis: the merge/vacuum path calls sm_contains_cached (pg_fts_am.c:3404), the
+8-way MRU cache that ROADMAP item 9 documents as degenerating to an O(chunks)
+head-walk once an ascending scan runs past its eight cached chunks.  The equivalent
+fix -- the forward-resume cursor (sm_contains + sm_cursor_t) -- was applied to the
+RANKED SCAN in 1.4.1 (measured 24s -> 2.5ms at 2M docs / ~4M tombstones) but was
+NEVER applied to this path.
+
+NOT a 5.5.1 regression: `git diff v5.5.0..v5.5.1 -- sm.c` does not touch
+__sm_get_chunk_offset, __sm_add_c or __sm_map_set.  Pre-existing in 1.6.0 and
+earlier.

@@ -5,6 +5,33 @@ they are not rediscovered. Ordered roughly by value.
 
 ## Performance
 
+P0. **VACUUM never completes on a delete-heavy index. [FOUND 2026-09-10, NOT FIXED]**
+   (`bench/P0_VACUUM_HANG_2026-09-10.md`)
+   `DELETE` 312k of 2.19M rows then `VACUUM`: the backend pins a core and never
+   returns -- 4h39m of CPU with **99.75% of perf samples in
+   `__sm_get_chunk_offset`**, reproduced twice. gdb gives the path:
+   `bm25_vacuumcleanup` -> `bm25_vacuum_compact` -> `bm25_compact_to_one` ->
+   `bm25_merge_selected` -> `bm25_merge_segments_streaming` -> `sm_contains`.
+   Cause: the streaming merge tests every posting against the tombstone map with
+   `sm_contains_cached` (`pg_fts_am.c:3404`), but its docid sequence is **not
+   globally monotonic** -- it ascends within a term and resets at each of ~7.4M term
+   boundaries -- so the 8-way MRU cache misses and each lookup re-walks ~1,068
+   chunks from the head.
+   Same pathology as the ranked-scan bug fixed in 1.4.1 (24 s -> 2.5 ms); the merge
+   path never got the equivalent fix. **This is precisely what item 9's uncompleted
+   delete-heavy test would have caught.**
+   **Likely fix:** `sm_contains_many` -- the batched left-to-right sweep already used
+   at `pg_fts_am_scan.c:286`, `O(chunks + n)` and order-independent, so per-term
+   resets cost nothing. Collect a term's docids (already decoded into `post[]`), one
+   batched call, consume the flags.
+   **Two attempted fixes were WRONG and both passed the full local gate** -- a
+   per-term cursor reset (reproduces the same miss pattern) and hoisting an unrelated
+   stray cursor in `bm25_bulkdelete` (real but latent inefficiency, wrong function).
+   Details in the note so they are not retried.
+   **Blocks any release advertising robustness**, and is a plausible cause of the
+   field team's outstanding no-reclaim bloat report -- their index is 2.87M docs with
+   deletes, the same shape. Ask them whether their VACUUMs complete.
+
 0. **Parallel-build segment-count control (addressed via `pg_fts.build_mem_ceiling_mb`; in-scan compaction still open).**
    The leveled bounded-fan-in merge landed in 1.1.3 and was hardened in 1.1.4
    (content-based commit guard; extend-only merge output -- the SIGBUS fix).  A
