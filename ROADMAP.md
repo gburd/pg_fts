@@ -5,32 +5,27 @@ they are not rediscovered. Ordered roughly by value.
 
 ## Performance
 
-P0. **VACUUM never completes on a delete-heavy index. [FOUND 2026-09-10, NOT FIXED]**
-   (`bench/P0_VACUUM_HANG_2026-09-10.md`)
-   `DELETE` 312k of 2.19M rows then `VACUUM`: the backend pins a core and never
-   returns -- 4h39m of CPU with **99.75% of perf samples in
-   `__sm_get_chunk_offset`**, reproduced twice. gdb gives the path:
-   `bm25_vacuumcleanup` -> `bm25_vacuum_compact` -> `bm25_compact_to_one` ->
-   `bm25_merge_selected` -> `bm25_merge_segments_streaming` -> `sm_contains`.
-   Cause: the streaming merge tests every posting against the tombstone map with
-   `sm_contains_cached` (`pg_fts_am.c:3404`), but its docid sequence is **not
-   globally monotonic** -- it ascends within a term and resets at each of ~7.4M term
-   boundaries -- so the 8-way MRU cache misses and each lookup re-walks ~1,068
-   chunks from the head.
-   Same pathology as the ranked-scan bug fixed in 1.4.1 (24 s -> 2.5 ms); the merge
-   path never got the equivalent fix. **This is precisely what item 9's uncompleted
-   delete-heavy test would have caught.**
-   **Likely fix:** `sm_contains_many` -- the batched left-to-right sweep already used
-   at `pg_fts_am_scan.c:286`, `O(chunks + n)` and order-independent, so per-term
-   resets cost nothing. Collect a term's docids (already decoded into `post[]`), one
-   batched call, consume the flags.
-   **Two attempted fixes were WRONG and both passed the full local gate** -- a
-   per-term cursor reset (reproduces the same miss pattern) and hoisting an unrelated
-   stray cursor in `bm25_bulkdelete` (real but latent inefficiency, wrong function).
-   Details in the note so they are not retried.
-   **Blocks any release advertising robustness**, and is a plausible cause of the
-   field team's outstanding no-reclaim bloat report -- their index is 2.87M docs with
-   deletes, the same shape. Ask them whether their VACUUMs complete.
+P0. **VACUUM never completes on a delete-heavy index. [FIXED in 1.6.1, qualified at
+   scale]** (`bench/P0_VACUUM_HANG_2026-09-10.md`,
+   `bench/data_p0_2026-09-10/qualification.log`)
+   `DELETE` 312k of 2.19M rows then `VACUUM`: the backend pinned a core and never
+   returned -- 4h39m of CPU, 99.75% of samples in `__sm_get_chunk_offset`, reproduced
+   twice. **Now 393 s and completes**, results identical to sequential-scan ground
+   truth at every stage.
+   **One mistake in TWO places, and fixing the first only exposed the second:**
+   (1) `bm25_merge_segments_streaming` walks terms in sorted order so the docid
+   sequence resets at every one of millions of term boundaries -- no sparsemap
+   accelerator (MRU cache, resume cursor, or batched `sm_contains_many`) survives
+   that, each paying `O(chunks)` per term. Fixed by decoding the read-only tombstone
+   map ONCE per source into a dense bitmap and testing in O(1).
+   (2) `bm25_bulkdelete` declared its `sm_cursor_t` INSIDE an ascending walk, so it
+   reset every iteration. Fixed by hoisting it.
+   Same class as the ranked-scan pathology fixed in 1.4.1 (24 s -> 2.5 ms); these two
+   paths never got the equivalent fix.
+   **Testing lesson recorded:** the full local gate passes on the unfixed code AND on
+   two wrong fixes. `gdb` on the live backend, not `perf` callchains, is what isolated
+   it. This is exactly what item 9's never-completed delete-heavy measurement would
+   have caught.
 
 0. **Parallel-build segment-count control (addressed via `pg_fts.build_mem_ceiling_mb`; in-scan compaction still open).**
    The leveled bounded-fan-in merge landed in 1.1.3 and was hardened in 1.1.4
@@ -403,7 +398,16 @@ P0. **VACUUM never completes on a delete-heavy index. [FOUND 2026-09-10, NOT FIX
 ## Sparsemap (vendored)
 
 9. **Exercise batch/cached sparsemap APIs under a delete-heavy workload.
-   [PARTIAL 2026-09-08 -- still open]** (`bench/RESULTS_SPARSEMAP_2026-09-08.md`)
+   [MOSTLY ANSWERED 2026-09-10 -- it found a P0]**
+   The delete-heavy measurement this item asked for was finally run and it found the
+   VACUUM hang above (see P0). That is the answer to "what does the merge path do
+   under delete pressure": it did not terminate. Both offending probe patterns are
+   fixed and qualified. What remains genuinely open is only the narrow original
+   question of whether batched `sm_contains_many` beats the alternatives in the merge
+   path -- moot for now, since the merge path no longer probes the sparsemap per
+   posting at all (it uses a dense bitmap).
+   Prior partial result retained below.
+   [PARTIAL 2026-09-08]** (`bench/RESULTS_SPARSEMAP_2026-09-08.md`)
    The ranked-scan half was already settled and shipped: the 8-way MRU cache
    (`sm_contains_cached`) degenerated to an O(chunks) head-walk once an ascending
    scan ran past its eight cached chunks, so a segment with millions of tombstones

@@ -2,6 +2,100 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.6.1
+
+**P0 fix: `VACUUM` could consume CPU indefinitely and never complete on an index
+with many tombstones.** C-only, no SQL objects, no on-disk format change
+(BM25_VERSION stays 4), **no REINDEX** — `ALTER EXTENSION` is the whole upgrade.
+
+Also re-vendors sparsemap 5.4.0 → 5.5.1.
+
+### The bug
+
+On a 2,188,038-document index, deleting 312,166 rows and running `VACUUM` produced
+a backend pinned at 100% CPU that **never finished** — 4h39m of CPU consumed, with
+**99.75% of `perf` samples in `__sm_get_chunk_offset`**, reproduced twice. There was
+no error and no log line; the index simply never got cleaned.
+
+Because a `VACUUM` that never completes also never reclaims space, an index that
+appeared never to shrink after deletes is a likely symptom of this. If you have seen
+either behaviour, this release is the fix.
+
+Measured after the fix, same workload: **393 s and completes**, with results
+identical to sequential-scan ground truth.
+
+| stage | before | after |
+|---|---|---|
+| `VACUUM` with 312k tombstones | 4h39m CPU, never finished | **393 s, rc=0** |
+| further round (376k more deleted) | — | 270 s |
+| further round (375k more deleted) | — | 178 s |
+| `fts_vacuum` | — | 135 s |
+
+Correctness verified at every stage — index counts equal sequential-scan counts
+(`year` 504368/504368, 378037/378037, 251902/251902; `slovakia` 5605/5605,
+3751/3751).
+
+### Root cause: one mistake in two places
+
+Both sites probed the tombstone sparsemap in a pattern that defeats every
+acceleration structure it offers, so each membership test walked the chunk chain from
+the head. At ~1,068 chunks × millions of probes, that does not terminate in practical
+time. **Fixing the first site only exposed the second.**
+
+1. **`bm25_merge_segments_streaming`** (the merge/compaction path, reached by
+   `bm25_vacuumcleanup`). This loop walks *terms* in sorted order, and each term's
+   postings ascend from a low docid — so the docid sequence resets at every one of
+   millions of term boundaries. Neither the 8-way MRU cache used here, nor a
+   forward-resume cursor, nor batched `sm_contains_many` survives that: each pays an
+   `O(chunks)` startup *per term*.
+   **Fix:** the tombstone map is read-only for the whole merge, so decode it **once
+   per source** into a dense bitmap (`sm_next_member`, a single forward pass) and test
+   each posting in **O(1)**.
+2. **`bm25_bulkdelete`** (the per-index delete path). A cursor *was* used, but was
+   declared **inside** the walk and therefore reset every iteration, restarting each
+   lookup from the head. The enclosing walk is monotonically ascending — exactly the
+   cursor's contract — so the cursor was right in intent and defeated by its scope.
+   **Fix:** hoist the declaration out of the loop.
+
+This is the same class of pathology fixed for the *ranked scan* in 1.4.1 (24 s →
+2.5 ms); these two paths never received the equivalent treatment.
+
+### sparsemap 5.4.0 → 5.5.1
+
+Re-vendored as exactly upstream plus our one namespacing block; `vendor/sm.h` is
+byte-identical to upstream, and the public header changes only its version macros, so
+this is a drop-in.
+
+Two fixes reach code pg_fts actually executes:
+
+- **Big-endian chunk-descriptor flag reads** (5.5.0). Ten sites aliased the 64-bit
+  descriptor as `uint8_t *`, walking its 2-bit flags in reverse on big-endian and
+  breaking every counting and navigation path. `sm_contains` was unaffected because it
+  shifts the word directly — which is precisely why the bug hid behind a working
+  membership test. pg_fts is exposed through `sm_next_member`, used to iterate
+  tombstones. (Note: big-endian remains untested in our CI.)
+- **`__sm_append_data` now returns `bool` and is `warn_unused_result`** (5.5.1). In
+  5.5.0 the append inside `__sm_map_set` was **unchecked**, so a full buffer silently
+  overflowed instead of reporting `ENOSPC`. pg_fts reaches that path via
+  `sm_add_many_grow` → `__sm_add_c` → `__sm_map_set`, and our grow-and-retry loop
+  *depends* on `ENOSPC` being signalled rather than the buffer being overrun.
+
+The three headline 5.5.0 fixes (`sm_difference` RLE data loss, `sm_offset` invalid
+maps, `sm_split` ENOSPC) are in functions pg_fts does not call.
+
+### A note on how this was found, and on our test coverage
+
+The hang was found while qualifying the sparsemap bump at scale — not by the local
+test suite. `installcheck` (PG 17/18), the full TAP set, alloc/ascii guards and the
+block fuzzer all pass on the **unfixed** code, and passed on **two wrong fixes**
+before the real cause was isolated with `gdb`. None of those checks deletes a large
+fraction of a large indexed table and then vacuums.
+
+The gap was known: ROADMAP item 9's outstanding task was exactly "quantify the merge
+path under a delete-heavy workload", and that measurement had never been completed.
+Details, including the failed attempts and why each failed, are in
+`bench/P0_VACUUM_HANG_2026-09-10.md`.
+
 ## 1.6.0
 
 **Correctness release: an unverifiable phrase no longer silently answers as a

@@ -3029,7 +3029,23 @@ typedef struct MergeSource
 	uint8	   *tombbuf;			/* tombstone bitmap blob, or NULL */
 	sm_t		tomb;
 	bool		hastomb;
-	sm_cursor_cached_t tombcache;
+	/*
+	 * DENSE tombstone bitmap, decoded once from `tomb` when the source is opened.
+	 *
+	 * A merge walks terms in sorted order and each term's postings ascend from a
+	 * low docid, so the docid sequence seen by the tombstone map resets at every
+	 * term boundary.  Any sparsemap probe -- sm_contains, a resume cursor, the
+	 * 8-way MRU cache, even the batched sm_contains_many -- pays an O(chunks)
+	 * walk per term, and with millions of terms that product is what made VACUUM
+	 * non-terminating (bench/P0_VACUUM_HANG_2026-09-10.md).
+	 *
+	 * The map is READ-ONLY for the whole merge, so decode it once into a flat
+	 * bitmap and test each posting in O(1).  Cost is ndocs/8 bytes per source
+	 * (~267 KB for a 2.19M-doc segment), which is far cheaper than the walk it
+	 * replaces and is bounded by the segment we are already reading.
+	 */
+	uint8	   *tombdense;			/* 1 bit per docid, NULL if !hastomb */
+	uint64		tombdense_n;		/* docid capacity of tombdense (bits) */
 	BM25Doclens doclens;			/* v4 source doclen sidecar (empty for v3) */
 	bool		has_doclen_col;		/* v3 source: doclen inline in postings */
 } MergeSource;
@@ -3164,7 +3180,6 @@ merge_source_open(Relation index, const BM25SegMeta *seg, MergeSource *src,
 	src->valid = false;
 	src->tombbuf = NULL;
 	src->hastomb = false;
-	memset(&src->tombcache, 0, sizeof(src->tombcache));
 
 	/* v4 source: doclen lives in the segment sidecar, not the postings.  Load it
 	 * once so the merge can re-attach each posting's exact length.  A v3 source
@@ -3172,11 +3187,49 @@ merge_source_open(Relation index, const BM25SegMeta *seg, MergeSource *src,
 	src->has_doclen_col = (seg->doclenstart == InvalidBlockNumber);
 	bm25_doclens_load(index, seg->doclenstart, &src->doclens);
 
+	src->tombdense = NULL;
+	src->tombdense_n = 0;
 	if (seg->livedocs != InvalidBlockNumber && seg->livedocslen > 0)
 	{
 		src->tombbuf = bm25_read_blob(index, seg->livedocs, seg->livedocslen);
 		sm_open(&src->tomb, (uint8_t *) src->tombbuf, seg->livedocslen);
 		src->hastomb = true;
+
+		/*
+		 * Decode the sparsemap ONCE into a dense bitmap (see the field comment).
+		 * sm_next_member walks the map in a single forward pass, so building this
+		 * is O(tombstones + chunks) -- paid once per source instead of per term.
+		 */
+		{
+			/*
+			 * Size by the LARGEST TOMBSTONED DOCID, not by ndocs: a docid is
+			 * heap_block * MaxHeapTuplesPerPage + offset (bm25_tid_to_docid), i.e.
+			 * a sparse GLOBAL address, so it is unrelated to a segment's live-doc
+			 * count.  Sizing by ndocs would silently drop most tombstones.
+			 */
+			uint64		mx = sm_maximum(&src->tomb);
+			uint64		cap;
+			sm_cursor_t cur = SM_CURSOR_INIT;
+			uint64		v;
+
+			if (mx == SM_IDX_MAX)
+				cap = 0;		/* empty map: nothing to decode */
+			else
+				cap = mx + 1;
+			/* alloc-ok: (max tombstoned docid)/8 bytes, bounded by the heap we are
+			 * already streaming; ~8 MB for a 2M-row table's docid space */
+			src->tombdense = cap ? (uint8 *) MemoryContextAllocZero(src->ctx,
+																	(Size) ((cap + 7) / 8))
+				: NULL;
+			src->tombdense_n = cap;
+			for (v = sm_next_member(&src->tomb, (uint64_t) -1, &cur);
+				 v != SM_IDX_MAX;
+				 v = sm_next_member(&src->tomb, v, &cur))
+			{
+				if (v < cap)
+					src->tombdense[v >> 3] |= (uint8) (1u << (v & 7));
+			}
+		}
 	}
 
 	merge_source_load_page(src);	/* position on the first term */
@@ -3400,11 +3453,22 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 			{
 				uint32		doclen = post[k].doclen;
 
-				if (s->hastomb &&
-					sm_contains_cached(&s->tomb,
-									   bm25_tid_to_docid(&post[k].tid),
-									   &s->tombcache))
-					continue;	/* tombstoned: physically drop */
+				/*
+				 * O(1) tombstone test against the dense bitmap decoded once when
+				 * this source was opened.  Every sparsemap probe -- cursor, MRU
+				 * cache, or batched sweep -- costs O(chunks) per term because the
+				 * docid sequence restarts at each term boundary, and with millions
+				 * of terms that product made VACUUM non-terminating.  See
+				 * merge_source_open and bench/P0_VACUUM_HANG_2026-09-10.md.
+				 */
+				if (s->hastomb)
+				{
+					uint64		dv = bm25_tid_to_docid(&post[k].tid);
+
+					if (dv < s->tombdense_n &&
+						(s->tombdense[dv >> 3] & (uint8) (1u << (dv & 7))) != 0)
+						continue;	/* tombstoned: physically drop */
+				}
 				/* v4 source: post[k].doclen is 0 (no inline column); recover the
 				 * exact length from the source's sidecar so the merged segment
 				 * carries correct doclen (and re-quantizes it into its own sidecar). */
@@ -5761,6 +5825,7 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 		sm_t	   *seen;
 		sm_t	   *dead;
 		sm_cursor_t cur = SM_CURSOR_INIT;
+		sm_cursor_t ccur;		/* reset immediately before the walk below */
 		uint64		v;
 		uint32		ndead = 0;
 		BlockNumber oldlivedocs;
@@ -5827,12 +5892,23 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 			int			nnew = 0,
 						newcap = 0;
 
+			/*
+			 * ONE cursor for the whole walk.  `v` comes from sm_next_member and is
+			 * monotonically increasing -- exactly sm_contains()'s cursor contract --
+			 * so a single threaded cursor makes this O(postings + chunks).
+			 *
+			 * This was declared INSIDE the loop and so reset every iteration, making
+			 * each lookup re-walk the chunk chain from the head: O(n x chunks).  With
+			 * ~1,068 chunks and millions of postings that is the SECOND half of the
+			 * VACUUM hang -- after the merge-path fix, gdb showed the next VACUUM
+			 * pinned here instead.  See bench/P0_VACUUM_HANG_2026-09-10.md.
+			 */
+			ccur = (sm_cursor_t) SM_CURSOR_INIT;
 			for (v = sm_next_member(seen, (uint64_t) -1, &cur);
 				 v != SM_IDX_MAX;
 				 v = sm_next_member(seen, v, &cur))
 			{
 				ItemPointerData tid;
-				sm_cursor_t ccur = SM_CURSOR_INIT;
 
 				num_index_tuples++;
 				if (sm_contains(dead, v, &ccur))
