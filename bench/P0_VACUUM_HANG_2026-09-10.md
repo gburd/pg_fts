@@ -230,3 +230,37 @@ This is a plausible cause of the outstanding
 their index is 2.87M docs with deletes, the same shape as this reproduction. **Worth
 telling them explicitly that this is fixed and asking whether their VACUUMs were
 completing.**
+
+
+---
+
+# Test coverage added, and what it does NOT cover (2026-09-11)
+
+`t/010_vacuum_delete_heavy.pl` now exercises the path that shipped this bug:
+delete a third of a 60k-doc / ~60k-term corpus, then `VACUUM`, asserting it
+**completes within a wall-clock bound** and that index counts still equal a
+sequential-scan ground truth. The bound is the assertion, because the broken code
+returned *correct* answers and simply never returned -- a count-only test passes on
+the bug.
+
+**It does not reproduce the P0, and I verified that rather than assuming it.** I
+reverted the merge fix, re-ran the TAP gate, and the test **passed on the broken
+code**. 60k docs / ~20k tombstones is too small: sparsemap allocates chunks only where
+bits exist, so the chain stays short and the O(terms x chunks) term never dominates.
+The production repro needed 2.19M docs / 312k tombstones over a ~63M docid space --
+roughly an order of magnitude longer chain -- and that is not affordable in CI (the
+index build alone was ~500 s).
+
+So the coverage gap is **narrowed, not closed**:
+
+| | before | after |
+|---|---|---|
+| any test doing delete -> tombstone -> VACUUM -> merge | **none** | t/010 |
+| catches wrong counts after vacuuming a tombstoned index | no | yes |
+| catches a catastrophic (orders-of-magnitude) slowdown | no | yes |
+| catches the specific ~1,000x quadratic at CI scale | no | **still no** |
+
+Closing that last row needs a periodic scale run outside CI -- the reproduction in this
+note, on a real corpus. Worth doing before any future release that touches the
+tombstone or merge path, since the local gate demonstrably passes on both the bug and
+on two wrong fixes.
