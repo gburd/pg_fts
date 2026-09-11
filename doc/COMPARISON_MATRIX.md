@@ -123,14 +123,16 @@ need a Rust toolchain, and pg_search additionally needs OpenBLAS and pgvector.
 Three dimensions normally used to judge a BM25 access method are **absent**, and their
 absence is not evidence of parity (`bench/COVERAGE_AUDIT_2026-09-10.md`):
 
-- **Concurrent throughput (QPS).** Every latency figure here is **single-client**. An
-  under-load comparison at 1/8/16/32 clients exists for all three rivals
-  (`bench/data_soak_bench/`) and shows they behave very differently -- pg_textsearch
-  and pg_search scale to ~8,500 and ~7,000 tps while vchord's throughput *collapses*
-  (1,260 -> 1,160 tps from 8 to 32 clients) -- but **pg_fts's own arm is a truncated
-  JSON file with no under-load data at all**, and its latency figures are 1.5.0-era
-  and obsolete. We do not know which pattern we follow. This is the most important
-  missing number in this document.
+- **Concurrent throughput (QPS) — now measured for pg_fts.** Every *latency* figure in
+  this document is single-client, but the scaling question is answered
+  (`bench/RESULTS_C1_UNDERLOAD_2026-09-11.md`): **pg_fts scales 10.7x from 1 to 32
+  clients** on rare-term ranked (9.9x on common), with throughput still rising at 32
+  and latency flat from 1 to 8. That is the healthy shape — vchord by contrast
+  *collapses* (2.6x, then 1,322 -> 1,161 tps from 8 to 32 clients). `count(*)` holds
+  **2,922 tps at 32 clients** on a 735k-match term against pg_search's 54 tps.
+  What is still missing is a **like-for-like cross-engine re-run on current versions
+  with one documented query form**: the existing cross-engine table is from Aug 27 and
+  its harness is lost, so absolute tps should not be compared across the two runs.
 - **Ingest / update throughput.** We measure bulk build only. Sustained INSERT rows/s,
   DELETE/UPDATE cost, and how latency degrades as the pending list grows between
   merges are unmeasured for every engine.

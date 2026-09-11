@@ -11,8 +11,11 @@ Comparators: `pg_textsearch` (Timescale), `pg_search` (ParadeDB/Tantivy),
 
 ---
 
-## Summary: no, we are not competitive "on all dimensions" — because three of them
-## are unmeasured, not because we lose them
+## Summary: two axes remain unmeasured (was three; concurrency is now answered)
+
+**Update 2026-09-11:** concurrency is measured and it is a *win* on shape — pg_fts
+scales 10.7x to 32 clients where vchord collapses. C2 (ingest) and C3 (quality) remain
+unmeasured.
 
 | dimension | evidence vs all rivals? | where we stand |
 |---|---|---|
@@ -22,7 +25,7 @@ Comparators: `pg_textsearch` (Timescale), `pg_search` (ParadeDB/Tantivy),
 | Exact `count(*)` | **Yes** | **best**, and two rivals cannot do it at all |
 | Match-count correctness | **Yes** | correct English stemming; pg_search is 33% low |
 | Query-language breadth | **Yes** | **widest by a large margin** |
-| **Concurrent throughput (QPS)** | **NO — our arm's data is corrupt** | see below |
+| **Concurrent throughput (QPS)** | **YES for pg_fts (2026-09-11); cross-engine re-run pending** | **scales 10.7x to 32 clients, no cliff** |
 | **Ingest / update throughput** | **NO — never measured for anyone** | unknown |
 | **Ranking quality (NDCG)** | **NO — never measured vs rivals** | unknown |
 | Crash/MVCC/replication safety | ours only | ours tested hard; rivals **untested by us** |
@@ -30,7 +33,23 @@ Comparators: `pg_textsearch` (Timescale), `pg_search` (ParadeDB/Tantivy),
 
 ---
 
-## Gap 1: concurrent throughput — data exists for rivals, ours is truncated
+## Gap 1: concurrent throughput — ANSWERED 2026-09-11, and my claim below was WRONG
+
+**Correction.** This section said pg_fts's under-load arm was missing. It was not:
+`bench/data_5way/ftsx_underload.txt` has had our numbers since Aug 27, showing
+**10.0x scaling from 1 to 32 clients** — the best factor in the field. The corrupt file
+(`bench/data_soak_bench/bench_ftsx_sidecar.json`) is from a *different* run, and I
+conflated the two.
+
+Re-measured on v1.6.1 (`bench/RESULTS_C1_UNDERLOAD_2026-09-11.md`): **10.7x on rare
+ranked, 9.9x on common ranked**, throughput still rising at 32 clients, latency flat
+from 1 to 8 clients. **pg_fts does not have vchord's collapse.** The scaling risk this
+section raised is closed; what remains open is a like-for-like cross-engine re-run on
+current versions with one documented query form.
+
+Original text follows for the record.
+
+## Gap 1 (original, partly wrong): concurrent throughput
 
 `bench/data_soak_bench/` contains a genuine under-load comparison at 1/8/16/32
 clients with p95/p99, and **three of four engines have it**:

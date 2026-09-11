@@ -27,22 +27,25 @@ P0. **VACUUM never completes on a delete-heavy index. [FIXED in 1.6.1, qualified
    it. This is exactly what item 9's never-completed delete-heavy measurement would
    have caught.
 
-C1. **Concurrent throughput comparison, all four engines. [NEW -- highest-value open
-   item]** (`bench/COVERAGE_AUDIT_2026-09-10.md`)
-   Every competitive number we publish is **single-client latency**. An under-load
-   comparison at 1/8/16/32 clients already exists for all three rivals in
-   `bench/data_soak_bench/`, and they diverge sharply: pg_textsearch scales to ~8,500
-   tps and pg_search to ~7,000, while **vchord's throughput collapses** (1,260 ->
-   1,160 tps from 8 to 32 clients, latency 6.35 -> 27.58 ms).
-   **pg_fts's own arm is missing**: `bench_ftsx_sidecar.json` is truncated mid-JSON
-   (940 bytes, no closing brace) with a `latency` block only and **no `under_load`
-   key**, and its latency figures are 1.5.0-era (rare 14.83 ms vs v1.6.1's 5.89 ms) so
-   they cannot be reused.
-   Why this is first: a throughput cliff would matter far more than the 2x
-   single-client common-term gap we have been treating as the top perf item, and we
-   cannot currently rule one out in either direction.  Cheap -- `bench/soak.sh`
-   already produced the rival data; re-run our arm on 1.6.1 and fix the JSON writer so
-   it cannot truncate silently.
+C1. **Concurrent throughput. [pg_fts MEASURED 2026-09-11; cross-engine re-run open]**
+   (`bench/RESULTS_C1_UNDERLOAD_2026-09-11.md`)
+   **pg_fts SCALES: 1 -> 32 clients gives 10.7x on rare ranked and 9.9x on common
+   ranked, throughput still rising at 32 clients, latency FLAT from 1 to 8 clients.**
+   No cliff. The shape matches pg_search (the best-scaling rival); vchord by contrast
+   collapses (2.6x then falls, 1,322 -> 1,161 tps from 8 to 32).
+   `count(*)` at 32 clients holds **2,922 tps** on a 735k-match term vs pg_search's
+   54 tps in the Aug-27 run -- a ~50x advantage, and two rivals cannot do it at all.
+   **Correction to my own audit:** I recorded our arm as "missing". It was not --
+   `bench/data_5way/ftsx_underload.txt` has had it since Aug 27 (10.0x scaling). The
+   corrupt file was a different run's; I conflated them.
+   **Still open:** a like-for-like cross-engine re-run on current versions with ONE
+   documented query form. The Aug-27 cross-engine table is internally consistent but
+   its harness is lost, and its rival under-load @1 latencies are 3-4x faster than the
+   same run's single-client medians, so it used a lighter query than mine.
+   New harness `bench/underload.sh` builds the JSON in memory, writes once, and
+   **validates it parses** before reporting success -- so the truncation that lost the
+   earlier arm cannot recur silently. Validated: its `count_common` @1 reads 2.204 ms
+   against the single-client bench's 2.20 ms.
 
 C2. **Ingest / update throughput. [NEW -- unmeasured for every engine]**
    We measure bulk build only (381 s for 2.19M docs).  Unmeasured: sustained INSERT
