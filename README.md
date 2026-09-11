@@ -335,12 +335,18 @@ Query execution
     > not judge the index's real size before you do. Measurements in
     > `bench/DIAG_WORKER_FRAGMENTATION.md`.
     >
-    > **The same effect makes peak disk during a *merge* much larger than the final
-    > index.** Measured on a 1M-document index absorbing 200k pending rows: the file
-    > reached **36 GB** right after `fts_merge`, then `fts_vacuum` brought it to
-    > **756 MB** — a **49x** transient, and the ratio is not predictable from index
-    > size. Provision headroom for merges; do not size a volume from the steady-state
-    > index alone (`bench/RESULTS_C2_INGEST_2026-09-11.md`).  Compaction rewrites the live data before freeing
+    > **Incremental INSERTs can grow the file far beyond the settled index size, if your
+    > documents are large.** A pending document is stored **verbatim**, and one that does
+    > not fit in an 8 KB page is indexed immediately as its own **one-document segment**.
+    > On a Wikipedia corpus 33% of documents exceed that threshold, and inserting 200k
+    > rows into a settled 792 MB / 1M-doc index grew the file to **32 GB before any merge
+    > ran**; `fts_merge` added only ~7% on top, and `fts_vacuum` then returned it to
+    > 971 MB. Measured at two scales (`bench/RESULTS_C2_INGEST_2026-09-11.md`).
+    >
+    > This is corpus-dependent, not a general rule: it scales with the *fraction of your
+    > documents larger than a page*, so a corpus of short documents will not see it.
+    > If you bulk-INSERT large documents, merge and `fts_vacuum` periodically rather than
+    > accumulating, and provision headroom accordingly.  Compaction rewrites the live data before freeing
     the old copy (write-before-free, for crash safety), so it transiently needs
     free disk space of roughly the live index size -- like VACUUM FULL / CLUSTER
     / pg_repack.  It is interruptible: pg_cancel_backend and statement_timeout

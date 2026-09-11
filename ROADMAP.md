@@ -65,11 +65,18 @@ C2. **Ingest / update throughput. [pg_fts MEASURED 2026-09-11; cross-engine open
    The bounded plateau is the reassuring half; the steady ingest decay is the real cost.
    Maintenance: `fts_merge` 292.6 s to absorb 200k rows; `DELETE` 300k + `VACUUM` 242 s
    (independent confirmation the 1.6.1 P0 fix holds at a second scale/corpus).
-   **ACTIONABLE FINDING -- peak transient disk during merge is 49x the final size**:
-   36 GB immediately after `fts_merge`, 756 MB after `fts_vacuum`. Same extend-only
-   residue as 3a but a far worse ratio than the 3.2x seen post-build, and nothing warned
-   users. Now documented in README + `doc/pg_fts.sgml`: provision merge headroom, do not
-   size a volume from the steady-state index.
+   **ACTIONABLE FINDING, corrected same day -- the transient is INSERTs, NOT the merge.**
+   Reproduced at two scales: the file reaches 7,716 MB (250k+50k) and 32,378 MB
+   (1M+200k) **before any merge runs**; `fts_merge` then adds only ~7%. Cause:
+   `bm25_insert` stores a pending doc VERBATIM and one that does not fit a page becomes
+   its own ONE-DOCUMENT SEGMENT (`pg_fts_am.c:5347-5352`). On this corpus the average
+   ftsdoc is 8,861 B against an 8,192 B page and **32.7% of docs exceed it**, which also
+   explains nsegments 1->8 during ingest. Verbatim storage explains only ~1.8 of 30.8 GB;
+   the one-doc-segment path is the other ~19x.
+   **Corpus-dependent, not general** -- it scales with the fraction of docs larger than a
+   page. README + `doc/pg_fts.sgml` now say so; my first version attributed it to merge
+   and stated a bare 49x, which would have sent operators to instrument the wrong
+   operation. I had flagged it as needing a second scale and published it anyway.
    **Two harness defects caught because the first run was physically impossible**
    (6.5M rows/s): `psql -v` does not expand a bare `:var` inside `-c`, so every INSERT
    was invalid and inserted nothing -- now asserted by a per-batch row-count check that
@@ -174,40 +181,23 @@ C3. **Ranking quality (NDCG / recall) vs rivals. [NEW -- never compared]**
    `bm25_truncate_free_tail` reclaims only a contiguous tail (`:4446-4449`), so
    buried freed pages wait for compaction. Nothing to fix; documented instead.
 
-3b. **`bm25_merge_all` runs the parallel pass AND THEN the serial collapse. [NEW,
-   small, worth doing]**
-   Verified at `pg_fts_am.c:4191`: the `if (try_parallel ...)` block calls
-   `bm25_merge_all_parallel()`, sets `didwork`, and **falls straight through** to the
-   serial collapse loop -- there is no early return. So a parallel `fts_merge`
-   performs the parallel pass *plus* the same full serial collapse a serial merge
-   does, which is a sufficient single explanation for the measured 1.45x wall-clock
-   and the extra residue.
-   **Sharper diagnosis recovered from the empirical arm's transcript
-   (`bench/DIAG_WORKER_FRAGMENTATION.md`):** the extra cost is not one duplicate pass
-   but **O(nsegments/FANOUT) passes**. A parallel merge logs
-   `merging 8 of 128 segments` -> `8 of 121` -> `8 of 114` ... grinding down eight at
-   a time, where a serial merge logs a single `merging 8 of 8 segments (2,188,038
-   live docs) into one`.
-   `BM25_MERGE_FANOUT = 8` (`:3703`) is the leveled LSM policy and is working exactly
-   as designed -- the comment at `:3691-3702` says bounded fan-in is deliberate, to
-   avoid one giant single-backend pass. The defect is its **input**: the parallel
-   pass leaves ~128 segments, so the policy needs ~18 sequential extend-only passes
-   to collapse them.
-   That also explains why W=1 costs the same as W=3 (pass count follows segment
-   count, not worker count) and why parallel leaves more freed pages (484,323 vs
-   390,483).
-   So the fix is not just "return early after the parallel pass" -- it is that the
-   parallel pass should not hand the collapse loop a 128-segment index. **Next step:
-   measure `nsegments` immediately after `bm25_merge_all_parallel` returns** to
-   confirm, before writing any code. This will still not make parallel merge beat
-   serial (the final combine is single-backend by construction, `:4665-4672`), so the
-   realistic goal is removing a pathology, not a win.
-   Also noted: at `max_parallel_maintenance_workers = 8` the workers register, start
-   and exit within ~2 ms. That is the gate `ParallelWorkerNumber + 1 < ngroups`
-   (`:3987`) with `ngroups = min(request+1, nsrc)` (`:4077-4080`) working as designed
-   -- the DEBUG1 log shows every run doing a single "merging 8 of 8 segments into
-   one" with no group split at all. Not a defect; just launch/teardown paid for zero
-   work.
+3b. **`bm25_merge_all` runs the parallel pass AND THEN the serial collapse.
+   [PREMISE NARROWED 2026-09-11 -- likely not worth doing]**
+   Still true as code: `pg_fts_am.c:4191` calls `bm25_merge_all_parallel()` and on
+   success falls THROUGH to the serial collapse loop with no early return, so a parallel
+   `fts_merge` does the parallel pass plus the full serial collapse.
+   **But the cost model I attached to it is wrong.** I had generalised from production
+   logs (`merging 8 of 128` -> `8 of 121` -> ...) to "a merge does
+   O(nsegments/FANOUT) extend-only passes". Measured directly at two scales
+   (`bench/RESULTS_C2_INGEST_2026-09-11.md`): **passes=2**, each logging
+   `merging 1 of 1 segments`. The ~18-pass reading applied to one specific state -- a
+   128-segment index left by a parallel build -- not to merges in general.
+   So the remaining value is only "stop doing the work twice on an index that actually
+   has many segments", which by definition means a parallel build, which is itself
+   documented as a size regression not to use. **Recommend closing unless a field report
+   shows a many-segment index being merged in production.** If picked up, first measure
+   `nsegments` immediately after `bm25_merge_all_parallel` returns -- that is the number
+   the whole premise rests on and it has never been captured.
 
 4. **Index size and ranked latency — the competitive gap (see
    `bench/RESULTS_VS_CURRENT.md` for the current 0.3.5 3-way; `bench/NOTE_SIZE_AND_SPEED.md`

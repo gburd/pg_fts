@@ -104,3 +104,57 @@ before committing to a long run.
 ## Data
 
 `bench/data_c2_2026-09-11/pg_fts.json` and `c2_run.log`. Harness `bench/ingest.sh`.
+
+---
+
+# CORRECTION (2026-09-11, same day): the 49x transient is INSERTs, not the merge
+
+I flagged the 49× figure above as needing a second scale before going into user docs —
+then put it in README and the SGML reference anyway, attributed to `fts_merge`. Both the
+attribution and the framing were wrong. Verified at two scales
+(`bench/data_m3_2026-09-11/two_scale_merge.log`):
+
+| scale | settled | **after INSERTs, before any merge** | after merge | after `fts_vacuum` |
+|---|---|---|---|---|
+| 250k docs + 50k inserts | 272 MB | **7,716 MB (28.4×)** | 8,431 MB | 319 MB |
+| 1M docs + 200k inserts | 792 MB | **32,378 MB (40.9×)** | 34,621 MB | 971 MB |
+
+**The file is already 32 GB before `fts_merge` runs.** Merge adds only 715 MB (small) and
+2,243 MB (large) — about 7%. So the transient is caused by **incremental INSERTs**, and
+attributing it to the merge would send an operator to instrument the wrong operation.
+
+## Mechanism, confirmed in the code and the data
+
+`bm25_insert` stores a pending document **verbatim**, and if it does not fit a page
+(`need > BLCKSZ - headers`) it takes `bm25_insert_oversized_as_segment` — indexing it
+immediately as **its own one-document segment** (`pg_fts_am.c:5347-5352`).
+
+On this corpus the average `ftsdoc` is **8,861 bytes** against an 8,192-byte page, and
+**32.7% of documents exceed the threshold**. So a third of every insert batch becomes a
+one-doc segment. That also explains `nsegments` going 1 → 8 during ingest, which I had
+noted without explaining.
+
+Verbatim storage alone accounts for only ~1.8 GB of the 30.8 GB growth; the one-doc
+segment path accounts for the remaining ~19×.
+
+**This is corpus-dependent, not a general property.** It scales with the fraction of
+documents larger than a page — a corpus of short documents will not show it at all. The
+user-facing docs now say that explicitly rather than stating a bare 49× as if it were
+universal.
+
+## Also disproven here: the ROADMAP 3b multi-pass hypothesis
+
+3b proposed that a merge does `O(nsegments/FANOUT)` extend-only passes, based on
+production logs showing `merging 8 of 128` → `8 of 121` → … That is not what happens on
+these runs: **`passes=2`** at both scales, each logging `merging 1 of 1 segments`.
+
+So the "~18 sequential passes" reading applied to a specific state (a 128-segment index
+from a parallel build), not to merges generally. 3b's premise needs re-scoping to that
+state before any code is written — and since parallel merge is already documented as a
+regression not to use, its practical value drops further.
+
+## What I should have done
+
+Held the 49× out of user docs until it was reproduced, exactly as my own caveat said. The
+correction cost one extra EC2 run; publishing it unverified would have cost an operator
+chasing merge disk usage that merges do not cause.

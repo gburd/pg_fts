@@ -616,19 +616,23 @@ SELECT * FROM messages
   </para>
 
   <para>
-   <emphasis role="bold">Peak transient disk during a merge can far exceed the final
-   index size.</emphasis>  Merge output is allocated by extending the file (a deliberate
-   safety property &mdash; it stops a committed merge's freed pages being recycled while
-   in-flight reads still thread through them), and truncation can only return a
-   <emphasis>contiguous</emphasis> free tail, so freed pages beneath the new output
-   survive until <function>fts_vacuum</function>'s compaction pass relocates live data.
-   Measured on a 1,000,000-document index after absorbing 200,000 pending rows: the file
-   reached <emphasis>36&nbsp;GB</emphasis> immediately after
-   <function>fts_merge</function>, and <function>fts_vacuum</function> then reduced it to
-   <emphasis>756&nbsp;MB</emphasis> &mdash; a 49&#215; transient.  The ratio is not
-   predictable from the index size, so <emphasis role="bold">provision headroom for a
-   merge and run <function>fts_vacuum</function> afterwards</emphasis>; do not size a
-   volume from the steady-state index alone.  See
+   <emphasis role="bold">Incremental inserts of LARGE documents can grow the index file
+   far beyond its settled size.</emphasis>  A pending document is stored verbatim, and
+   one that does not fit in an 8&nbsp;kB page is indexed immediately as its own
+   one-document segment.  Measured on a Wikipedia corpus, where 33% of documents exceed
+   that threshold: inserting 200,000 rows into a settled 792&nbsp;MB / 1,000,000-document
+   index grew the file to <emphasis>32&nbsp;GB before any merge ran</emphasis>.
+   <function>fts_merge</function> then added only about 7% more, and
+   <function>fts_vacuum</function> returned the file to 971&nbsp;MB.  Reproduced at a
+   second scale (250,000 docs + 50,000 inserts: 272&nbsp;MB &rarr; 7.7&nbsp;GB &rarr;
+   319&nbsp;MB).
+  </para>
+  <para>
+   This is <emphasis>corpus-dependent</emphasis>, not a general property: the effect
+   scales with the fraction of documents larger than a page, so a corpus of short
+   documents will not show it.  If you bulk-insert large documents, run
+   <function>fts_merge</function> and <function>fts_vacuum</function> periodically rather
+   than accumulating pending data, and provision disk headroom accordingly.  See
    <filename>bench/RESULTS_C2_INGEST_2026-09-11.md</filename>.
   </para>
 
