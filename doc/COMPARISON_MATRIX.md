@@ -118,6 +118,27 @@ need a Rust toolchain, and pg_search additionally needs OpenBLAS and pgvector.
 - **tsvector/GIN** — already in PostgreSQL, mature tooling, but no BM25 and no
   index-native top-k.
 
+### What this matrix does NOT cover
+
+Three dimensions normally used to judge a BM25 access method are **absent**, and their
+absence is not evidence of parity (`bench/COVERAGE_AUDIT_2026-09-10.md`):
+
+- **Concurrent throughput (QPS).** Every latency figure here is **single-client**. An
+  under-load comparison at 1/8/16/32 clients exists for all three rivals
+  (`bench/data_soak_bench/`) and shows they behave very differently -- pg_textsearch
+  and pg_search scale to ~8,500 and ~7,000 tps while vchord's throughput *collapses*
+  (1,260 -> 1,160 tps from 8 to 32 clients) -- but **pg_fts's own arm is a truncated
+  JSON file with no under-load data at all**, and its latency figures are 1.5.0-era
+  and obsolete. We do not know which pattern we follow. This is the most important
+  missing number in this document.
+- **Ingest / update throughput.** We measure bulk build only. Sustained INSERT rows/s,
+  DELETE/UPDATE cost, and how latency degrades as the pending list grows between
+  merges are unmeasured for every engine.
+- **Ranking quality (NDCG / recall vs a reference).** We verify our own exactness
+  (top-k parity against an exact sort, gated per release) but have never compared
+  *relevance ordering* against a rival. This matters here because pg_search does not
+  stem, so it answers a different query.
+
 ### Caveats on this matrix
 Every *n/t* is a real gap in our knowledge, not an implied "No". We benchmarked the
 competitors for latency, size and match counts on one corpus; we did **not** audit

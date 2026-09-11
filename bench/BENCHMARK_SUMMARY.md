@@ -269,6 +269,17 @@ Kept because the corrections are part of the result.
 
 ---
 
+## 7a. Coverage gaps — what this document does not measure
+
+See `bench/COVERAGE_AUDIT_2026-09-10.md`. In short: everything above is
+**single-client latency, size and correctness**. Three standard axes are unmeasured —
+**concurrent throughput** (rival data exists, our own arm's file is truncated and its
+latency is 1.5.0-era), **ingest/update throughput**, and **ranking quality vs rivals**.
+On the throughput axis the rivals differ sharply from each other (vchord's tps
+collapses under concurrency where pg_textsearch and pg_search scale), so this is not a
+formality — it could move the overall story either way, and a 2x single-client gap
+would matter far less than a throughput cliff.
+
 ## 8. Honest summary
 
 **Strengths.** Smallest index in the field (1,421 MB, 25% under next best). Fastest

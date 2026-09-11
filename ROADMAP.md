@@ -27,6 +27,39 @@ P0. **VACUUM never completes on a delete-heavy index. [FIXED in 1.6.1, qualified
    it. This is exactly what item 9's never-completed delete-heavy measurement would
    have caught.
 
+C1. **Concurrent throughput comparison, all four engines. [NEW -- highest-value open
+   item]** (`bench/COVERAGE_AUDIT_2026-09-10.md`)
+   Every competitive number we publish is **single-client latency**. An under-load
+   comparison at 1/8/16/32 clients already exists for all three rivals in
+   `bench/data_soak_bench/`, and they diverge sharply: pg_textsearch scales to ~8,500
+   tps and pg_search to ~7,000, while **vchord's throughput collapses** (1,260 ->
+   1,160 tps from 8 to 32 clients, latency 6.35 -> 27.58 ms).
+   **pg_fts's own arm is missing**: `bench_ftsx_sidecar.json` is truncated mid-JSON
+   (940 bytes, no closing brace) with a `latency` block only and **no `under_load`
+   key**, and its latency figures are 1.5.0-era (rare 14.83 ms vs v1.6.1's 5.89 ms) so
+   they cannot be reused.
+   Why this is first: a throughput cliff would matter far more than the 2x
+   single-client common-term gap we have been treating as the top perf item, and we
+   cannot currently rule one out in either direction.  Cheap -- `bench/soak.sh`
+   already produced the rival data; re-run our arm on 1.6.1 and fix the JSON writer so
+   it cannot truncate silently.
+
+C2. **Ingest / update throughput. [NEW -- unmeasured for every engine]**
+   We measure bulk build only (381 s for 2.19M docs).  Unmeasured: sustained INSERT
+   rows/s into a live index (the pending-list design should be an advantage -- untested
+   against rivals), DELETE/UPDATE cost, and the query-latency-vs-pending-list curve
+   between merges, which is what a user actually hits in production.
+   Newly meaningful: until 1.6.1 fixed the P0, the delete/maintenance path did not
+   terminate on a delete-heavy index, so this could not be measured at all.
+
+C3. **Ranking quality (NDCG / recall) vs rivals. [NEW -- never compared]**
+   `bench/ndcg.py` and `NOTE_RANKED_RECALL.md` validate OUR exactness (top-k parity
+   against an exact `fts_bm25` sort, gated per release) but no relevance comparison
+   against pg_search / vchord / pg_textsearch was ever run.  This matters more than
+   usual because **pg_search does not stem** -- 495,580 hits for `year` where the
+   correct English answer is 734,896 -- so latency alone is partly
+   apples-to-oranges and quality is what would quantify it.
+
 0. **Parallel-build segment-count control (addressed via `pg_fts.build_mem_ceiling_mb`; in-scan compaction still open).**
    The leveled bounded-fan-in merge landed in 1.1.3 and was hardened in 1.1.4
    (content-based commit guard; extend-only merge output -- the SIGBUS fix).  A
