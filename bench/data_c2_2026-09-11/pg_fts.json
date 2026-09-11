@@ -1,0 +1,9 @@
+{
+  "engine": "pg_fts",
+  "batch_rows": 25000,
+  "batches": 8,
+  "insert_rows_per_sec": "1:370.7rps 2:290.5rps 3:276.7rps 4:263.4rps 5:250.1rps 6:234.6rps 7:208.2rps 8:217.0rps",
+  "ranked_latency_after_batch": "1:7.6ms 2:7.9ms 3:8.1ms 4:8.5ms 5:8.7ms 6:8.7ms 7:8.7ms 8:8.8ms",
+  "merge_secs": "292.605533463",
+  "ranked_latency_post_merge_ms": "7.8"
+}

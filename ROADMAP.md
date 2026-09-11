@@ -56,13 +56,29 @@ C1. **Concurrent throughput. [DONE 2026-09-11 -- cross-engine, all four]**
    skipping pg_search's preload and producing all zeros. `underload.sh` now ABANDONS a
    band that yields no tps rather than recording 0, which would read as a result.
 
-C2. **Ingest / update throughput. [NEW -- unmeasured for every engine]**
-   We measure bulk build only (381 s for 2.19M docs).  Unmeasured: sustained INSERT
-   rows/s into a live index (the pending-list design should be an advantage -- untested
-   against rivals), DELETE/UPDATE cost, and the query-latency-vs-pending-list curve
-   between merges, which is what a user actually hits in production.
-   Newly meaningful: until 1.6.1 fixed the P0, the delete/maintenance path did not
-   terminate on a delete-heavy index, so this could not be measured at all.
+C2. **Ingest / update throughput. [pg_fts MEASURED 2026-09-11; cross-engine open]**
+   (`bench/RESULTS_C2_INGEST_2026-09-11.md`, data in `bench/data_c2_2026-09-11/`)
+   Ingesting 200k rows into a settled 1M-doc index, `autovacuum=off`:
+   **ingest decays 41%** (371 -> 217 rows/s) and **ranked latency grows 16%**
+   (7.6 -> 8.8 ms) then PLATEAUS from batch 5; `fts_merge` restores latency to 7.8 ms
+   (pristine was 7.6), so the degradation is pending-list occupancy, not permanent.
+   The bounded plateau is the reassuring half; the steady ingest decay is the real cost.
+   Maintenance: `fts_merge` 292.6 s to absorb 200k rows; `DELETE` 300k + `VACUUM` 242 s
+   (independent confirmation the 1.6.1 P0 fix holds at a second scale/corpus).
+   **ACTIONABLE FINDING -- peak transient disk during merge is 49x the final size**:
+   36 GB immediately after `fts_merge`, 756 MB after `fts_vacuum`. Same extend-only
+   residue as 3a but a far worse ratio than the 3.2x seen post-build, and nothing warned
+   users. Now documented in README + `doc/pg_fts.sgml`: provision merge headroom, do not
+   size a volume from the steady-state index.
+   **Two harness defects caught because the first run was physically impossible**
+   (6.5M rows/s): `psql -v` does not expand a bare `:var` inside `-c`, so every INSERT
+   was invalid and inserted nothing -- now asserted by a per-batch row-count check that
+   aborts; and wrapping `psql` in `/usr/bin/time` folded ~10 ms of startup into each
+   sample, producing a flat fake "10.0 ms" -- now measured server-side via `\timing`.
+   **Still open:** cross-engine comparison (the rivals' ingest paths differ
+   fundamentally, so it needs per-engine forms chosen as carefully as C1's), a longer run
+   to find where ingest decay levels off, and reproducing the 49x transient at a second
+   scale before stating it as a general rule.
 
 C3. **Ranking quality (NDCG / recall) vs rivals. [NEW -- never compared]**
    `bench/ndcg.py` and `NOTE_RANKED_RECALL.md` validate OUR exactness (top-k parity

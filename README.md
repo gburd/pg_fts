@@ -333,7 +333,14 @@ Query execution
     >
     > **Practical rule: run `fts_vacuum` once after a large initial build**, and do
     > not judge the index's real size before you do. Measurements in
-    > `bench/DIAG_WORKER_FRAGMENTATION.md`.  Compaction rewrites the live data before freeing
+    > `bench/DIAG_WORKER_FRAGMENTATION.md`.
+    >
+    > **The same effect makes peak disk during a *merge* much larger than the final
+    > index.** Measured on a 1M-document index absorbing 200k pending rows: the file
+    > reached **36 GB** right after `fts_merge`, then `fts_vacuum` brought it to
+    > **756 MB** — a **49x** transient, and the ratio is not predictable from index
+    > size. Provision headroom for merges; do not size a volume from the steady-state
+    > index alone (`bench/RESULTS_C2_INGEST_2026-09-11.md`).  Compaction rewrites the live data before freeing
     the old copy (write-before-free, for crash safety), so it transiently needs
     free disk space of roughly the live index size -- like VACUUM FULL / CLUSTER
     / pg_repack.  It is interruptible: pg_cancel_backend and statement_timeout
