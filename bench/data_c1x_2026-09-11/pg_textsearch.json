@@ -1,0 +1,20 @@
+{
+  "engine": "pg_textsearch",
+  "load_secs": 30,
+  "clients": "1 8 16 32",
+  "under_load": {
+    "rare_k10": "1:1188.830394tps/0.841ms 8:8398.860293tps/0.953ms 16:8451.362115tps/1.893ms 32:8348.594766tps/3.833ms",
+    "common_k10": "1:92.504774tps/10.810ms 8:694.721156tps/11.515ms 16:696.165897tps/22.983ms 32:682.866408tps/46.861ms"
+  },
+  "instance": "r6id.4xlarge",
+  "pg_version": "17.10",
+  "git_commit": "3c77689",
+  "extension_version": "1.5.0-dev",
+  "corpus_rows": 2188038,
+  "create_index": "CREATE INDEX docs_pgts ON docs USING bm25(content) WITH (text_config='english')",
+  "build_secs": 510,
+  "index_mb": 1886.7,
+  "count_common": "SKIPPED: pg_textsearch exposes no count/df function",
+  "scaling_1_to_32": { "rare_k10": 7.02, "common_k10": 7.38 },
+  "shape": "rises 1->8, plateaus 8->32 (both bands)"
+}

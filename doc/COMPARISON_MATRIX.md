@@ -123,16 +123,19 @@ need a Rust toolchain, and pg_search additionally needs OpenBLAS and pgvector.
 Three dimensions normally used to judge a BM25 access method are **absent**, and their
 absence is not evidence of parity (`bench/COVERAGE_AUDIT_2026-09-10.md`):
 
-- **Concurrent throughput (QPS) — now measured for pg_fts.** Every *latency* figure in
-  this document is single-client, but the scaling question is answered
-  (`bench/RESULTS_C1_UNDERLOAD_2026-09-11.md`): **pg_fts scales 10.7x from 1 to 32
-  clients** on rare-term ranked (9.9x on common), with throughput still rising at 32
-  and latency flat from 1 to 8. That is the healthy shape — vchord by contrast
-  *collapses* (2.6x, then 1,322 -> 1,161 tps from 8 to 32 clients). `count(*)` holds
-  **2,922 tps at 32 clients** on a 735k-match term against pg_search's 54 tps.
-  What is still missing is a **like-for-like cross-engine re-run on current versions
-  with one documented query form**: the existing cross-engine table is from Aug 27 and
-  its harness is lost, so absolute tps should not be compared across the two runs.
+- **Concurrent throughput (QPS) — MEASURED cross-engine 2026-09-11**
+  (`bench/RESULTS_C1X_CROSSENGINE_2026-09-11.md`), all four engines, one documented
+  query form, same instance type. Headlines:
+  **No engine collapses** — all four rise to 8 clients then plateau, host-CPU-bound on
+  16 vCPU / 8 physical cores. **pg_fts has the best scaling factor** (10.7x rare /
+  10.0x common, latency flat 1→8) **and the worst absolute ranked throughput**: at 32
+  clients 1,076 tps rare (pg_textsearch 8,349) and 208 tps common (pg_search 4,298,
+  i.e. **20.7x** — the common-term gap is *worse* under load than the 17x
+  single-client figure). **`count(*)` is ours by a wide margin**: 2,923 tps / 10.9 ms at
+  32 clients vs pg_search 513 tps / 62.3 ms (**5.7x**), and pg_textsearch/vchord cannot
+  do it at all.
+  Correction recorded there: an earlier claim that vchord *collapses* was wrong — it
+  peaks at 8 clients and declines only 4.7-7.2% by 32.
 - **Ingest / update throughput.** We measure bulk build only. Sustained INSERT rows/s,
   DELETE/UPDATE cost, and how latency degrades as the pending list grows between
   merges are unmeasured for every engine.

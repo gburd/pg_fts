@@ -1,0 +1,22 @@
+{
+  "engine": "vchord",
+  "load_secs": 30,
+  "clients": "1 8 16 32",
+  "under_load": {
+    "rare_k10": "1:516.431646tps/1.936ms 8:1295.196377tps/6.177ms 16:1253.912686tps/12.760ms 32:1234.181417tps/25.928ms",
+    "common_k10": "1:248.942038tps/4.017ms 8:538.156994tps/14.866ms 16:500.799126tps/31.949ms 32:499.218281tps/64.100ms"
+  },
+  "instance": "r6id.4xlarge",
+  "pg_version": "17.10",
+  "git_commit": "14fc2a3",
+  "pgrx": "0.17.0",
+  "corpus_rows": 2188038,
+  "create_index": "CREATE INDEX docs_vc ON docs USING bm25(tv bm25_ops)",
+  "build_secs": 56,
+  "index_mb": 2902.4,
+  "count_common": "SKIPPED: vchord is ranking-only, bm25_ops exposes only <&>",
+  "scaling_1_to_32": { "rare_k10": 2.39, "common_k10": 2.01 },
+  "shape": "peaks at 8 clients, then -4.7% (rare) / -7.2% (common) by 32; plateau not collapse",
+  "peak_sweep_tps": { "2": 823, "4": 1107, "8": 1289, "12": 1289, "24": 1237, "48": 1230 },
+  "cpu": "49.7% at c=8 (8 physical cores busy), 99.8% at c=32 -- core-saturated at 8"
+}

@@ -27,25 +27,34 @@ P0. **VACUUM never completes on a delete-heavy index. [FIXED in 1.6.1, qualified
    it. This is exactly what item 9's never-completed delete-heavy measurement would
    have caught.
 
-C1. **Concurrent throughput. [pg_fts MEASURED 2026-09-11; cross-engine re-run open]**
-   (`bench/RESULTS_C1_UNDERLOAD_2026-09-11.md`)
-   **pg_fts SCALES: 1 -> 32 clients gives 10.7x on rare ranked and 9.9x on common
-   ranked, throughput still rising at 32 clients, latency FLAT from 1 to 8 clients.**
-   No cliff. The shape matches pg_search (the best-scaling rival); vchord by contrast
-   collapses (2.6x then falls, 1,322 -> 1,161 tps from 8 to 32).
-   `count(*)` at 32 clients holds **2,922 tps** on a 735k-match term vs pg_search's
-   54 tps in the Aug-27 run -- a ~50x advantage, and two rivals cannot do it at all.
-   **Correction to my own audit:** I recorded our arm as "missing". It was not --
-   `bench/data_5way/ftsx_underload.txt` has had it since Aug 27 (10.0x scaling). The
-   corrupt file was a different run's; I conflated them.
-   **Still open:** a like-for-like cross-engine re-run on current versions with ONE
-   documented query form. The Aug-27 cross-engine table is internally consistent but
-   its harness is lost, and its rival under-load @1 latencies are 3-4x faster than the
-   same run's single-client medians, so it used a lighter query than mine.
-   New harness `bench/underload.sh` builds the JSON in memory, writes once, and
-   **validates it parses** before reporting success -- so the truncation that lost the
-   earlier arm cannot recur silently. Validated: its `count_common` @1 reads 2.204 ms
-   against the single-client bench's 2.20 ms.
+C1. **Concurrent throughput. [DONE 2026-09-11 -- cross-engine, all four]**
+   (`bench/RESULTS_C1X_CROSSENGINE_2026-09-11.md`, data in `bench/data_c1x_2026-09-11/`)
+   Like-for-like: one documented query form per engine, same shape, same instance type
+   (r6id.4xlarge, 16 vCPU / 8 physical cores), pgbench 1/8/16/32 clients, 30 s per cell.
+   **No engine collapses.** All four rise steeply to 8 clients then plateau -- the host
+   is CPU-subscribed at 8 backends + 8 pgbench threads, so the ceiling is the box, not
+   the engines. Applies equally to all four, so the comparison stands.
+   **pg_fts has the BEST scaling factor and the WORST absolute ranked throughput.**
+   10.7x rare / 10.0x common (highest of the four; latency flat 9.9 -> 10.0 ms from 1 to
+   8 clients while tps rises 8x) but from the lowest base: at 32 clients 1,076 tps rare
+   vs pg_textsearch 8,349, and 208 tps common vs pg_search 4,298.
+   **The common-term gap is WORSE under load: 20.7x, against 17x single-client.** Good
+   scaling does not rescue a slow per-query cost, it multiplies it -- so this strengthens
+   4a rather than deferring it.
+   **`count(*)` is ours by a wide margin, now shown under load:** 2,923 tps / 10.9 ms at
+   32 clients vs pg_search 513 tps / 62.3 ms (5.7x); pg_textsearch and vchord cannot do
+   it at all.
+   **CORRECTION I published and this run overturned:** I claimed vchord *collapses* under
+   concurrency. It does not -- it peaks at 8 clients and declines only 4.7% (rare) /
+   7.2% (common) by 32. Settled by a peak sweep (c=2/4/12/24/48 ->
+   823/1,107/1,289/1,237/1,230 tps, flat top) plus mpstat (49.7% CPU at c=8 on 8
+   physical cores, 99.8% at c=32). Its low 1->32 factor (2.0-2.4x) is because one client
+   already consumes a full core, not degradation.
+   Rig defects found and fixed: `git archive` excludes `bench/` (`.gitattributes`
+   export-ignore) so the harness must be copied directly -- cost one wasted run; and
+   `grep -q "shared_preload_libraries"` matched the COMMENTED default line, silently
+   skipping pg_search's preload and producing all zeros. `underload.sh` now ABANDONS a
+   band that yields no tps rather than recording 0, which would read as a result.
 
 C2. **Ingest / update throughput. [NEW -- unmeasured for every engine]**
    We measure bulk build only (381 s for 2.19M docs).  Unmeasured: sustained INSERT

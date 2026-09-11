@@ -1,5 +1,15 @@
 # Competitive coverage audit — what we can and cannot claim (2026-09-10, v1.6.1)
 
+> **SUPERSEDED for cross-engine claims (2026-09-11).** The like-for-like re-run is
+> `bench/RESULTS_C1X_CROSSENGINE_2026-09-11.md`. Two corrections it makes to text below:
+> (1) **vchord does NOT collapse** — re-measured with a peak sweep and `mpstat`, it peaks
+> at 8 clients then declines only 4.7%/7.2% by 32, a saturation plateau on an 8-core host;
+> (2) all four engines plateau at 8 clients for the same host-CPU reason, so no engine
+> "falls over". pg_fts still has the best scaling factor (10.7x) and the worst absolute
+> ranked throughput.
+
+
+
 An honest inventory of the dimensions normally used to judge a PostgreSQL BM25 index
 access method, and whether pg_fts has **evidence** on each against **all** rivals.
 Written because the published comparison (`doc/COMPARISON_MATRIX.md`,

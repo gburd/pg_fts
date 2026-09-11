@@ -37,11 +37,21 @@ for band in $BANDS; do
     o=$(pgbench "$DSN" -n -f "$tmpd/$band.sql" -c "$c" -j "$j" -T "$LOAD_SECS" 2>/dev/null)
     tps=$(printf '%s\n' "$o" | awk '/^tps =/ {print $3; exit}')
     lat=$(printf '%s\n' "$o" | awk '/^latency average/ {print $4; exit}')
-    [ -z "$tps" ] && tps=0
-    [ -z "$lat" ] && lat=0
+    # A band that yields no tps did not run (extension missing, operator absent, ...).
+    # Recording 0 would look like a measured result, so abandon the band loudly instead.
+    if [ -z "$tps" ] || [ "$tps" = "0" ]; then
+      echo "  !! $ENGINE $band c=$c produced NO tps -- band abandoned, not recorded" >&2
+      printf '%s\n' "$o" | tail -3 >&2
+      series=""
+      break
+    fi
     series="${series}${series:+ }${c}:${tps}tps/${lat}ms"
     echo "  $ENGINE $band c=$c -> ${tps}tps ${lat}ms" >&2
   done
+  if [ -z "$series" ]; then
+    echo "  skipping $band in output (no valid measurements)" >&2
+    continue
+  fi
   RESULT[$band]="$series"
 done
 
