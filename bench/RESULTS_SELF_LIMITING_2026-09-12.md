@@ -279,3 +279,92 @@ No unproven change is in the tree.
 
 **Requirement status unchanged: not met.** Docs continue to recommend a periodic
 `fts_vacuum`. Three attempts, one real mechanism established, no regression shipped.
+
+
+---
+
+# Attempt 4: the writer is NOT in the vacuum path (2026-09-12)
+
+Applied the constraint from attempt 3 and instrumented `bm25_vacuum_compact`'s loop via
+the node log. That produced the answer, and it invalidates the target of all three
+previous attempts.
+
+## What the loop was doing
+
+```
+top0: nblocks=1910 is_compacted=0   ... -> top1: nblocks=615 is_compacted=1    <- WORKS
+top0: nblocks=2366 is_compacted=0
+pass0: prevblocks=2366 nblocks=4553 BREAK(no-progress)                         <- gives up
+```
+
+The first invocation converges properly (1,910 → 615). Later ones extend once and then
+exit on `nblocks >= prevblocks`.
+
+**Why the pack cannot reclaim, proven:** pages freed by *this* transaction carry its own
+xid, and `bm25_page_recyclable()` gates on `GlobalVisCheckRemovableXid()`, which is false
+for a still-running transaction. So immediately after a merge **every** candidate page is
+rejected, the pack phase finds nothing reusable, and vacate+pack degenerates to *vacate
+alone*: `+live_size`, no reclaim. Removing the convergence guard just let that repeat —
+`121 → 223 → 326 MB`, strictly worse.
+
+That also explains why reclaim fundamentally requires a **later transaction**, and why
+attempts 1–3 (all reclaiming inside the merge's own transaction) could never work.
+
+## Two real improvements from this attempt
+
+Adding a pre-check so a pass **declines to vacate when nothing is recyclable** rather than
+extending:
+
+| | per-pass growth | base |
+|---|---|---|
+| before | ~17 MB | 35 MB |
+| decline-if-nothing-recyclable | **~5 MB** | **24 MB** |
+
+Both the growth rate and the starting size improved. Requiring `usable >= live` (enough
+recyclable space for the whole segment) on top of that changed nothing further.
+
+## Then the finding that redirects everything
+
+Instrumenting each stage *inside* cleanup:
+
+```
+PGFTSDIAG stages: start=2115 flush=2366 merge=2366
+PGFTSDIAG stages: start=3095 flush=3095 merge=3095
+PGFTSDIAG stages: start=3824 flush=3824 merge=3824
+```
+
+**Within cleanup nothing grows** — `start == flush == merge` on every call after the first
+(whose `+251` is legitimate pending-data folding). Yet `start` climbs **2,115 → 3,095 →
+3,824** between calls.
+
+**The growth happens outside `VACUUM` entirely.** Every fix in attempts 1–4 targeted the
+vacuum path, which this shows is innocent. The leading candidate is the insert-time
+opportunistic merge (`pg_fts_am.c:5325`, `bm25_merge_segments` under a conditional lock),
+which would run when the lock is next free rather than at insert time — but I have not
+instrumented it, so that is a hypothesis, not a finding.
+
+## State
+
+Reverted to the last verified-good build. **None of attempt 4's changes are in the tree** —
+the decline-if-nothing-recyclable pre-check is a genuine ~3× improvement and worth
+revisiting, but it targets a path that is not the cause, and shipping it would encode a
+wrong mental model in the code comments.
+
+`t/010` keeps its bounded (not zero) assertion, with a comment recording that the writer is
+outside vacuum.
+
+## Requirement status: NOT met, after four attempts
+
+What four attempts produced: the growth is **not** in `VACUUM`; reclaim of same-transaction
+freed pages is impossible by design (`GlobalVisCheckRemovableXid`); write-before-free
+and in-loop extend-only are both non-negotiable; and declining to vacate when nothing is
+recyclable is a real 3× win once aimed at the right path.
+
+**The next step is one measurement, not a fix:** instrument the insert-time merge at
+`:5325` — block count before/after, and whether it runs during `t/010`'s three VACUUMs —
+using `$node->logfile`, which is the only route that surfaces `elog` from a TAP run. If it
+is the writer, the fix is to stop *it* extending, and the decline-if-nothing-recyclable
+pre-check likely applies there directly.
+
+I have stopped rather than attempt a fifth change on a hypothesis. Docs continue to
+recommend a periodic `fts_vacuum`.

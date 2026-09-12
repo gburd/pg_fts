@@ -159,24 +159,18 @@ my $m2 = idxmb();
 $node->safe_psql('postgres', 'VACUUM (INDEX_CLEANUP on) docs');
 my $m3 = idxmb();
 note("index MB after three VACUUMs: $m1, $m2, $m3");
-
-# BOUNDED, NOT ZERO -- and this bound is deliberately honest.
+# BOUNDED, NOT ZERO -- deliberately, and here is exactly why.
 #
-# Two fixes have reduced per-pass growth: the merge now truncates its own free tail
-# (2026-09-12), and bm25_vacuum_compact tries a low-first "pack-first" pass before the
-# grow-then-shrink vacate+pack.  Measured effect at 200k docs: ~690 MB/pass -> ~110 MB.
-# But growth is NOT eliminated: this test still records 35 -> 52 -> 69 MB across three
-# forced cleanups with no rows added, i.e. ~17 MB per pass.
+# Repeated cleanup on an unchanged table still grows the index (~17 MB/pass here).
+# Four attempts to fix it are recorded in bench/RESULTS_SELF_LIMITING_2026-09-12.md; the
+# fourth finally located the writer, and it is NOT the vacuum path: instrumenting every
+# stage inside bm25_vacuumcleanup shows start==flush==merge, i.e. ZERO growth within
+# cleanup, while the pre-cleanup block count climbs between calls.  The growth therefore
+# happens outside VACUUM entirely.
 #
-# I could not establish WHERE that residual write originates: instrumentation added to
-# bm25_vacuumcleanup and to the merge's tail-truncate produced no log output in this
-# scenario, so the growing writer is on a path I have not yet identified -- possibly the
-# insert-time opportunistic merge rather than vacuum at all.  Recorded in
-# bench/RESULTS_SELF_LIMITING_2026-09-12.md rather than guessed at.
-#
-# So this asserts the property we can actually defend -- growth per pass is a bounded
-# fraction of the live index, not unbounded accumulation -- and will be tightened to
-# +/-2 MB once the residual writer is found and fixed.
+# So this asserts what is defensible today -- growth per pass is a bounded fraction of
+# the live index, not unbounded accumulation -- and should be tightened to +/-2 MB once
+# the out-of-vacuum writer is fixed.
 my $slack = int($m1 * 0.6) + 4;
 cmp_ok($m2, '<=', $m1 + $slack,
     "second cleanup growth is bounded (${m1}MB -> ${m2}MB, slack ${slack}MB)");
