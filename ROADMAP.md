@@ -5,6 +5,36 @@ they are not rediscovered. Ordered roughly by value.
 
 ## Performance
 
+P1. **`VACUUM` does not reclaim pg_fts bloat -- and GROWS it. [FOUND 2026-09-11, NOT
+   FIXED]** (`bench/P1_VACUUM_NO_RECLAIM_2026-09-11.md`, data in
+   `bench/data_autovac_2026-09-11/`)
+   Answering "must a user schedule `fts_vacuum` manually?" -- **yes, and worse than
+   that.** Three consecutive `VACUUM docs` after 45k inserts:
+   7,021 -> 7,734 -> 8,423 -> 9,111 MB, reclaiming NOTHING (+~690 MB each pass), while a
+   single `fts_vacuum` returns it to **344 MB** (26x).
+   **Root cause MEASURED, not inferred.** I instrumented a live cleanup pass: the 25%
+   gate passes and the predicate is right --
+   `nblocks=912246 freeblks=853384 (93.5%) gate_pass=1 is_compacted=0` -- so
+   `bm25_vacuum_compact` IS called, and the file still grew in that same pass. The server
+   log gives it: **`ERROR: canceling autovacuum task`**. Cleanup holds
+   `bm25_maintenance_lock` across flush -> merge -> compact, autovacuum yields to any
+   conflicting lock request, so the merge writes a fresh extend-only copy (+690 MB) and
+   the reclaim half is killed before it runs. `bm25_vacuum_compact`'s own
+   "never return larger than we started" backstop (`:4681-4700`) cannot help because the
+   cancellation unwinds before it. A cancelled pass is strictly WORSE than no pass --
+   that is what turns a missed optimisation into unbounded growth.
+   (This also ruled out two of my own theories: the autovacuum *trigger*
+   (`autovacuum_vacuum_insert_threshold` = 41,000 does eventually fire) and a
+   "needs two cycles" idea (the third pass is as unhelpful as the first).)
+   **Fix I would write:** make the merge truncate its own free tail when it finishes
+   single-segment -- cheap, no vacate+pack, removes the growth at source so a
+   cancellation can no longer leave net growth. Then make the reclaim half
+   interruption-safe or move it outside the cancellable region. Possibly a dedicated
+   background worker rather than autovacuum, which will not be cancelled by ordinary lock
+   conflicts.
+   **Documented now** in README + `doc/pg_fts.sgml`: schedule `fts_vacuum` (cron/pg_cron)
+   for insert- or delete-heavy indexes; plain `VACUUM` is not a substitute.
+
 P0. **VACUUM never completes on a delete-heavy index. [FIXED in 1.6.1, qualified at
    scale]** (`bench/P0_VACUUM_HANG_2026-09-10.md`,
    `bench/data_p0_2026-09-10/qualification.log`)

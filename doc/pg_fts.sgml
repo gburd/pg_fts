@@ -616,6 +616,22 @@ SELECT * FROM messages
   </para>
 
   <para>
+   <emphasis role="bold">Schedule <function>fts_vacuum</function>; a plain
+   <command>VACUUM</command> is not a substitute.</emphasis>  Autovacuum does invoke
+   pg_fts's index cleanup, and that cleanup merges pending data correctly &mdash; but its
+   space-reclaiming compaction step is frequently cancelled by ordinary lock conflicts
+   (<literal>canceling autovacuum task</literal>), and because the merge writes its output
+   by extending the file, <emphasis>a cancelled pass leaves the index larger than it
+   started</emphasis>.  Measured on a 200,000-document index after 45,000 inserts: three
+   consecutive <command>VACUUM</command>s took it from 7,021&nbsp;MB to 7,734, 8,423 and
+   9,111&nbsp;MB, reclaiming nothing, while one
+   <function>fts_vacuum</function> returned it to 344&nbsp;MB.  Until this is fixed, run
+   <function>fts_vacuum</function> on a schedule (cron or <literal>pg_cron</literal>) for
+   any index with sustained inserts or deletes.  See
+   <filename>bench/P1_VACUUM_NO_RECLAIM_2026-09-11.md</filename>.
+  </para>
+
+  <para>
    <emphasis role="bold">Incremental inserts of LARGE documents can grow the index file
    far beyond its settled size.</emphasis>  A pending document is stored verbatim, and
    one that does not fit in an 8&nbsp;kB page is indexed immediately as its own

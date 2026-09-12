@@ -331,7 +331,17 @@ Query execution
     > the file, the freed pages beneath it need the compaction pass to move live
     > data down before anything can be truncated.
     >
-    > **Practical rule: run `fts_vacuum` once after a large initial build**, and do
+    > **Practical rule: `fts_vacuum` must be SCHEDULED — plain `VACUUM` is not a
+    > substitute.** Autovacuum does run pg_fts's cleanup (merging pending data), but its
+    > compaction step is frequently cancelled by ordinary lock conflicts, and a cancelled
+    > pass leaves the index **larger** than it started. Measured: three consecutive
+    > `VACUUM docs` on a 45k-insert workload took the index 7,021 → 7,734 → 8,423 →
+    > 9,111 MB, reclaiming nothing, while a single `fts_vacuum` returned it to 344 MB
+    > (`bench/P1_VACUUM_NO_RECLAIM_2026-09-11.md`). Until that is fixed, run `fts_vacuum`
+    > on a schedule for any insert-heavy or delete-heavy index — a cron job or
+    > `pg_cron` entry is enough.
+    >
+    > Also run it once after a large initial build, and do
     > not judge the index's real size before you do. Measurements in
     > `bench/DIAG_WORKER_FRAGMENTATION.md`.
     >
