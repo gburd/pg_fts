@@ -5,35 +5,47 @@ they are not rediscovered. Ordered roughly by value.
 
 ## Performance
 
-P1. **`VACUUM` does not reclaim pg_fts bloat -- and GROWS it. [FOUND 2026-09-11, NOT
-   FIXED]** (`bench/P1_VACUUM_NO_RECLAIM_2026-09-11.md`, data in
-   `bench/data_autovac_2026-09-11/`)
-   Answering "must a user schedule `fts_vacuum` manually?" -- **yes, and worse than
-   that.** Three consecutive `VACUUM docs` after 45k inserts:
-   7,021 -> 7,734 -> 8,423 -> 9,111 MB, reclaiming NOTHING (+~690 MB each pass), while a
-   single `fts_vacuum` returns it to **344 MB** (26x).
-   **Root cause MEASURED, not inferred.** I instrumented a live cleanup pass: the 25%
-   gate passes and the predicate is right --
-   `nblocks=912246 freeblks=853384 (93.5%) gate_pass=1 is_compacted=0` -- so
-   `bm25_vacuum_compact` IS called, and the file still grew in that same pass. The server
-   log gives it: **`ERROR: canceling autovacuum task`**. Cleanup holds
-   `bm25_maintenance_lock` across flush -> merge -> compact, autovacuum yields to any
-   conflicting lock request, so the merge writes a fresh extend-only copy (+690 MB) and
-   the reclaim half is killed before it runs. `bm25_vacuum_compact`'s own
-   "never return larger than we started" backstop (`:4681-4700`) cannot help because the
-   cancellation unwinds before it. A cancelled pass is strictly WORSE than no pass --
-   that is what turns a missed optimisation into unbounded growth.
-   (This also ruled out two of my own theories: the autovacuum *trigger*
-   (`autovacuum_vacuum_insert_threshold` = 41,000 does eventually fire) and a
-   "needs two cycles" idea (the third pass is as unhelpful as the first).)
-   **Fix I would write:** make the merge truncate its own free tail when it finishes
-   single-segment -- cheap, no vacate+pack, removes the growth at source so a
-   cancellation can no longer leave net growth. Then make the reclaim half
-   interruption-safe or move it outside the cancellable region. Possibly a dedicated
-   background worker rather than autovacuum, which will not be cancelled by ordinary lock
-   conflicts.
-   **Documented now** in README + `doc/pg_fts.sgml`: schedule `fts_vacuum` (cron/pg_cron)
-   for insert- or delete-heavy indexes; plain `VACUUM` is not a substitute.
+P1. **`VACUUM` did not reclaim pg_fts bloat -- it GREW it. [PARTLY FIXED 2026-09-12 --
+   ~6x better, requirement NOT yet met]** (`bench/P1_VACUUM_NO_RECLAIM_2026-09-11.md` for the defect,
+   `bench/RESULTS_SELF_LIMITING_2026-09-12.md` for the fix)
+   Before: three consecutive `VACUUM`s on an insert-heavy index went
+   7,021 -> 7,734 -> 8,423 -> 9,111 MB, reclaiming nothing (+~690 MB/pass, unbounded).
+   Root cause MEASURED, not inferred: the gate and predicate were both CORRECT
+   (`nblocks=912246 freeblks=853384 (93.5%) gate_pass=1 is_compacted=0`), and the server
+   log gave it -- **`ERROR: canceling autovacuum task`**. Cleanup holds the maintenance
+   lock across flush -> merge -> compact, autovacuum yields to any conflicting lock
+   request, and the merge had already written a fresh extend-only copy. **A cancelled
+   pass was strictly worse than no pass** -- that is what made it unbounded.
+   **Fix (two small edits):** (1) `bm25_merge_segments` truncates its own free tail
+   before returning, establishing the invariant *a merge never leaves the index bigger
+   than it found it*; (2) `bm25_vacuumcleanup` truncates UNCONDITIONALLY before the gated
+   rewrite, so a later cancellation still leaves real progress. Online-safe under SUEL
+   because scans use `bm25_scan_readbuf()` (out-of-range block = end-of-chain, added in
+   1.5.7 for exactly this).
+   **No new scheduling mechanism needed:** the insert path already calls
+   `bm25_merge_segments` opportunistically under a conditional lock (`:5325`), so making
+   that function self-truncating made *ingest itself* self-limiting.
+   **Verified:** six rounds of 45k inserts, no `fts_vacuum`, no manual merge, plain
+   `VACUUM` only -- settles ~1 GB, size grows SUBLINEARLY with data (+48% for +92% rows)
+   instead of per pass, queries served throughout. Round 1 does not reclaim (no
+   contiguous tail exists yet); round 2 absorbs it. Convergence takes at most two
+   cleanup cycles, which autovacuum supplies continuously.
+   **MY OWN TEST CAUGHT ME OVERCLAIMING.** I first read the six-round run as bounded and
+   wrote it up that way. The regression test added to `t/010` disproved it: with **no rows
+   added at all**, three VACUUMs still go 29 -> 41 -> 52 MB, ~11 MB per pass. So the
+   six-round "+110 MB per round" was per-PASS growth that I partly attributed to data
+   growth. Per-pass growth is 6x smaller, not gone.
+   **Why it remains:** `bm25_vacuum_compact`'s vacate phase deliberately EXTENDS by the
+   live size so freed pages form one contiguous region, then the pack phase moves data
+   back down. An interrupted pass leaves that extension. Truncating the merge's own tail
+   removed one growth source, not this one.
+   **The change that would actually clear the requirement:** make the vacate phase reuse
+   low free blocks instead of extending. The machinery already exists --
+   `bm25_alloc_begin` hands out lowest-free-first, and `bm25_page_recyclable` already
+   makes low reuse safe under SUEL -- so compaction would shrink monotonically and an
+   interruption could never be a net cost. That is the next step, and it is the real fix.
+   Docs (README, `doc/pg_fts.sgml`) now say a periodic `fts_vacuum` is still recommended,
+   rather than the "no scheduling required" claim I briefly published.
 
 P0. **VACUUM never completes on a delete-heavy index. [FIXED in 1.6.1, qualified at
    scale]** (`bench/P0_VACUUM_HANG_2026-09-10.md`,

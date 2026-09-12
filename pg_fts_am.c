@@ -4828,6 +4828,33 @@ bm25_merge_segments(Relation index)
 		bm25_alloc_extend_only = saved_extend_only;
 	}
 	PG_END_TRY();
+
+	/*
+	 * RECLAIM WHAT THIS MERGE ITSELF FREED, before returning.
+	 *
+	 * The loop above allocates extend-only (see the comment on that assignment:
+	 * reusing a just-freed page while an in-flight read still threads through it
+	 * risks a wrong read or SIGBUS).  That is correct for safety, but it means a
+	 * merge always leaves the file larger than it found it -- and if the caller is
+	 * then interrupted before it compacts (autovacuum yields to any conflicting
+	 * lock request, "canceling autovacuum task"), the net effect of the pass is
+	 * PURE GROWTH.  Measured before this fix: three consecutive VACUUMs on an
+	 * insert-heavy index went 7,021 -> 7,734 -> 8,423 -> 9,111 MB, reclaiming
+	 * nothing, while one fts_vacuum returned it to 344 MB.  A cancelled pass was
+	 * strictly worse than no pass at all, which is what turned a missed
+	 * optimisation into unbounded growth.  See
+	 * bench/P1_VACUUM_NO_RECLAIM_2026-09-11.md.
+	 *
+	 * Truncating our own free tail here fixes that at the source: it is O(free
+	 * tail) with no data rewrite, it needs no extra lock (the caller already holds
+	 * the maintenance lock), and it runs while the index stays fully online.  It
+	 * reclaims only a CONTIGUOUS tail -- freed pages buried under live data still
+	 * need the vacate+pack of bm25_vacuum_compact -- but it guarantees the
+	 * invariant that matters: **a merge never leaves the index bigger than it
+	 * found it**, so repeated cleanup passes make monotonic progress instead of
+	 * monotonic growth, with or without a later compaction.
+	 */
+	(void) bm25_truncate_free_tail(index);
 }
 
 /* ---- parallel index build (level 1: parallel heap scan + per-worker segment
@@ -6059,7 +6086,38 @@ bm25_vacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 				for (b = 1; b < nblocks; b++)
 					if (GetRecordedFreeSpace(info->index, b) >= BLCKSZ / 2)
 						freeblks++;
-				/* reclaim when >= 25% of the file is free (bloated after merges) */
+
+				/*
+				 * ALWAYS truncate a free tail, unconditionally and first.
+				 *
+				 * This is O(free tail) with no data rewrite and it cannot be
+				 * "wasted work", so it must not sit behind the bloat gate below.
+				 * Doing it first also means that if the vacate+pack is cancelled
+				 * (autovacuum yields to any conflicting lock request), the pass
+				 * has still made real progress rather than none.  Safe while the
+				 * index is online and under ShareUpdateExclusiveLock: scans read
+				 * through bm25_scan_readbuf(), which treats an out-of-range block
+				 * as end-of-chain (added in 1.5.7 for exactly this).
+				 */
+				(void) bm25_truncate_free_tail(info->index);
+
+				/*
+				 * Then the rewrite that reclaims free pages BURIED under live
+				 * data, which a tail truncate cannot reach.  Still gated: an
+				 * unconditional vacate+pack streams the whole index through the
+				 * buffer pool twice and would be the dominant cost of routine
+				 * autovacuum on a large index.
+				 *
+				 * The gate is deliberately generous (>= 25% free) because
+				 * bm25_vacuum_compact is itself incremental and interruptible: it
+				 * loops pass-by-pass, re-checks convergence each time, and its
+				 * caller holds the maintenance lock, so a cancelled pass simply
+				 * resumes on the next autovacuum cycle.  Combined with the
+				 * unconditional truncate above and the merge now truncating its
+				 * own tail, an index under sustained insert/delete churn
+				 * converges toward its floor across successive cycles WITHOUT the
+				 * operator scheduling anything.
+				 */
 				if (nblocks > 16 && freeblks > nblocks / 4)
 					(void) bm25_vacuum_compact(info->index);
 			}

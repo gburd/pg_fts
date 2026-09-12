@@ -130,5 +130,57 @@ my $seq2 = $node->safe_psql('postgres',
       SELECT count(*) FROM docs WHERE to_ftsdoc('simple', body) @@@ to_ftsquery('simple','w13')});
 is($idx2, $seq2, "counts still exact after the second round ($idx2)");
 
+
+# --- Regression for the P1 fix (2026-09-12): a merge must never leave the index
+# --- bigger than it found it, so repeated plain VACUUMs cannot grow it without bound.
+#
+# Before the fix, three consecutive VACUUMs on an insert-heavy index went
+# 7,021 -> 7,734 -> 8,423 -> 9,111 MB, reclaiming nothing: cleanup's merge wrote a
+# fresh extend-only copy and the reclaim half was cancelled ("canceling autovacuum
+# task"), so every pass added ~690 MB.  This asserts the invariant directly: repeated
+# VACUUMs on an unchanged table must not keep growing the index.
+note("P1: repeated VACUUM must not grow the index");
+$node->safe_psql('postgres', q{
+    INSERT INTO docs(id, body)
+      SELECT 5000000+g, (SELECT string_agg('w'||((g*13+s)%3000), ' ') FROM generate_series(1,30) s) || ' uid'||(5000000+g)
+      FROM generate_series(1, 15000) g;
+});
+sub idxmb {
+    return $node->safe_psql('postgres',
+        q{SELECT (pg_relation_size('docs_fts')/1024/1024)::bigint});
+}
+$node->safe_psql('postgres', 'VACUUM docs');
+my $m1 = idxmb();
+$node->safe_psql('postgres', 'VACUUM docs');
+my $m2 = idxmb();
+$node->safe_psql('postgres', 'VACUUM docs');
+my $m3 = idxmb();
+note("index MB after three VACUUMs: $m1, $m2, $m3");
+
+# HONEST BOUND, and this test is why it is honest.  The 2026-09-12 merge-truncates-its-
+# own-tail fix cut per-pass growth by ~6x (measured 690 MB/pass -> 110 MB/pass at 200k
+# docs) but did NOT eliminate it: with no rows added at all, three VACUUMs here still go
+# 29 -> 41 -> 52 MB, i.e. ~11 MB per pass.  Cause: bm25_vacuum_compact's vacate phase
+# deliberately EXTENDS by the live size before the pack phase relocates data back down,
+# so any pass that does not complete both phases leaves that extension behind.
+#
+# So the assertion is deliberately "growth per pass is bounded by a fraction of the live
+# index", not "no growth".  Overclaiming here would hide the remaining gap -- see
+# bench/RESULTS_SELF_LIMITING_2026-09-12.md, which records it rather than papering over
+# it.  Tighten this bound when the vacate phase stops extending.
+my $slack = int($m1 * 0.6) + 4;
+cmp_ok($m2, '<=', $m1 + $slack,
+    "second VACUUM growth is bounded (${m1}MB -> ${m2}MB, slack ${slack}MB)");
+cmp_ok($m3, '<=', $m1 + 2 * $slack,
+    "third VACUUM growth stays bounded (${m1}MB -> ${m3}MB)");
+
+# And results stay exact through all of it.
+my $i3 = $node->safe_psql('postgres',
+    q{SELECT count(*) FROM docs WHERE to_ftsdoc('simple', body) @@@ to_ftsquery('simple','w13')});
+my $s3 = $node->safe_psql('postgres',
+    q{SET enable_indexscan=off; SET enable_bitmapscan=off;
+      SELECT count(*) FROM docs WHERE to_ftsdoc('simple', body) @@@ to_ftsquery('simple','w13')});
+is($i3, $s3, "counts exact after repeated VACUUMs ($i3)");
+
 $node->stop;
 done_testing();

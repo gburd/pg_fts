@@ -616,19 +616,27 @@ SELECT * FROM messages
   </para>
 
   <para>
-   <emphasis role="bold">Schedule <function>fts_vacuum</function>; a plain
-   <command>VACUUM</command> is not a substitute.</emphasis>  Autovacuum does invoke
-   pg_fts's index cleanup, and that cleanup merges pending data correctly &mdash; but its
-   space-reclaiming compaction step is frequently cancelled by ordinary lock conflicts
-   (<literal>canceling autovacuum task</literal>), and because the merge writes its output
-   by extending the file, <emphasis>a cancelled pass leaves the index larger than it
-   started</emphasis>.  Measured on a 200,000-document index after 45,000 inserts: three
-   consecutive <command>VACUUM</command>s took it from 7,021&nbsp;MB to 7,734, 8,423 and
-   9,111&nbsp;MB, reclaiming nothing, while one
-   <function>fts_vacuum</function> returned it to 344&nbsp;MB.  Until this is fixed, run
-   <function>fts_vacuum</function> on a schedule (cron or <literal>pg_cron</literal>) for
-   any index with sustained inserts or deletes.  See
-   <filename>bench/P1_VACUUM_NO_RECLAIM_2026-09-11.md</filename>.
+   <emphasis role="bold">Autovacuum now keeps the index largely in check, but a periodic
+   <function>fts_vacuum</function> is still recommended.</emphasis>  A merge truncates the
+   free tail it creates, and autovacuum's index cleanup truncates unconditionally before
+   deciding whether a fuller repack is worthwhile; together these cut growth per vacuum
+   pass by roughly 6&#215;.  Truncation is safe while the index is online and under
+   <literal>ShareUpdateExclusiveLock</literal>, because scans treat an out-of-range block
+   as end-of-chain.  A residual per-pass growth remains: compaction extends the file by
+   the live data size so the freed pages form one contiguous region, then packs the data
+   back down &mdash; so a pass that is interrupted (autovacuum yields to any conflicting
+   lock request) leaves that extension behind, measured at about 11&nbsp;MB per pass on a
+   small index with no rows added.  Until compaction shrinks monotonically, schedule a
+   periodic <function>fts_vacuum</function> if you need the index held at its floor.  See
+   <filename>bench/RESULTS_SELF_LIMITING_2026-09-12.md</filename>.
+  </para>
+
+  <para>
+   <function>fts_vacuum</function> remains useful for a <emphasis>one-off</emphasis>
+   tighter reclaim: it always performs the full vacate-and-pack rather than waiting for
+   the bloat threshold, reaching roughly 3&#215; smaller than the automatic steady state.
+   Run it once after a bulk load or a mass delete if you want the index at its floor.  It
+   is not needed to keep the index from growing.
   </para>
 
   <para>

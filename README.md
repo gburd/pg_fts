@@ -331,18 +331,20 @@ Query execution
     > the file, the freed pages beneath it need the compaction pass to move live
     > data down before anything can be truncated.
     >
-    > **Practical rule: `fts_vacuum` must be SCHEDULED — plain `VACUUM` is not a
-    > substitute.** Autovacuum does run pg_fts's cleanup (merging pending data), but its
-    > compaction step is frequently cancelled by ordinary lock conflicts, and a cancelled
-    > pass leaves the index **larger** than it started. Measured: three consecutive
-    > `VACUUM docs` on a 45k-insert workload took the index 7,021 → 7,734 → 8,423 →
-    > 9,111 MB, reclaiming nothing, while a single `fts_vacuum` returned it to 344 MB
-    > (`bench/P1_VACUUM_NO_RECLAIM_2026-09-11.md`). Until that is fixed, run `fts_vacuum`
-    > on a schedule for any insert-heavy or delete-heavy index — a cron job or
-    > `pg_cron` entry is enough.
+    > **Autovacuum keeps the index far better behaved than it used to, but a periodic
+    > `fts_vacuum` is still worth scheduling.** As of 2026-09-12 a merge truncates the
+    > free tail it creates and autovacuum's cleanup truncates unconditionally, which cut
+    > per-vacuum-pass growth about **6x**. Residual growth remains: compaction extends the
+    > file by the live size before packing it back down, so an interrupted pass still
+    > leaves that behind — measured at ~11 MB per pass on a small index with no rows added
+    > (`bench/RESULTS_SELF_LIMITING_2026-09-12.md`). Until compaction shrinks
+    > monotonically, a periodic `fts_vacuum` (cron or `pg_cron`) is the reliable way to
+    > hold an index at its floor.
     >
-    > Also run it once after a large initial build, and do
-    > not judge the index's real size before you do. Measurements in
+    > `fts_vacuum` is still useful for a **one-off** tighter reclaim — it always does the
+    > full repack, reaching ~3x smaller than the automatic steady state — so it is worth
+    > running once after a large initial build or a mass delete. It is not required to
+    > prevent growth. Measurements in
     > `bench/DIAG_WORKER_FRAGMENTATION.md`.
     >
     > **Incremental INSERTs can grow the file far beyond the settled index size, if your
