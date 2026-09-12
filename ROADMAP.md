@@ -50,9 +50,30 @@ P1. **`VACUUM` did not reclaim pg_fts bloat -- it GREW it. [PARTLY FIXED 2026-09
    residual writer is on a path I have not identified. Leading untested candidate is the
    INSERT-time opportunistic merge (`:5325`), which would mean the growth belongs to
    ingest and both of my fixes were aimed at the wrong function.
-   **Do this before a third attempt:** put a counter on the insert-path merge call and on
-   `bm25_compact_to_one`, and determine which one extends the relation during a
-   no-rows-added cleanup.
+   **Attempt 3 (2026-09-12) MEASURED THE MECHANISM. Reverted; no change shipped.**
+   First, the plumbing error that hid this for two rounds: `elog(LOG)` goes to the TAP
+   NODE's server log, not the nix build output I was grepping -- so twice I concluded
+   "the code is not reached" when it was running fine. Reading `$node->logfile` from
+   inside the test surfaced it at once.
+   What it showed: `mergetail: 2366->2366 (+0)` on EVERY pass while blocks climbed
+   2,366 -> 4,553 -> 6,740 (+2,187 ~= 17 MB/pass). The merge's tail truncate reclaims
+   nothing **by construction** -- the merge allocates extend-only so its output IS the
+   highest data, and `bm25_truncate_free_tail` needs the LAST block free. My first fix
+   could not work on this path, and the +0 proves it.
+   Then, decisively: `mergereclaim: 2462 -pack-> 4660` (pack did work, so it EXTENDED)
+   versus `1896 -pack-> 1896 -trunc-> 615` (pack was a no-op, truncate won).
+   **`bm25_compact_to_one` is write-before-free** -- the crash-safety property -- so any
+   call doing real work extends, and only an already-no-op call leaves a truncatable
+   tail. **Reclaim therefore inherently needs two SEPARATE passes**, which is exactly what
+   `bm25_vacuum_compact`'s loop is and why it loops. All my attempts tried to reclaim in
+   one call; an explicit two-round version was worse still (39 -> 68 -> 96 MB).
+   **Constraints a fourth attempt must respect:** write-before-free and in-loop
+   extend-only are both non-negotiable (crash safety; merge N+1 must not recycle pages
+   merge N is reading, and the XID gate does not help same-transaction). So the question
+   is NOT "make the merge reclaim" but **"why does `bm25_vacuum_compact`'s loop not
+   converge downward here"** -- and P1's instrumentation already showed its gate PASSING
+   with `is_compacted=0`, so it does run. Measure its per-pass `prevblocks` via
+   `$node->logfile` next.
    Docs (README, `doc/pg_fts.sgml`) now say a periodic `fts_vacuum` is still recommended,
    rather than the "no scheduling required" claim I briefly published.
 

@@ -197,3 +197,85 @@ floor — as the docs now say.
 counter or `elog` on the *insert* path's merge call and on `bm25_compact_to_one`, and
 confirm which one extends the relation during a no-rows-added cleanup. Doing that first
 avoids a third fix aimed at the wrong function.
+
+
+---
+
+# Attempt 3: the mechanism, finally measured — and why one-call reclaim cannot work
+
+The previous two attempts failed for the same reason, which I could not see until the
+instrumentation actually reached me. Recording it so a fourth attempt starts from the
+real constraint.
+
+## The plumbing error that hid it for two rounds
+
+`elog(LOG, ...)` from the extension goes to the **TAP node's own server log**, not to the
+nix build output. I had been grepping the build log and seeing nothing, and twice
+concluded "the instrumentation never ran / the code is not reached". It was running the
+whole time. Reading `$node->logfile` from inside the test surfaced it immediately.
+
+## What the instrumentation showed
+
+Per-cleanup, on an index with no rows added:
+
+```
+mergetail: 2366->2366 (+0)      <- and 4553->4553, 6740->6740 ...
+```
+
+The merge's tail truncate reclaims **+0 every single time**, while block count climbs
+**2,366 → 4,553 → 6,740** (+2,187 blocks ≈ 17 MB per pass — exactly the observed growth).
+
+**Why +0 is structural, not a bug:** the merge loop allocates extend-only, so its output
+*is* the highest data in the file. `bm25_truncate_free_tail` needs the LAST block free, and
+it never is. **My first fix (merge truncates its own tail) could not work on this path by
+construction** — the `+0` is the proof.
+
+## Then instrumenting the reclaim itself
+
+Replacing that truncate with a low-first repack gave the decisive numbers:
+
+```
+mergereclaim: 2462 -pack-> 4660 -trunc-> 4660 (net +2198)   <- pack DID work, so it EXTENDED
+mergereclaim: 1896 -pack-> 1896 -trunc->  615 (net -1281)   <- pack was a NO-OP, truncate won
+mergereclaim: 4135 -pack-> 4135 -trunc->  730 (net -3405)   <- same
+mergereclaim:  730 -pack-> 1459 -trunc-> 1459 (net  +729)   <- worked, extended again
+```
+
+**`bm25_compact_to_one` is write-before-free** — it writes the relocated segment before
+freeing the old pages, which is exactly what makes a crash mid-compaction safe. So *any
+call that does real work extends the file*, and only a call that is already a no-op leaves
+a tail for the truncate to remove.
+
+**Therefore reclaim inherently needs two distinct passes**: one to relocate the data, and a
+later one whose pack is a no-op so the truncate can drop the freed tail. That is precisely
+what the pre-existing vacate+pack+truncate **loop** does, and why it is a loop.
+
+**Both of my earlier attempts tried to reclaim within a single call.** Neither could have
+worked. I then tried an explicit two-round version inside the merge, and it was *worse*
+(39 → 68 → 96 MB) — the second round extends again rather than settling, so two rounds is
+not the right shape either.
+
+## State reverted to the last verified-good build
+
+`pg_fts_am.c` is back to the committed state: merge-truncates-own-tail plus pack-first,
+both retained, full gate green, `t/010` at its honest bounded assertion (35 → 52 → 69 MB).
+No unproven change is in the tree.
+
+## What a fourth attempt must respect
+
+1. **Write-before-free is non-negotiable** — it is the crash-safety property. Any design
+   that reclaims in one call is wrong.
+2. **Extend-only inside the merge loop is non-negotiable** — merge N+1 must not recycle
+   pages merge N is still reading, and `bm25_page_recyclable`'s XID gate does not help
+   because it is the same transaction.
+3. So the reclaim must be a **separate later pass**, which is what
+   `bm25_vacuum_compact`'s loop already is. The real question is therefore **not** "how do
+   I make the merge reclaim" but **"why does that loop's gate not fire, or not converge,
+   in this scenario"** — and note the earlier P1 instrumentation showed the gate *passing*
+   with `is_compacted=0`, so it does run. The unexplained part is why its loop does not
+   converge downward here.
+4. Measure `bm25_vacuum_compact`'s per-pass block counts (it has `prevblocks` already) via
+   the node log, using the `$node->logfile` route above rather than the build log.
+
+**Requirement status unchanged: not met.** Docs continue to recommend a periodic
+`fts_vacuum`. Three attempts, one real mechanism established, no regression shipped.

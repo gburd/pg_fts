@@ -158,19 +158,8 @@ $node->safe_psql('postgres', 'VACUUM (INDEX_CLEANUP on) docs');
 my $m2 = idxmb();
 $node->safe_psql('postgres', 'VACUUM (INDEX_CLEANUP on) docs');
 my $m3 = idxmb();
-diag("index MB after three VACUUMs: $m1, $m2, $m3");
+note("index MB after three VACUUMs: $m1, $m2, $m3");
 
-# HONEST BOUND, and this test is why it is honest.  The 2026-09-12 merge-truncates-its-
-# own-tail fix cut per-pass growth by ~6x (measured 690 MB/pass -> 110 MB/pass at 200k
-# docs) but did NOT eliminate it: with no rows added at all, three VACUUMs here still go
-# 29 -> 41 -> 52 MB, i.e. ~11 MB per pass.  Cause: bm25_vacuum_compact's vacate phase
-# deliberately EXTENDS by the live size before the pack phase relocates data back down,
-# so any pass that does not complete both phases leaves that extension behind.
-#
-# So the assertion is deliberately "growth per pass is bounded by a fraction of the live
-# index", not "no growth".  Overclaiming here would hide the remaining gap -- see
-# bench/RESULTS_SELF_LIMITING_2026-09-12.md, which records it rather than papering over
-# it.  Tighten this bound when the vacate phase stops extending.
 # BOUNDED, NOT ZERO -- and this bound is deliberately honest.
 #
 # Two fixes have reduced per-pass growth: the merge now truncates its own free tail
