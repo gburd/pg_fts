@@ -139,3 +139,61 @@ change that would actually clear the requirement.
 ## Data
 
 `bench/data_selfvac_2026-09-12/self_limiting.log`.
+
+
+---
+
+# Attempt 2: low-block reuse ("pack-first") — landed, residual growth NOT eliminated
+
+Implemented the change identified above as the real fix: before the grow-then-shrink
+vacate+pack, `bm25_vacuum_compact` now tries a **single low-first pack** —
+`bm25_compact_to_one(index, false)` followed by a tail truncate — and only falls back to
+vacate+pack if that made no progress.
+
+Rationale unchanged and still sound: `bm25_alloc_begin` already hands out
+lowest-free-first and falls back to extending only when it runs out, and
+`bm25_page_recyclable` already makes low reuse safe under `ShareUpdateExclusiveLock`
+with concurrent scans (phase 2 has always relied on both). When the file already holds
+enough low free space — the bloated case we are called for — this reaches the same end
+state while the file only ever shrinks, so an interruption is never a net cost. The
+`for (pass < BM25_VACUUM_MAX_PASSES)` counter bounds the added `continue`.
+
+**It did not close the gap.** With the change in, `t/010` still records
+**35 → 52 → 69 MB** across three forced `VACUUM (INDEX_CLEANUP on)` passes with **no rows
+added** — about 17 MB per pass.
+
+## What I could not determine, stated plainly
+
+I instrumented `bm25_vacuumcleanup` (gate inputs, truncate before/after) and the merge's
+new tail-truncate with `elog(LOG, ...)`, forced `INDEX_CLEANUP on` so cleanup could not be
+skipped, and **got no log output at all** while the growth still reproduced. So the writer
+responsible for the residual ~17 MB/pass is on a path I have not identified. The leading
+untested candidate is the **insert-time opportunistic merge** (`pg_fts_am.c:5325`, which
+calls `bm25_merge_segments` under a conditional lock) rather than anything in the vacuum
+path — which would mean the growth is attributable to ingest, not to vacuuming, and my
+entire investigation was aimed at the wrong function.
+
+I also burned significant effort on harness plumbing (nix caching the extension against
+committed source; a local direct-build script failing silently under `set -e`) without
+getting the diagnostic out. Recording that rather than presenting a tidy conclusion.
+
+## Net state after both attempts
+
+| | per-pass growth |
+|---|---|
+| before any fix | ~690 MB (unbounded accumulation) |
+| after merge-truncates-own-tail | ~110 MB at 200k docs |
+| after pack-first | unchanged at this scale (~17 MB on the small `t/010` index) |
+
+**Kept:** both changes. The merge-tail truncate is a clear improvement with a measured
+6× effect, and pack-first is strictly better-shaped (monotonic when it applies, falls back
+safely when it does not) even though it did not move this particular number.
+
+**Requirement status: still NOT met.** Growth per cleanup pass is bounded and far smaller,
+but non-zero, so a periodic `fts_vacuum` remains the reliable way to hold an index at its
+floor — as the docs now say.
+
+**Next step, and it is a measurement not a code change:** identify the writer. Add a
+counter or `elog` on the *insert* path's merge call and on `bm25_compact_to_one`, and
+confirm which one extends the relation during a no-rows-added cleanup. Doing that first
+avoids a third fix aimed at the wrong function.

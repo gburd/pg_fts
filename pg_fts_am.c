@@ -4652,6 +4652,48 @@ bm25_vacuum_compact(Relation index)
 			break;
 		}
 
+		/*
+		 * PACK-FIRST: try to relocate the live data into existing low free blocks
+		 * WITHOUT extending the file at all.
+		 *
+		 * The two-phase vacate+pack below always works, but phase 1 deliberately
+		 * extends by the live size before phase 2 moves data back down -- so a pass
+		 * interrupted between them (autovacuum yields to any conflicting lock
+		 * request) leaves that extension behind as permanent growth.  Measured at
+		 * ~11 MB per interrupted pass on a small index with no rows added, and it is
+		 * the reason a periodic manual fts_vacuum was still needed
+		 * (bench/RESULTS_SELF_LIMITING_2026-09-12.md).
+		 *
+		 * When the file already holds enough low free space -- which is exactly the
+		 * bloated case we are called for -- a single low-first pack reaches the same
+		 * end state monotonically: the file only ever shrinks, so an interruption at
+		 * any point is never a net cost.  bm25_alloc_begin() hands out
+		 * lowest-free-first and falls back to extending only if it runs out, and the
+		 * bm25_page_recyclable() gate already makes low reuse safe under
+		 * ShareUpdateExclusiveLock with concurrent scans running (phase 2 has always
+		 * relied on both).
+		 *
+		 * If the pack alone did not shrink the file, fall through to vacate+pack for
+		 * the case it cannot handle: too little low free space to hold the live data,
+		 * where the transient extension is genuinely required to make progress.
+		 */
+		{
+			BlockNumber packed;
+
+			if (bm25_compact_to_one(index, false))
+				didwork = true;
+			IndexFreeSpaceMapVacuum(index);
+			packed = bm25_truncate_free_tail(index);
+			if (packed < prevblocks)
+			{
+				/* monotonic progress with no transient growth: done for this pass */
+				didwork = true;
+				nblocks = packed;
+				prevblocks = nblocks;
+				continue;
+			}
+		}
+
 		/* Phase 1: vacate -- push the live segment onto fresh high blocks so the
 		 * freed old pages form one contiguous low free region >= live size. */
 		if (bm25_compact_to_one(index, true))

@@ -149,13 +149,16 @@ sub idxmb {
     return $node->safe_psql('postgres',
         q{SELECT (pg_relation_size('docs_fts')/1024/1024)::bigint});
 }
-$node->safe_psql('postgres', 'VACUUM docs');
+# INDEX_CLEANUP=on forces amvacuumcleanup to run.  With the default (AUTO) and no dead
+# tuples, PostgreSQL may SKIP index cleanup entirely -- in which case pg_fts's own
+# reclaim code never executes and this would test nothing.
+$node->safe_psql('postgres', 'VACUUM (INDEX_CLEANUP on) docs');
 my $m1 = idxmb();
-$node->safe_psql('postgres', 'VACUUM docs');
+$node->safe_psql('postgres', 'VACUUM (INDEX_CLEANUP on) docs');
 my $m2 = idxmb();
-$node->safe_psql('postgres', 'VACUUM docs');
+$node->safe_psql('postgres', 'VACUUM (INDEX_CLEANUP on) docs');
 my $m3 = idxmb();
-note("index MB after three VACUUMs: $m1, $m2, $m3");
+diag("index MB after three VACUUMs: $m1, $m2, $m3");
 
 # HONEST BOUND, and this test is why it is honest.  The 2026-09-12 merge-truncates-its-
 # own-tail fix cut per-pass growth by ~6x (measured 690 MB/pass -> 110 MB/pass at 200k
@@ -168,11 +171,28 @@ note("index MB after three VACUUMs: $m1, $m2, $m3");
 # index", not "no growth".  Overclaiming here would hide the remaining gap -- see
 # bench/RESULTS_SELF_LIMITING_2026-09-12.md, which records it rather than papering over
 # it.  Tighten this bound when the vacate phase stops extending.
+# BOUNDED, NOT ZERO -- and this bound is deliberately honest.
+#
+# Two fixes have reduced per-pass growth: the merge now truncates its own free tail
+# (2026-09-12), and bm25_vacuum_compact tries a low-first "pack-first" pass before the
+# grow-then-shrink vacate+pack.  Measured effect at 200k docs: ~690 MB/pass -> ~110 MB.
+# But growth is NOT eliminated: this test still records 35 -> 52 -> 69 MB across three
+# forced cleanups with no rows added, i.e. ~17 MB per pass.
+#
+# I could not establish WHERE that residual write originates: instrumentation added to
+# bm25_vacuumcleanup and to the merge's tail-truncate produced no log output in this
+# scenario, so the growing writer is on a path I have not yet identified -- possibly the
+# insert-time opportunistic merge rather than vacuum at all.  Recorded in
+# bench/RESULTS_SELF_LIMITING_2026-09-12.md rather than guessed at.
+#
+# So this asserts the property we can actually defend -- growth per pass is a bounded
+# fraction of the live index, not unbounded accumulation -- and will be tightened to
+# +/-2 MB once the residual writer is found and fixed.
 my $slack = int($m1 * 0.6) + 4;
 cmp_ok($m2, '<=', $m1 + $slack,
-    "second VACUUM growth is bounded (${m1}MB -> ${m2}MB, slack ${slack}MB)");
+    "second cleanup growth is bounded (${m1}MB -> ${m2}MB, slack ${slack}MB)");
 cmp_ok($m3, '<=', $m1 + 2 * $slack,
-    "third VACUUM growth stays bounded (${m1}MB -> ${m3}MB)");
+    "third cleanup growth stays bounded (${m1}MB -> ${m3}MB)");
 
 # And results stay exact through all of it.
 my $i3 = $node->safe_psql('postgres',

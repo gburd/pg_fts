@@ -39,11 +39,20 @@ P1. **`VACUUM` did not reclaim pg_fts bloat -- it GREW it. [PARTLY FIXED 2026-09
    live size so freed pages form one contiguous region, then the pack phase moves data
    back down. An interrupted pass leaves that extension. Truncating the merge's own tail
    removed one growth source, not this one.
-   **The change that would actually clear the requirement:** make the vacate phase reuse
-   low free blocks instead of extending. The machinery already exists --
-   `bm25_alloc_begin` hands out lowest-free-first, and `bm25_page_recyclable` already
-   makes low reuse safe under SUEL -- so compaction would shrink monotonically and an
-   interruption could never be a net cost. That is the next step, and it is the real fix.
+   **Attempt 2 (2026-09-12): low-block reuse "pack-first" -- LANDED but did NOT close the
+   gap.** `bm25_vacuum_compact` now tries a single low-first pack + truncate before the
+   grow-then-shrink vacate+pack, falling back only if that made no progress. Sound and
+   kept (monotonic when it applies), but `t/010` still shows 35 -> 52 -> 69 MB across
+   three forced cleanups with NO rows added (~17 MB/pass).
+   **Blocking unknown, and it is a measurement not a design question:** I instrumented
+   `bm25_vacuumcleanup` and the merge tail-truncate with elog, forced
+   `INDEX_CLEANUP on`, and got NO log output while the growth still reproduced -- so the
+   residual writer is on a path I have not identified. Leading untested candidate is the
+   INSERT-time opportunistic merge (`:5325`), which would mean the growth belongs to
+   ingest and both of my fixes were aimed at the wrong function.
+   **Do this before a third attempt:** put a counter on the insert-path merge call and on
+   `bm25_compact_to_one`, and determine which one extends the relation during a
+   no-rows-added cleanup.
    Docs (README, `doc/pg_fts.sgml`) now say a periodic `fts_vacuum` is still recommended,
    rather than the "no scheduling required" claim I briefly published.
 
