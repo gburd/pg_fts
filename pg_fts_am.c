@@ -4532,6 +4532,76 @@ bm25_truncate_free_tail(Relation index)
  * If either fails, the vacate+pack pass still has work to do.  Scan-only for
  * the FSM part; a brief shared lock on the metapage for the segment count.
  */
+/*
+ * Is there enough RECYCLABLE free space to hold the live data?
+ *
+ * bm25_vacuum_compact can only shrink the file by reusing existing free pages, and
+ * bm25_page_recyclable() gates every candidate on GlobalVisCheckRemovableXid().  Pages
+ * freed by the CURRENT transaction -- notably by the merge that cleanup just ran -- are
+ * therefore all rejected, the allocator falls back to extending, and vacate+pack copies
+ * the live data to fresh blocks while reclaiming nothing.
+ *
+ * Measured without this check (t/010, three cleanups, no rows added):
+ *   nblocks=2366 freeblks=1500 gate=1 -> 4553 -> 6740 -> 8927, i.e. +2187 blocks
+ *   (~3x the ~730 live blocks) EVERY pass, unbounded -- while an earlier pass whose
+ *   free pages came from an older transaction shrank 1908 -> 615 correctly.
+ *
+ * The plain freeblks count that gates the caller cannot see this: it counts free space,
+ * not *usable* free space.  Comparing usable against live is what distinguishes "this
+ * pass will reclaim" from "this pass will just grow the file".
+ *
+ * Returns true when a compaction pass can be expected to make progress.
+ */
+static bool
+bm25_have_recyclable_room(Relation index, BlockNumber live)
+{
+	BlockNumber nblocks = RelationGetNumberOfBlocks(index);
+	BlockNumber blk;
+	BlockNumber usable = 0;
+
+	/*
+	 * Make the FSM current first.  GetRecordedFreeSpace() reads the FSM, and a page
+	 * freed by bulkdelete or by the merge above is not reflected there until the FSM
+	 * is vacuumed -- so counting without this overstates `live`, the check says "not
+	 * enough room", and a compaction that WOULD have reclaimed is skipped.  That is
+	 * how an index with plenty of genuinely reclaimable space (post-DELETE) sat at
+	 * 18 MB instead of falling to 4 MB.
+	 */
+	IndexFreeSpaceMapVacuum(index);
+
+	/*
+	 * `live` is supplied by the caller, which has just counted it, so this loop only
+	 * has to find enough recyclable pages to cover it and can stop there.  That
+	 * matters at scale: without the early exit this would ReadBuffer() every free
+	 * block on a multi-GB index on every autovacuum cycle.
+	 */
+	for (blk = 1; blk < nblocks && usable < live; blk++)
+	{
+		Buffer		buf;
+		bool		ok;
+
+		CHECK_FOR_INTERRUPTS();
+		if (GetRecordedFreeSpace(index, blk) < BLCKSZ / 2)
+			continue;			/* in use, or too full to reuse */
+		buf = ReadBuffer(index, blk);
+		LockBuffer(buf, BUFFER_LOCK_SHARE);
+		ok = bm25_page_recyclable(index, BufferGetPage(buf));
+		UnlockReleaseBuffer(buf);
+		if (ok)
+			usable++;
+	}
+
+	/*
+	 * Require room for the live data.  bm25_compact_to_one relocates the whole live
+	 * segment, and if the recyclable pages cannot hold it the allocator extends for
+	 * the remainder -- which for online cleanup is pure growth with no reclaim,
+	 * because the relocated copy then sits at the top of the file where a tail
+	 * truncate cannot reach it (verified: giveback prev=3095 packed=3824 back=3824,
+	 * nothing recovered).
+	 */
+	return usable >= live;
+}
+
 static bool
 bm25_index_is_compacted(Relation index)
 {
@@ -6160,7 +6230,20 @@ bm25_vacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 				 * converges toward its floor across successive cycles WITHOUT the
 				 * operator scheduling anything.
 				 */
-				if (nblocks > 16 && freeblks > nblocks / 4)
+				/*
+				 * freeblks says there is dead space; bm25_have_recyclable_room()
+				 * says whether it can actually be REUSED yet.  Without the second
+				 * question a pass run right after this cleanup's own merge finds
+				 * every freed page still visible to our transaction, extends
+				 * instead of reclaiming, and grows the index ~3x the live size on
+				 * every cycle.  Deferring costs nothing: the next cycle runs in a
+				 * new transaction where those pages have become removable, and
+				 * then the compaction actually shrinks the file.  That is what
+				 * makes repeated cleanup converge with no operator action.
+				 */
+				if (nblocks > 16 && freeblks > nblocks / 4 &&
+					bm25_have_recyclable_room(info->index,
+											  nblocks - freeblks))
 					(void) bm25_vacuum_compact(info->index);
 			}
 		}

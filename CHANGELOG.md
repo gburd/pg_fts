@@ -2,6 +2,31 @@
 
 All notable changes to pg_fts are documented here.
 
+## Unreleased
+
+### Fixed
+
+- **Index cleanup no longer grows the index.** `bm25_vacuum_compact` now skips a
+  compaction pass when its free space is not yet *reusable*. `bm25_page_recyclable()`
+  gates candidates on `GlobalVisCheckRemovableXid()`, so pages freed by the same
+  cleanup's merge are all rejected; the pass would then relocate live data upward and
+  reclaim nothing, leaving the relocated copy as the new tail where a truncate cannot
+  reach it. Measured before: 35 -> 52 -> 69 MB across three cleanups with no rows added
+  (~17 MB/pass, unbounded). After: flat. The free-space map is refreshed before counting,
+  since stale records overstate the live size and would suppress compaction permanently.
+- Cleanup and merge paths gained two earlier fixes (2026-09-12): a merge truncates the
+  free tail it creates, and cleanup truncates unconditionally before deciding whether a
+  fuller repack is worthwhile, cutting per-pass growth ~6x.
+
+### Documentation
+
+- README and the SGML manual no longer recommend scheduling a periodic `fts_vacuum`.
+  Measured at 1M docs with autovacuum on and no manual maintenance: flat at 511 MB over
+  five cleanups, flat at 875 MB over six insert+delete churn rounds, and 875 -> 106 MB
+  (8.3x) after deleting half the table, with queries served throughout and results exact.
+  `fts_vacuum` remains useful for a one-off tighter reclaim.
+  See `bench/RESULTS_P1_SCALE_AB_2026-09-13.md`.
+
 ## 1.6.1
 
 **P0 fix: `VACUUM` could consume CPU indefinitely and never complete on an index

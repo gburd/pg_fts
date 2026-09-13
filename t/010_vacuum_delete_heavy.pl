@@ -158,24 +158,46 @@ $node->safe_psql('postgres', 'VACUUM (INDEX_CLEANUP on) docs');
 my $m2 = idxmb();
 $node->safe_psql('postgres', 'VACUUM (INDEX_CLEANUP on) docs');
 my $m3 = idxmb();
-note("index MB after three VACUUMs: $m1, $m2, $m3");
-# BOUNDED, NOT ZERO -- deliberately, and here is exactly why.
+diag("index MB after three VACUUMs: $m1, $m2, $m3");
+
+# The deferral must not become a permanent skip: an index that has real reclaimable
+# bloat must still SHRINK.  Delete most of the corpus, then let repeated cleanup work.
+# This is the other half of the requirement -- bounded AND still able to reclaim.
+$node->safe_psql('postgres', q{DELETE FROM docs WHERE id >= 5000000 AND id % 4 <> 0});
+my $mb_del = idxmb();
+for (1 .. 4) { $node->safe_psql('postgres', 'VACUUM (INDEX_CLEANUP on) docs'); }
+my $mb_rec = idxmb();
+diag("after delete=${mb_del}MB, after 4 cleanups=${mb_rec}MB");
+# Does it CONVERGE, or keep climbing?  Run four more cleanups and compare.  Also burn a
+# few transactions in between: pages freed by an earlier cleanup only become recyclable
+# once the global visibility horizon advances past the freeing xid, which back-to-back
+# VACUUMs in a quiet test cluster may not do but a live system does continuously.
+for (1 .. 6) { $node->safe_psql('postgres', 'SELECT txid_current()'); }
+for (1 .. 4) { $node->safe_psql('postgres', 'VACUUM (INDEX_CLEANUP on) docs'); }
+my $mb_rec2 = idxmb();
+diag("after delete=${mb_del}MB, +4 cleanups=${mb_rec}MB, +6 txns +4 more=${mb_rec2}MB");
+cmp_ok($mb_rec2, '<=', $mb_rec,
+    "cleanup converges after deletes (${mb_rec}MB -> ${mb_rec2}MB, no further growth)");
+# NO GROWTH.  This is the requirement: an index must stay bounded under repeated
+# cleanup, online, with no operator scheduling and no downtime.
 #
-# Repeated cleanup on an unchanged table still grows the index (~17 MB/pass here).
-# Four attempts to fix it are recorded in bench/RESULTS_SELF_LIMITING_2026-09-12.md; the
-# fourth finally located the writer, and it is NOT the vacuum path: instrumenting every
-# stage inside bm25_vacuumcleanup shows start==flush==merge, i.e. ZERO growth within
-# cleanup, while the pre-cleanup block count climbs between calls.  The growth therefore
-# happens outside VACUUM entirely.
+# What used to happen here, measured: 35 -> 52 -> 69 MB, ~17 MB per pass, unbounded.
+# bm25_vacuum_compact can only shrink by REUSING free pages, and
+# bm25_page_recyclable() gates each candidate on GlobalVisCheckRemovableXid() -- so
+# pages freed by the merge that cleanup itself just ran are all still visible to our
+# own transaction, every candidate is rejected, the allocator extends instead, and the
+# pass copies the live data to fresh blocks while reclaiming nothing:
+#   nblocks=2366 freeblks=1500 gate=1 -> 4553 -> 6740 -> 8927  (+2187 = ~3x live, each pass)
+# while a pass whose free pages came from an OLDER transaction shrank 1908 -> 615 fine.
 #
-# So this asserts what is defensible today -- growth per pass is a bounded fraction of
-# the live index, not unbounded accumulation -- and should be tightened to +/-2 MB once
-# the out-of-vacuum writer is fixed.
-my $slack = int($m1 * 0.6) + 4;
-cmp_ok($m2, '<=', $m1 + $slack,
-    "second cleanup growth is bounded (${m1}MB -> ${m2}MB, slack ${slack}MB)");
-cmp_ok($m3, '<=', $m1 + 2 * $slack,
-    "third cleanup growth stays bounded (${m1}MB -> ${m3}MB)");
+# The fix asks the second question (bm25_have_recyclable_room) and defers the pass when
+# the space is not reusable yet; the next cycle, in a new transaction, reclaims properly.
+#
+# 2 MB of tolerance covers page-level rounding, not a per-pass extension.
+cmp_ok($m2, '<=', $m1 + 2,
+    "a second cleanup does not grow the index (${m1}MB -> ${m2}MB)");
+cmp_ok($m3, '<=', $m1 + 2,
+    "a third cleanup does not grow the index (${m1}MB -> ${m3}MB)");
 
 # And results stay exact through all of it.
 my $i3 = $node->safe_psql('postgres',

@@ -616,18 +616,27 @@ SELECT * FROM messages
   </para>
 
   <para>
-   <emphasis role="bold">Autovacuum now keeps the index largely in check, but a periodic
-   <function>fts_vacuum</function> is still recommended.</emphasis>  A merge truncates the
-   free tail it creates, and autovacuum's index cleanup truncates unconditionally before
-   deciding whether a fuller repack is worthwhile; together these cut growth per vacuum
-   pass by roughly 6&#215;.  Truncation is safe while the index is online and under
-   <literal>ShareUpdateExclusiveLock</literal>, because scans treat an out-of-range block
-   as end-of-chain.  A residual per-pass growth remains: compaction extends the file by
-   the live data size so the freed pages form one contiguous region, then packs the data
-   back down &mdash; so a pass that is interrupted (autovacuum yields to any conflicting
-   lock request) leaves that extension behind, measured at about 11&nbsp;MB per pass on a
-   small index with no rows added.  Until compaction shrinks monotonically, schedule a
-   periodic <function>fts_vacuum</function> if you need the index held at its floor.  See
+   <emphasis role="bold">Unattended autovacuum holds the index bounded and reclaims
+   after deletes; no scheduled maintenance is required.</emphasis>  Measured at one
+   million documents with autovacuum enabled and no manual maintenance whatsoever: five
+   consecutive cleanups with nothing changed stayed flat at 511&nbsp;MB, six rounds of
+   insert-plus-delete churn stayed flat at 875&nbsp;MB, and after deleting half the table
+   cleanup brought the index from 875&nbsp;MB to 106&nbsp;MB (8.3&#215;) with queries
+   served throughout and results exact.  Truncation is safe while the index is online
+   under <literal>ShareUpdateExclusiveLock</literal>, because scans treat an out-of-range
+   block as end-of-chain.
+  </para>
+
+  <para>
+   Earlier releases grew on every vacuum pass.  Two fixes on 2026-09-12 (a merge
+   truncates the free tail it creates; cleanup truncates unconditionally before deciding
+   whether a fuller repack is worthwhile) cut that by roughly 6&#215;, and a further fix
+   on 2026-09-13 removed the remainder at small scale: a compaction pass is now skipped
+   when its free space is not yet reusable.  Without that check, a pass running straight
+   after a merge relocates the live data upward and reclaims nothing, because the pages
+   the merge just freed are still visible to the pass's own transaction and so fail the
+   recyclability test.  See
+   <filename>bench/RESULTS_P1_SCALE_AB_2026-09-13.md</filename> and
    <filename>bench/RESULTS_SELF_LIMITING_2026-09-12.md</filename>.
   </para>
 

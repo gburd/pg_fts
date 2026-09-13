@@ -331,15 +331,20 @@ Query execution
     > the file, the freed pages beneath it need the compaction pass to move live
     > data down before anything can be truncated.
     >
-    > **Autovacuum keeps the index far better behaved than it used to, but a periodic
-    > `fts_vacuum` is still worth scheduling.** As of 2026-09-12 a merge truncates the
-    > free tail it creates and autovacuum's cleanup truncates unconditionally, which cut
-    > per-vacuum-pass growth about **6x**. Residual growth remains: compaction extends the
-    > file by the live size before packing it back down, so an interrupted pass still
-    > leaves that behind — measured at ~11 MB per pass on a small index with no rows added
-    > (`bench/RESULTS_SELF_LIMITING_2026-09-12.md`). Until compaction shrinks
-    > monotonically, a periodic `fts_vacuum` (cron or `pg_cron`) is the reliable way to
-    > hold an index at its floor.
+    > **Unattended autovacuum holds the index bounded, and reclaims after deletes — no
+    > scheduled maintenance required.** Measured at 1M docs with autovacuum on and no
+    > manual maintenance at all: five consecutive cleanups with nothing changed stayed
+    > **flat at 511 MB**; six rounds of insert + delete churn stayed **flat at 875 MB**;
+    > and after deleting half the table, cleanup brought the index **875 → 106 MB (8.3×)**
+    > with queries served throughout and results exact
+    > (`bench/RESULTS_P1_SCALE_AB_2026-09-13.md`).
+    >
+    > Earlier releases did grow per vacuum pass. Two 2026-09-12 fixes (a merge truncates
+    > the free tail it creates; cleanup truncates unconditionally) cut that ~**6×**, and a
+    > 2026-09-13 fix removed the rest at small scale by skipping a compaction pass whose
+    > free space is not yet reusable — a pass run right after a merge would otherwise
+    > relocate live data upward and reclaim nothing, since the pages it just freed are
+    > still visible to its own transaction.
     >
     > `fts_vacuum` is still useful for a **one-off** tighter reclaim — it always does the
     > full repack, reaching ~3x smaller than the automatic steady state — so it is worth
