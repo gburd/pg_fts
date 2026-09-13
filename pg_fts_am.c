@@ -1995,13 +1995,32 @@ bm25_doclens_load(Relation index, BlockNumber doclenstart, BM25Doclens *d)
 
 			if (d->n + (int) bh->count > cap)
 			{
+				/*
+				 * This array holds EVERY docid in the segment, so at field scale it
+				 * exceeds MaxAllocSize and plain palloc/repalloc throws "invalid
+				 * memory alloc request size".  That is not a soft failure: this runs
+				 * from merge_source_open(), so once an index is big enough EVERY
+				 * merge, autovacuum cleanup and fts_vacuum fails, and the index can
+				 * never be vacuumed or reclaimed again.
+				 *
+				 * Reproduced at ~1.3 M docs x 1660 terms/doc (the reported field
+				 * shape): "invalid memory alloc request size 2550425176" from
+				 * fts_vacuum AND from every autovacuum cleanup, matching the field's
+				 * "VACUUM/merge do not reclaim bloat" report.  See
+				 * bench/RESULTS_FIELDSHAPE_2026-09-13.md.
+				 *
+				 * The huge-allocation macros already existed and were used for the
+				 * per-term posting arrays; this site was simply missed.
+				 */
 				cap = Max(cap * 2, d->n + (int) bh->count + 128);
 				d->docids = d->docids
-					? (uint64 *) repalloc(d->docids, (Size) cap * sizeof(uint64))
-					: (uint64 *) palloc((Size) cap * sizeof(uint64));
+					? (uint64 *) FTS_REALLOC_MAYBE_HUGE(d->docids,
+														(Size) cap * sizeof(uint64))
+					: (uint64 *) FTS_ALLOC_MAYBE_HUGE((Size) cap * sizeof(uint64));
 				d->bytes = d->bytes
-					? (uint8 *) repalloc(d->bytes, (Size) cap * sizeof(uint8))
-					: (uint8 *) palloc((Size) cap * sizeof(uint8));
+					? (uint8 *) FTS_REALLOC_MAYBE_HUGE(d->bytes,
+													   (Size) cap * sizeof(uint8))
+					: (uint8 *) FTS_ALLOC_MAYBE_HUGE((Size) cap * sizeof(uint8));
 			}
 			acc = first_docid;
 			for (j = 0; j < (int) bh->count; j++)
@@ -3080,20 +3099,55 @@ merge_source_load_page(MergeSource *src)
 		buffer = ReadBuffer(src->index, src->nextblk);
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buffer);
-		ptr = (char *) PageGetContents(page);
-		end = (char *) page + ((PageHeader) page)->pd_lower;
+		{
+			/*
+			 * Validate pd_lower as an INTEGER before forming a pointer from it.
+			 * `page + pd_lower` for a corrupt pd_lower is itself undefined behaviour
+			 * -- the fuzz model of this loop tripped UBSan ("pointer index expression
+			 * ... overflowed") when the clamp was written as a pointer comparison, so
+			 * both are written this way.
+			 */
+			uint32		lower = ((PageHeader) page)->pd_lower;
+			Size		contents = (Size) ((char *) PageGetContents(page) - (char *) page);
+
+			if ((Size) lower > (Size) BLCKSZ || (Size) lower < contents)
+				lower = (uint32) contents;
+			ptr = (char *) page + contents;
+			end = (char *) page + lower;
+		}
 		next = BM25PageGetOpaque(page)->nextblk;
 
+		/*
+		 * BOUNDS-GUARD pd_lower before walking, same contract as the posting and
+		 * doclen readers.  pd_lower is read off the page and a recycled or corrupt
+		 * page can report a bogus value; the walk then runs past the page, counts
+		 * garbage entries with untrusted de->termlen, and the doubling below asks for
+		 * an absurd allocation.  Observed as "invalid memory alloc request size
+		 * 3406063183" (~142 M MergeDictTerm entries, where one 8 kB page can hold at
+		 * most a few hundred) raised from this function, which is reached from
+		 * bm25_merge_segments_streaming -- so it killed every merge, every autovacuum
+		 * cleanup AND fts_vacuum on the affected index, matching the field's
+		 * "VACUUM/merge do not reclaim bloat" report.
+		 * Isolated with gdb; see bench/RESULTS_FIELDSHAPE_2026-09-13.md.
+		 */
 		/* count entries + term bytes on this page (bounded by BLCKSZ) */
 		n = 0;
 		used = 0;
 		while (ptr < end)
 		{
 			BM25DictEntry *de = (BM25DictEntry *) ptr;
+			Size		step;
 
+			/* a truncated trailing entry, or one whose termlen runs past the page
+			 * end, means the page is not a well-formed dict page: stop here. */
+			if (ptr + offsetof(BM25DictEntry, term) > end)
+				break;
+			step = MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
+			if (step == 0 || ptr + step > end)
+				break;
 			n++;
 			used += de->termlen;
-			ptr += MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
+			ptr += step;
 		}
 
 		if (n > src->pagecap)
@@ -3113,14 +3167,29 @@ merge_source_load_page(MergeSource *src)
 				: palloc(src->bytescap);
 		}
 
+		/*
+		 * Second walk MUST apply the identical bounds to the first, or it writes past
+		 * the page[]/pagebytes the counting pass sized.  `end` is already clamped
+		 * above; repeat the per-entry checks for the same reason.
+		 */
 		ptr = (char *) PageGetContents(page);
 		used = 0;
 		n = 0;
-		while (ptr < end)
+		while (ptr < end && n < src->pagecap)
 		{
 			BM25DictEntry *de = (BM25DictEntry *) ptr;
-			MergeDictTerm *mt = &src->page[n++];
+			MergeDictTerm *mt;
+			Size		step;
 
+			if (ptr + offsetof(BM25DictEntry, term) > end)
+				break;
+			step = MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
+			if (step == 0 || ptr + step > end)
+				break;
+			if (used + de->termlen > src->bytescap)
+				break;			/* cannot happen given the sizing above; belt-and-braces */
+
+			mt = &src->page[n++];
 			mt->termlen = de->termlen;
 			mt->df = de->df;
 			mt->firstposting = de->firstposting;
@@ -3128,7 +3197,7 @@ merge_source_load_page(MergeSource *src)
 			mt->term = src->pagebytes + used;
 			memcpy(mt->term, de->term, de->termlen);
 			used += de->termlen;
-			ptr += MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
+			ptr += step;
 		}
 		src->npage = n;
 		src->nextblk = next;
@@ -6000,9 +6069,15 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 			{
 				if (ncarry >= carrycap)
 				{
+					/* sized by tombstone count: huge-safe, same reason as the
+					 * doclen resident array (a delete-heavy field-scale index can
+					 * exceed MaxAllocSize/8 = 134M entries, and this runs in
+					 * bulkdelete, so failing here also blocks all reclaim). */
 					carrycap = carrycap ? carrycap * 2 : 1024;
-					carry = carry ? repalloc(carry, carrycap * sizeof(uint64))
-						: palloc(carrycap * sizeof(uint64));
+					carry = carry
+						? FTS_REALLOC_MAYBE_HUGE(carry,
+												 (Size) carrycap * sizeof(uint64))
+						: FTS_ALLOC_MAYBE_HUGE((Size) carrycap * sizeof(uint64));
 				}
 				carry[ncarry++] = dv;
 			}
@@ -6057,9 +6132,11 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 				{
 					if (nnew >= newcap)
 					{
-						newcap = newcap ? newcap * 2 : 1024;
-						newdead = newdead ? repalloc(newdead, newcap * sizeof(uint64))
-							: palloc(newcap * sizeof(uint64));
+						newcap = newcap ? newcap * 2 : 1024;	/* huge-safe: see carry above */
+						newdead = newdead
+							? FTS_REALLOC_MAYBE_HUGE(newdead,
+													 (Size) newcap * sizeof(uint64))
+							: FTS_ALLOC_MAYBE_HUGE((Size) newcap * sizeof(uint64));
 					}
 					newdead[nnew++] = v;
 					tuples_removed++;

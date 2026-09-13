@@ -44,6 +44,7 @@
  * No hegel/cmocka: deterministic PRNG loop, fixed seed, reproducible, zero deps.
  */
 #include <assert.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -406,6 +407,115 @@ fuzz_blocks(void)
 	free(page);
 }
 
+
+/*
+ * ---------------------------------------------------------------------------
+ * Modeled dict-page walk -- the merge_source_load_page() sizing loop.
+ *
+ * REGRESSION: this loop took `end` from the page's pd_lower with NO validation
+ * and stepped by an untrusted de->termlen.  A recycled/corrupt page made it run
+ * past the page and count garbage entries, and the caller's doubling then asked
+ * for an impossible allocation -- observed in production shape as
+ * "invalid memory alloc request size 3406063183" (~142M entries, where one 8kB
+ * page holds a few hundred), which killed EVERY merge, autovacuum cleanup and
+ * fts_vacuum on the index.  See bench/RESULTS_FIELDSHAPE_2026-09-13.md.
+ *
+ * Property: for ANY page bytes and ANY pd_lower, the walk must stay inside the
+ * page and must never report more entries than a page can physically hold.
+ * ---------------------------------------------------------------------------
+ */
+#define FLEXIBLE_ARRAY_MEMBER_MODEL 1
+
+typedef struct DictEntry
+{
+	uint32_t	termlen;
+	uint32_t	df;
+	uint32_t	firstposting;
+	uint32_t	firstoffset;
+	char		term[FLEXIBLE_ARRAY_MEMBER_MODEL];
+} DictEntry;
+
+#define DICT_HDR_SZ  offsetof(DictEntry, term)
+#define MODEL_MAXALIGN(x) (((x) + 7) & ~((size_t) 7))
+
+/* Returns entries counted; must never exceed the page's physical capacity. */
+static int
+dict_walk_inner(const unsigned char *page, size_t pd_lower, size_t contents_off,
+				size_t *used_out)
+{
+	const unsigned char *ptr = page + contents_off;
+	const unsigned char *end;
+	int			n = 0;
+	size_t		used = 0;
+
+	/*
+	 * Validate pd_lower as an INTEGER before forming any pointer from it.
+	 * `page + pd_lower` for an absurd pd_lower is itself undefined behaviour
+	 * (UBSan: "pointer index expression ... overflowed"), so the clamp cannot be
+	 * written as a pointer comparison -- which is how the real code must do it too.
+	 */
+	if (pd_lower > PAGESZ || pd_lower < contents_off)
+		pd_lower = contents_off;
+	end = page + pd_lower;
+
+	while (ptr < end)
+	{
+		const DictEntry *de = (const DictEntry *) ptr;
+		size_t		step;
+
+		if (ptr + DICT_HDR_SZ > end)
+			break;
+		step = MODEL_MAXALIGN(DICT_HDR_SZ + de->termlen);
+		if (step == 0 || ptr + step > end)
+			break;
+		n++;
+		used += de->termlen;
+		ptr += step;
+	}
+	if (used_out)
+		*used_out = used;
+	return n;
+}
+
+static void
+fuzz_dict_walk(void)
+{
+	int			iter;
+	unsigned char *page = (unsigned char *) malloc(PAGESZ);
+	const int	max_entries = (int) (PAGESZ / MODEL_MAXALIGN(DICT_HDR_SZ));
+
+	assert(page != NULL);
+
+	for (iter = 0; iter < 300000; iter++)
+	{
+		size_t		contents_off = 24;	/* past the modeled page header */
+		size_t		pd_lower;
+		size_t		used = 0;
+		size_t		k;
+		int			n;
+
+		for (k = 0; k < PAGESZ; k++)
+			page[k] = (unsigned char) rng_next();
+
+		/* Mix of plausible, absurd and hostile pd_lower values -- including ones
+		 * far past the page, which is exactly the corrupt/recycled case. */
+		switch (rng_next() % 5)
+		{
+			case 0: pd_lower = rng_next() % (PAGESZ + 1); break;
+			case 1: pd_lower = PAGESZ; break;
+			case 2: pd_lower = PAGESZ + (rng_next() % (1u << 20)); break;
+			case 3: pd_lower = 0; break;
+			default: pd_lower = (size_t) rng_next(); break;
+		}
+
+		n = dict_walk_inner(page, pd_lower, contents_off, &used);
+		assert(n >= 0);
+		assert(n <= max_entries);	/* the runaway-count property */
+		assert(used <= PAGESZ);
+	}
+	free(page);
+}
+
 /*
  * Also fuzz the primitive directly at the exact overflow site: unpack an
  * attacker-controlled count into a fixed 128-array (redzoned by ASan stack
@@ -442,6 +552,7 @@ main(void)
 {
 	rng_seed(0xB10CC0DEB10CC0DEULL);	/* fixed seed: reproducible */
 	fuzz_blocks();
+	fuzz_dict_walk();
 	fuzz_primitive();
 #if defined(FUZZ_NO_CLAMP) || defined(FUZZ_RANDOM_STREAM) || defined(FUZZ_SIGNED_COUNT)
 	printf("fuzz_block: reached end in a TEETH build (no clamp / random stream / "

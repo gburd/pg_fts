@@ -2,30 +2,67 @@
 
 All notable changes to pg_fts are documented here.
 
-## Unreleased
+## 1.7.0 - 2026-09-13
+
+Two field-blocking fixes found by reproducing the reported ~2.87M-doc email-body index
+shape. No on-disk format change; **no REINDEX required**.
 
 ### Fixed
 
-- **Index cleanup no longer grows the index.** `bm25_vacuum_compact` now skips a
-  compaction pass when its free space is not yet *reusable*. `bm25_page_recyclable()`
-  gates candidates on `GlobalVisCheckRemovableXid()`, so pages freed by the same
-  cleanup's merge are all rejected; the pass would then relocate live data upward and
-  reclaim nothing, leaving the relocated copy as the new tail where a truncate cannot
-  reach it. Measured before: 35 -> 52 -> 69 MB across three cleanups with no rows added
-  (~17 MB/pass, unbounded). After: flat. The free-space map is refreshed before counting,
-  since stale records overstate the live size and would suppress compaction permanently.
-- Cleanup and merge paths gained two earlier fixes (2026-09-12): a merge truncates the
-  free tail it creates, and cleanup truncates unconditionally before deciding whether a
-  fuller repack is worthwhile, cutting per-pass growth ~6x.
+- **An index could become permanently unvacuumable.** The dict-page walk in
+  `merge_source_load_page` took its end bound from the page's `pd_lower` with no
+  validation, and stepped by an untrusted `termlen`. On a recycled or malformed page the
+  walk ran past the page and counted garbage entries, so the caller's doubling asked for an
+  impossible allocation:
+
+  ```
+  ERROR:  invalid memory alloc request size 3406063183
+  ```
+
+  Because this runs under `bm25_merge_segments_streaming`, it failed **every merge, every
+  autovacuum cleanup, and `fts_vacuum`** — the index could never be vacuumed or reclaimed
+  again. This is the likely cause of the reported "VACUUM/merge do not reclaim bloat".
+  Isolated with `gdb`; both the counting and filling walks are now bounds-checked, and
+  `pd_lower` is validated as an integer before any pointer is formed from it (forming
+  `page + pd_lower` for a corrupt value is itself undefined behaviour — the new fuzz target
+  for this loop caught that with UBSan).
+- **Huge-allocation gaps** in `bm25_doclens_load`'s resident docid array and `bulkdelete`'s
+  `carry`/`newdead` tombstone arrays, which used plain `palloc`/`repalloc` and so failed the
+  same way on a large or delete-heavy index. The `FTS_ALLOC_MAYBE_HUGE` macros already
+  existed for the per-term posting arrays; these sites were missed.
+- **Index cleanup no longer grows the index.** `bm25_vacuum_compact` now skips a compaction
+  pass when its free space is not yet *reusable*: `bm25_page_recyclable()` gates on
+  `GlobalVisCheckRemovableXid()`, so pages freed by the same cleanup's merge are all
+  rejected, and the pass would relocate live data upward while reclaiming nothing. Measured
+  before: 35 → 52 → 69 MB across three cleanups with no rows added. After: flat.
+
+### Added
+
+- Fuzz target for the dict-page walk (`test/fuzz/fuzz_block.c`), asserting the walk stays
+  inside the page and can never report more entries than a page can physically hold, for
+  arbitrary page bytes and arbitrary `pd_lower`.
+- `t/010_vacuum_delete_heavy.pl` now asserts **no growth** across repeated cleanups, and
+  additionally that cleanup still **reclaims** after deletes.
+
+### Known issues
+
+- **A transient bloat spike at `nsegments=8`**, reproduced at field shape: an index went
+  299 MB → **66,796 MB** → 1,016 MB across three churn rounds, settling at 1,480 MB. The
+  index is not permanently bloated — it inflates ~45× while segments accumulate and
+  collapses once merges catch up, so an index sampled during that window looks like
+  unbounded bloat. Not yet fixed.
+- **`bm25_free_page` emits one WAL record per page.** `fts_vacuum` on a 3.8 GB index ran
+  113+ minutes without finishing (progressing, not hung): ~489k pages × a full
+  `GenericXLog` delta each. Needs WAL batching. Not yet fixed.
+
+Both are documented with reproductions in `bench/RESULTS_FIELDSHAPE_2026-09-13.md`.
 
 ### Documentation
 
 - README and the SGML manual no longer recommend scheduling a periodic `fts_vacuum`.
   Measured at 1M docs with autovacuum on and no manual maintenance: flat at 511 MB over
-  five cleanups, flat at 875 MB over six insert+delete churn rounds, and 875 -> 106 MB
-  (8.3x) after deleting half the table, with queries served throughout and results exact.
-  `fts_vacuum` remains useful for a one-off tighter reclaim.
-  See `bench/RESULTS_P1_SCALE_AB_2026-09-13.md`.
+  five cleanups, flat at 875 MB over six churn rounds, and 875 → 106 MB after deleting half
+  the table, with results exact throughout.
 
 ## 1.6.1
 
