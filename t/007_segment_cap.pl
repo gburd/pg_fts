@@ -118,5 +118,20 @@ my $nseg = $node->safe_psql('postgres', q{SELECT fts_index_nsegments('docs_bm25'
 diag("final segments = $nseg (hard cap 128), rows = $total");
 cmp_ok($nseg, '<=', 128, 'live segment count stayed within the hard cap');
 
+# ...and comfortably under it, not merely inside it.
+#
+# The insert-time merge is deliberately NOT run on every insert (it would rewrite a
+# whole run per oversized document: measured 23-30 index pages extended per document at
+# 1660 terms/doc).  It is gated on there being BM25_MERGE_FANOUT small runs waiting.
+# That gate is what this bound protects: if deferral ever stops keeping up, the
+# directory creeps toward the cap and the index reaches the state a field deployment hit
+# (8 -> 128 segments in ~1h, after which it could neither merge nor VACUUM) -- and a
+# `<= 128` assertion would not notice until it was already too late.
+#
+# Measured with the gate in place, under one-row-per-transaction ingest (the worst case
+# for segment minting): max 15 segments over 4,000 single-row transactions.
+# See bench/RESULTS_KNOWN_ISSUES_2026-09-14.md.
+cmp_ok($nseg, '<=', 64, 'segment count stays well under the cap, not just inside it');
+
 $node->stop;
 done_testing();

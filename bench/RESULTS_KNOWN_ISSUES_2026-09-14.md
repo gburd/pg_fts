@@ -103,3 +103,83 @@ and 1.7.0 only fixed one instance of it.
 - Finding 4: **not a bug.** Retracted.
 - Finding 3: **confirmed, worse than published, cause unknown**, four hypotheses eliminated,
   next measurement specified. No unproven fix shipped.
+
+
+---
+
+# The measurement, and a 31% mitigation (2026-09-14, later same day)
+
+Ran the measurement specified above — a counter on each of `bm25_new_buffer`'s outcomes,
+reported through a SQL function so `log_min_messages` could not silence it.
+
+## First: my `probe=0 reject=0` reading was a harness artifact
+
+The per-batch tallies all came back zero while the index grew 5 GB per batch, which I
+briefly read as "`bm25_new_buffer` is never called". It is called constantly. **The counters
+are per-backend statics, and every `psql -c` is a new backend**, so each batch read a fresh
+backend's zeros. Re-running the insert and the counter read *in one session*:
+
+```
+ 50 docs: ext= 1181 ( 23.6/doc) norecyc= 785 reuse=0
+100 docs: ext= 2539 ( 25.4/doc) norecyc=1521 reuse=64
+200 docs: ext= 5924 ( 29.6/doc) norecyc=3169 reuse=16
+```
+
+That also means **hypothesis 3 was right all along** and I discarded it on the same
+artifact. Three harness self-owns in this investigation (`%%` in SQL, `log_min_messages`,
+per-backend statics), each of which produced a confident wrong reading.
+
+## What is actually happening
+
+**23–30 index pages extended per document, linear**, against roughly 2 pages of real
+postings — a ~12–15× write amplification with page reuse at ~0.3%.
+
+`norecyc` (3,169 of 5,924) is the binding constraint: freed pages **are** found and then
+**rejected** by `bm25_page_recyclable()`, because the pages were freed by the inserting
+transaction itself and `GlobalVisCheckRemovableXid()` cannot yet clear them. That gate is
+correct and must stand — its comment records a real SIGSEGV from bypassing it (a concurrent
+reader mid-copy of a livedocs blob). So **in-transaction reuse is impossible by
+construction**, and the only available lever is to rewrite less often.
+
+The rewrites come from write amplification at the smallest possible unit: at 1,660
+terms/doc every document exceeds one pending page, so each one mints a **one-document
+segment**, and the eager insert-time merge immediately folds it in — one document in, a
+whole level-0 run rewritten out.
+
+## The change
+
+Gate the insert-time merge on there being `BM25_MERGE_FANOUT` small runs waiting, instead
+of merging after every insert. Below that threshold the leveled compactor would find no
+level over capacity and be a no-op anyway, so this skips work without changing behaviour.
+
+| | before | after |
+|---|---|---|
+| growth over 6 × 5,000-doc batches | 31,386 MB | **21,723 MB** |
+| peak index size | 31,537 MB | **21,874 MB** |
+| size after one `fts_vacuum` | 124 MB | **124 MB** (identical) |
+| nsegments during churn | 8 | 7–8 |
+
+**31% of the growth removed**, with the final compacted size byte-identical.
+
+## Verifying the safety property I put at risk
+
+The eager merge exists because a field deployment went 8 → 128 segments in ~1 h and then
+could neither merge nor VACUUM. Deferring merges risks exactly that, so it was measured
+under the worst case for segment minting — **one row per transaction, 4,000 transactions**:
+
+```
+round8  (800 rows):  nseg=7  max=12
+round40 (4000 rows): nseg=14 max=15
+SEGCAP max_nsegments=15 (hard cap 128) -- OK
+```
+
+Max 15 against a cap of 128, index 124 → 154 MB. `t/007_segment_cap.pl` now asserts
+`<= 64` rather than `<= 128`, because a bound at the hard cap would only fail once the
+index was already in the unrecoverable state.
+
+## Honest status: mitigation, not fix
+
+Growth is still ~3.7 GB per 5,000 documents, and `fts_vacuum` is still required after bulk
+ingest. Eliminating it means moving the merge out of the inserting transaction so its freed
+pages can pass the XID gate — a design change, not a release-day edit. The known issue stays
+open, now with its mechanism measured rather than guessed.

@@ -2,6 +2,49 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.7.2 - 2026-09-14
+
+Measured the cause of the bloat known issue and removed ~31% of it. No on-disk format
+change; **no REINDEX required**.
+
+### Fixed
+
+- **Bulk ingest grows the index ~31% less.** At high terms-per-document every document
+  exceeds one pending page, so each one mints a **one-document segment** — and the
+  insert-time merge then folded it in immediately, rewriting a whole level-0 run for every
+  single document. Measured: **23–30 index pages extended per document** (linear) against
+  roughly 2 pages of actual postings, a ~12–15× write amplification with page reuse at
+  ~0.3%.
+
+  The merge is now gated on there being `BM25_MERGE_FANOUT` small runs waiting. Below that
+  threshold the leveled compactor would find no level over capacity and do nothing anyway,
+  so this skips work without changing behaviour. Over six 5,000-document batches the index
+  peaked at **21,874 MB instead of 31,537 MB**, and the size after one `fts_vacuum` is
+  byte-identical (124 MB).
+
+  The segment-directory bound this protects was re-verified under the worst case for
+  segment minting — one row per transaction, 4,000 transactions — reaching a maximum of
+  **15 segments against the hard cap of 128**. `t/007_segment_cap.pl` now asserts `<= 64`
+  rather than `<= 128`, since a bound at the cap only fails once the index is already in
+  the state that motivated the eager merge (a field deployment went 8 → 128 segments in
+  ~1 h and could then neither merge nor VACUUM).
+
+### Known issues
+
+- **The bloat is reduced, not eliminated.** Growth is still ~3.7 GB per 5,000 documents at
+  field shape, and `fts_vacuum` after bulk ingest is still recommended (it is fast — tens of
+  seconds for millions of pages — and recovers the space completely).
+
+  The mechanism is now measured rather than guessed: freed pages **are** found and then
+  **rejected** by `bm25_page_recyclable()`, because they were freed by the inserting
+  transaction itself and `GlobalVisCheckRemovableXid()` cannot yet clear them
+  (`norecyc=3,169` of 5,924 allocations). That gate is correct and must stand — bypassing it
+  previously corrupted a concurrent reader. So in-transaction reuse is impossible by
+  construction, and fully fixing this means moving the merge out of the inserting
+  transaction: a design change, not a point-release edit.
+
+Measurements: `bench/RESULTS_KNOWN_ISSUES_2026-09-14.md`.
+
 ## 1.7.1 - 2026-09-14
 
 Follow-up to 1.7.0's page-corruption fix, plus a **retraction of one of 1.7.0's known

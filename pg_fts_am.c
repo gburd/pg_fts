@@ -1198,6 +1198,7 @@ bm25_new_buffer(Relation index)
 {
 	Buffer		buffer;
 
+
 	/*
 	 * Low-bias reuse: during a compaction, prefer the lowest free block so
 	 * live pages pack at the front of the file.
@@ -5452,6 +5453,47 @@ bm25_buildempty(Relation index)
  * long Wikipedia articles) can be indexed.  Rare, so building a whole segment
  * per such document is acceptable.
  */
+/*
+ * Are there enough small segments to make an insert-time merge worth its rewrite?
+ *
+ * Reading the metapage is cheap; rewriting a run is not.  Returning false here just
+ * defers the merge to a later insert (or to vacuum/fts_merge), so the directory is
+ * still bounded -- it only stops us rewriting a whole run for every single document.
+ *
+ * The threshold is the fan-in the leveled compactor would use anyway: below it,
+ * bm25_merge_segments() finds no level over capacity and is a no-op that we can skip
+ * without changing behaviour.  Above it, we merge exactly as before.
+ */
+static bool
+bm25_pending_segments_worth_merging(Relation index)
+{
+	Buffer		buf;
+	BM25MetaPageData meta;
+
+	buf = ReadBuffer(index, BM25_METAPAGE_BLKNO);
+	LockBuffer(buf, BUFFER_LOCK_SHARE);
+	bm25_meta_from_page(BufferGetPage(buf), &meta);
+	UnlockReleaseBuffer(buf);
+
+	/*
+	 * Count runs in the smallest level.  A one-doc segment always lands there, so
+	 * this is the number of un-amortised inserts waiting to be folded in.
+	 */
+	{
+		uint32		i;
+		int			small = 0;
+
+		for (i = 0; i < meta.nsegments; i++)
+		{
+			if (meta.segs[i].dictstart == InvalidBlockNumber)
+				continue;
+			if (bm25_seg_level(meta.segs[i].ndocs - meta.segs[i].ndeleted) == 0)
+				small++;
+		}
+		return small >= BM25_MERGE_FANOUT;
+	}
+}
+
 static void
 bm25_insert_oversized_as_segment(Relation index, FtsDoc doc, ItemPointer tid)
 {
@@ -5518,7 +5560,32 @@ bm25_insert_oversized_as_segment(Relation index, FtsDoc doc, ItemPointer tid)
 	 * an extend-only metapage write and needs no mutex; only the recycling merge
 	 * does.)
 	 */
-	if (bm25_maintenance_lock_conditional(index))
+	/*
+	 * ...but do not merge on EVERY insert.  Each oversized document mints a
+	 * one-document segment, and merging immediately means one document in causes a
+	 * whole level-0 run to be rewritten out: LSM write amplification at the
+	 * smallest possible unit.  Measured at field shape (1660 terms/doc), where every
+	 * document takes this path: **23-30 index pages extended per document**, linear
+	 * in the document count, against roughly 2 pages of actual postings -- a ~12-15x
+	 * amplification with page reuse near zero (16-64 reuses against 5,924 extends).
+	 * The index grew ~5 GB per 5,000 documents to 31,537 MB, and a single later
+	 * fts_vacuum returned it to 124 MB.
+	 *
+	 * The freed pages cannot be reused within the inserting transaction: the
+	 * bm25_page_recyclable() XID gate rejects them because our own transaction can
+	 * still see them (measured: norecyc=3,169 of 5,924 allocations), and that gate
+	 * must stand -- bypassing it previously corrupted a concurrent reader.  So the
+	 * only lever is to rewrite less often.
+	 *
+	 * Letting one-doc segments accumulate to the level's fan-in before merging
+	 * amortises each rewrite over ~FANOUT documents instead of paying it per
+	 * document, while still bounding the directory: the segment count stays below
+	 * the cap that a field deployment hit (8 -> 128 segments in ~1h), because a
+	 * merge still runs as soon as there are enough runs to be worth merging.
+	 * See bench/RESULTS_KNOWN_ISSUES_2026-09-14.md.
+	 */
+	if (bm25_pending_segments_worth_merging(index) &&
+		bm25_maintenance_lock_conditional(index))
 	{
 		PG_TRY();
 		{
