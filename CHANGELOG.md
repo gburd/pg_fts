@@ -2,6 +2,55 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.7.1 - 2026-09-14
+
+Follow-up to 1.7.0's page-corruption fix, plus a **retraction of one of 1.7.0's known
+issues**. No on-disk format change; **no REINDEX required**.
+
+### Fixed
+
+- **The `pd_lower` bounds guard is now applied at every page-read site.** 1.7.0 fixed the
+  dict walk in `merge_source_load_page`, where an unvalidated `pd_lower` made the merge
+  request an impossible allocation and left the index permanently unvacuumable. Auditing the
+  siblings found **eight** sites forming `page + pd_lower` from unvalidated on-page data —
+  including both walks in `bm25_free_segment` and the doclen and posting readers. All now
+  route through one helper, `bm25_page_data_end()`, which validates in the integer domain
+  (forming the pointer at all is undefined behaviour for an absurd value) and returns an
+  empty range for anything out of bounds, so a caller degrades to "this page has nothing to
+  read" rather than walking off the page. 1.7.0 fixed one instance of this defect; this
+  fixes the class.
+
+### Retracted
+
+- **1.7.0's "`bm25_free_page` emits one WAL record per page" known issue was wrong.**
+  Measured directly: `fts_vacuum` freed **8,686,917 pages in 46 seconds — 0.005 ms/page**,
+  roughly 2,800× cheaper than the ~14 ms/page I published, and a second run confirmed it
+  (7,912,288 pages in 33 s). There is no per-page WAL problem and no WAL batching is needed.
+  My figure came from a 113-minute run on an index that had already hit the 1.7.0
+  allocation bug repeatedly; `gdb` showed the backend inside `bm25_free_page` and I turned
+  "where it is" into "why it is slow". A stack sample gives a location, not a bottleneck.
+
+### Known issues
+
+- **The transient bloat spike is confirmed and larger than reported: ~210×, not 45×.**
+  Measured at field shape (1,660 terms/doc), inserting 5,000 documents at a time with no
+  maintenance: the index grows **~5.6 GB per batch with `nsegments` pinned at 8**, reaching
+  61,814 MB after ten batches, and a single `fts_vacuum` returns it to **236 MB**. The space
+  is freed-but-never-reused, not live.
+
+  **The cause is not yet known.** Four hypotheses were eliminated: one-doc segment
+  accumulation (impossible — `BM25_MAX_SEGMENTS` is 128 and the insert path forces a merge),
+  128-segment cycling (`nsegments` sits at 8), freed pages failing the recyclability XID gate
+  (instrumentation showed the free-list scan is never reached: `probe=0 reject=0`), and
+  loop-wide `bm25_alloc_extend_only` (scoping it per merge produced *byte-identical* growth
+  — reverted rather than shipped as a fix). The next step is a counter on each of
+  `bm25_new_buffer`'s three outcomes rather than another hypothesis.
+
+  **Practical guidance unchanged:** run `fts_vacuum` after bulk ingest. It is fast (tens of
+  seconds for millions of pages) and recovers the space completely.
+
+Details and measurements: `bench/RESULTS_KNOWN_ISSUES_2026-09-14.md`.
+
 ## 1.7.0 - 2026-09-13
 
 Two field-blocking fixes found by reproducing the reported ~2.87M-doc email-body index

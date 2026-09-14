@@ -102,6 +102,35 @@
 	 ? repalloc_huge((p), (sz)) \
 	 : repalloc((p), (sz)))
 
+/*
+ * bm25_page_data_end -- validated end of a page's filled area.
+ *
+ * Every reader that walks a page's contents needs pd_lower, and pd_lower is data
+ * READ OFF THE PAGE: a recycled, torn or corrupt page can report anything.  Two
+ * things go wrong if it is trusted:
+ *
+ *   - the walk runs past the page and interprets adjacent memory as entries, which
+ *     at field scale produced "invalid memory alloc request size 3406063183" from
+ *     the merge's dict walk (~142M entries where a page holds a few hundred) and
+ *     made every merge, autovacuum cleanup and fts_vacuum fail permanently;
+ *   - forming `page + pd_lower` at all is undefined behaviour for an absurd value,
+ *     which UBSan flags ("pointer index expression ... overflowed") -- so the
+ *     validation must happen in the INTEGER domain, before the pointer exists.
+ *
+ * Returns the contents start (i.e. an empty range) for any out-of-range pd_lower,
+ * so callers degrade to "this page has nothing to read" rather than misbehaving.
+ */
+static inline char *
+bm25_page_data_end(Page page)
+{
+	Size		contents = (Size) ((char *) PageGetContents(page) - (char *) page);
+	uint32		lower = ((PageHeader) page)->pd_lower;
+
+	if ((Size) lower > (Size) BLCKSZ || (Size) lower < contents)
+		return (char *) page + contents;
+	return (char *) page + lower;
+}
+
 PG_FUNCTION_INFO_V1(fts_handler);
 
 /*
@@ -829,7 +858,7 @@ bm25_decode_term(Relation index, BlockNumber firstblk, uint32 firstoff,
 
 		LockBuffer(buf, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buf);
-		pend = (char *) page + ((PageHeader) page)->pd_lower;
+		pend = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
 		p = (char *) page + off;
 		while (p + sizeof(BM25BlockHdr) <= pend && n < (int) df)
@@ -1969,7 +1998,7 @@ bm25_doclens_load(Relation index, BlockNumber doclenstart, BM25Doclens *d)
 			break;
 		}
 		ptr = (char *) page + MAXALIGN(SizeOfPageHeaderData);
-		end = (char *) page + ((PageHeader) page)->pd_lower;
+		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
 
 		while (ptr + sizeof(BM25DoclenBlockHdr) <= end)
@@ -2196,7 +2225,7 @@ bm25_doclendir_scan_seg(Relation index, BlockNumber start,
 			break;
 		}
 		ptr = (char *) page + MAXALIGN(SizeOfPageHeaderData);
-		end = (char *) page + ((PageHeader) page)->pd_lower;
+		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
 		/* the page's first docid = its first block's first_docid */
 		if (ptr + sizeof(BM25DoclenBlockHdr) <= end)
@@ -2425,7 +2454,7 @@ bm25_doclen_cursor_load_page(BM25DoclenCursor *c, BlockNumber blkno, uint64 doci
 		UnlockReleaseBuffer(buf);
 		return;
 	}
-	end = (char *) page + ((PageHeader) page)->pd_lower;
+	end = bm25_page_data_end(page);
 
 	/* pass 1: headers only -- find the last block whose first_docid <= docid */
 	ptr = (char *) page + MAXALIGN(SizeOfPageHeaderData);
@@ -3099,22 +3128,8 @@ merge_source_load_page(MergeSource *src)
 		buffer = ReadBuffer(src->index, src->nextblk);
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buffer);
-		{
-			/*
-			 * Validate pd_lower as an INTEGER before forming a pointer from it.
-			 * `page + pd_lower` for a corrupt pd_lower is itself undefined behaviour
-			 * -- the fuzz model of this loop tripped UBSan ("pointer index expression
-			 * ... overflowed") when the clamp was written as a pointer comparison, so
-			 * both are written this way.
-			 */
-			uint32		lower = ((PageHeader) page)->pd_lower;
-			Size		contents = (Size) ((char *) PageGetContents(page) - (char *) page);
-
-			if ((Size) lower > (Size) BLCKSZ || (Size) lower < contents)
-				lower = (uint32) contents;
-			ptr = (char *) page + contents;
-			end = (char *) page + lower;
-		}
+		ptr = (char *) PageGetContents(page);
+		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
 
 		/*
@@ -3752,7 +3767,7 @@ bm25_free_segment(Relation index, const BM25SegMeta *seg)
 		LockBuffer(buf, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buf);
 		ptr = (char *) PageGetContents(page);
-		end = (char *) page + ((PageHeader) page)->pd_lower;
+		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
 		while (ptr < end)
 		{
@@ -3784,7 +3799,7 @@ bm25_free_segment(Relation index, const BM25SegMeta *seg)
 		LockBuffer(buf, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buf);
 		ptr = (char *) PageGetContents(page);
-		end = (char *) page + ((PageHeader) page)->pd_lower;
+		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
 		while (ptr < end)
 		{
@@ -5772,7 +5787,7 @@ bm25_flush_pending(Relation index)
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buffer);
 		ptr = (char *) PageGetContents(page);
-		end = (char *) page + ((PageHeader) page)->pd_lower;
+		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
 		while (ptr < end)
 		{
@@ -5924,7 +5939,7 @@ bm25_segment_docids(Relation index, const BM25SegMeta *seg)
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buffer);
 		ptr = (char *) PageGetContents(page);
-		end = (char *) page + ((PageHeader) page)->pd_lower;
+		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
 		while (ptr < end)
 		{
