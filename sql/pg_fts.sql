@@ -1,4 +1,4 @@
-CREATE EXTENSION pg_fts VERSION '1.7.2';
+CREATE EXTENSION pg_fts VERSION '1.8.0';
 
 -- ftsdoc: analysis, output shows terms with term frequencies
 SELECT to_ftsdoc('The quick brown fox, the QUICK fox!');
@@ -2983,3 +2983,39 @@ SELECT to_ftsdoc('simple','brown quick') @@@ '"quick bro*"'::ftsquery AS prefix_
 -- label information: a zone restriction we cannot evaluate must not match.
 SELECT $$'quick':1$$::ftsdoc @@@ 'quick:A'::ftsquery AS nopos_zone_A_never_matches;   -- f
 SELECT $$'quick':1$$::ftsdoc @@@ 'quick:D'::ftsquery AS nopos_zone_D_no_longer_matches;  -- f
+
+-- ---------------------------------------------------------------------------
+-- Intra-word separators are LITERAL, not operators (field bug 2026-09-13).
+--
+-- to_ftsquery('pkg-config') used to parse as ('pkg' & !'config'): the NOT clause
+-- actively EXCLUDED the documents being searched for, so a search for pkg-config
+-- returned everything except pkg-config, and install-info matched 1 row instead of 10.
+-- '/' was worse -- it opened a regex and swallowed the rest of the query -- and '.'
+-- split the term.  A silently wrong answer is a worse failure than a parse error.
+--
+-- The separator set matches what the DOCUMENT analyzer joins ('-', '.', '/' inside a
+-- word; '_' and '+' split), so a query token can actually match a stored token.
+-- ---------------------------------------------------------------------------
+SELECT to_ftsquery('simple', 'pkg' || chr(45) || 'config')::text AS hyphen_is_literal;
+SELECT to_ftsquery('simple', 'install' || chr(45) || 'info')::text AS hyphen_is_literal2;
+SELECT to_ftsquery('simple', 'foo/bar')::text AS slash_is_literal;
+SELECT to_ftsquery('simple', 'python3.14')::text AS dot_is_literal;
+-- trailing separators still drop, matching to_tsvector and our own doc analyzer
+SELECT to_ftsquery('simple', 'c++')::text AS trailing_plus_drops;
+SELECT to_ftsquery('simple', 'gtk+')::text AS trailing_plus_drops2;
+-- and the operators they used to be confused with STILL work
+SELECT to_ftsquery('simple', 'a ' || chr(45) || 'b')::text AS prefix_minus_is_not;
+SELECT to_ftsquery('simple', chr(45) || 'b')::text AS leading_minus_is_not;
+SELECT to_ftsquery('simple', '/^ab.*$/')::text AS regex_still_parses;
+-- the whole point: the query now matches the document it was typed for
+SELECT to_ftsdoc('simple', 'the pkg' || chr(45) || 'config tool')
+       @@@ to_ftsquery('simple', 'pkg' || chr(45) || 'config') AS hyphen_matches_doc;
+SELECT to_ftsdoc('simple', 'see foo/bar path')
+       @@@ to_ftsquery('simple', 'foo/bar') AS slash_matches_doc;
+SELECT to_ftsdoc('simple', 'python3.14 release')
+       @@@ to_ftsquery('simple', 'python3.14') AS dot_matches_doc;
+-- negation is unchanged: excludes when the term is present, matches when absent
+SELECT to_ftsdoc('simple', 'only a here')
+       @@@ to_ftsquery('simple', 'a ' || chr(45) || 'b') AS neg_matches_when_absent;
+SELECT to_ftsdoc('simple', 'a and b here')
+       @@@ to_ftsquery('simple', 'a ' || chr(45) || 'b') AS neg_excludes_when_present;

@@ -68,6 +68,20 @@
       Produced with <function>to_ftsquery</function> or the input syntax
       (<literal>'a &amp; b'::ftsquery</literal>).
      </para>
+     <para>
+      A leading <literal>-</literal> is also accepted as NOT
+      (<literal>a -b</literal> excludes <literal>b</literal>), but
+      <emphasis>only in prefix position</emphasis>.  A <literal>-</literal>,
+      <literal>.</literal> or <literal>/</literal> that sits between two word
+      characters is part of the term, so <literal>pkg-config</literal>,
+      <literal>foo/bar</literal> and <literal>python3.14</literal> each search for
+      the word they look like rather than being split into an expression.  This
+      matches how the document side tokenizes them, and PostgreSQL's own parser,
+      which classifies those as <literal>asciihword</literal>,
+      <literal>file</literal> and <literal>file</literal> respectively.  A trailing
+      separator is dropped, as it is by <function>to_tsvector</function>:
+      <literal>c++</literal> searches for <literal>c</literal>.
+     </para>
     </listitem>
    </varlistentry>
   </variablelist>

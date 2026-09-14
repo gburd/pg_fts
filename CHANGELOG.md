@@ -2,6 +2,48 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.8.0 - 2026-09-14
+
+**Query parsing fix with a behaviour change.** No on-disk format change; **no REINDEX
+required** — stored data was never affected.
+
+### Fixed
+
+- **`-`, `.` and `/` inside a word are terms, not operators.** Reported from the field:
+
+  | query | before | after |
+  |---|---|---|
+  | `pkg-config` | `('pkg' & !'config')` | `'pkg-config'` |
+  | `install-info` | `('install' & !'info')` | `'install-info'` |
+  | `foo/bar` | `'foo'` (rest swallowed) | `'foo/bar'` |
+  | `python3.14` | `('python3' & '14')` | `'python3.14'` |
+
+  The hyphen case was the damaging one: the `!` clause **actively excluded the documents
+  being searched for**, so searching `pkg-config` returned everything *except*
+  pkg-config, and `install-info` matched 1 row instead of 10. `/` was worse in a
+  different way — it opened a regex and swallowed the remainder of the query. As the
+  reporter put it, this is a worse failure mode than operator injection: injection raises
+  a visible error, this silently returns a different, wrong answer.
+
+  The separator set is not a guess — it is what the **document analyzer already joins**,
+  verified against `to_ftsdoc('simple', 'a-b c/d e.f g_h i+j')`, which yields
+  `'a-b' 'a' 'b' 'c/d' 'e.f' 'g' 'h' 'i' 'j'`: `-`, `.` and `/` stay inside a token while
+  `_` and `+` split. PostgreSQL's own parser agrees, classifying them `asciihword`,
+  `file` and `file`. So the query lexer was the only side that disagreed, and the tokens
+  needed to match these queries were already stored.
+
+### Behaviour change
+
+- A `-` between two word characters no longer negates. **`a -b` still excludes `b`**
+  (prefix position), and `!b` is unchanged, but an application relying on `a-b` meaning
+  "a AND NOT b" must now write `a !b` or `a - b`.
+- `c++` and `gtk+` still lex to `'c'` and `'gtk'`. A trailing separator is dropped, which
+  is what `to_tsvector` and our own document analyzer do, so this is parity rather than a
+  bug — noted because the original report listed it alongside the others.
+
+Regression cases covering all four inputs, plus prefix negation, leading `-`, and
+`/regex/`, are pinned in `sql/pg_fts.sql`.
+
 ## 1.7.2 - 2026-09-14
 
 Measured the cause of the bloat known issue and removed ~31% of it. No on-disk format
