@@ -2037,7 +2037,7 @@ bm25_doclens_load(Relation index, BlockNumber doclenstart, BM25Doclens *d)
 				 * shape): "invalid memory alloc request size 2550425176" from
 				 * fts_vacuum AND from every autovacuum cleanup, matching the field's
 				 * "VACUUM/merge do not reclaim bloat" report.  See
-				 * bench/RESULTS_FIELDSHAPE_2026-09-13.md.
+				 * CHANGELOG 1.7.0.
 				 *
 				 * The huge-allocation macros already existed and were used for the
 				 * per-term posting arrays; this site was simply missed.
@@ -3086,7 +3086,7 @@ typedef struct MergeSource
 	 * term boundary.  Any sparsemap probe -- sm_contains, a resume cursor, the
 	 * 8-way MRU cache, even the batched sm_contains_many -- pays an O(chunks)
 	 * walk per term, and with millions of terms that product is what made VACUUM
-	 * non-terminating (bench/P0_VACUUM_HANG_2026-09-10.md).
+	 * non-terminating (CHANGELOG 1.6.1).
 	 *
 	 * The map is READ-ONLY for the whole merge, so decode it once into a flat
 	 * bitmap and test each posting in O(1).  Cost is ndocs/8 bytes per source
@@ -3144,7 +3144,7 @@ merge_source_load_page(MergeSource *src)
 		 * bm25_merge_segments_streaming -- so it killed every merge, every autovacuum
 		 * cleanup AND fts_vacuum on the affected index, matching the field's
 		 * "VACUUM/merge do not reclaim bloat" report.
-		 * Isolated with gdb; see bench/RESULTS_FIELDSHAPE_2026-09-13.md.
+		 * Isolated with gdb; see CHANGELOG 1.7.0.
 		 */
 		/* count entries + term bytes on this page (bounded by BLCKSZ) */
 		n = 0;
@@ -3544,7 +3544,7 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 				 * cache, or batched sweep -- costs O(chunks) per term because the
 				 * docid sequence restarts at each term boundary, and with millions
 				 * of terms that product made VACUUM non-terminating.  See
-				 * merge_source_open and bench/P0_VACUUM_HANG_2026-09-10.md.
+				 * merge_source_open and CHANGELOG 1.6.1.
 				 */
 				if (s->hastomb)
 				{
@@ -4817,7 +4817,7 @@ bm25_vacuum_compact(Relation index)
 		 * request) leaves that extension behind as permanent growth.  Measured at
 		 * ~11 MB per interrupted pass on a small index with no rows added, and it is
 		 * the reason a periodic manual fts_vacuum was still needed
-		 * (bench/RESULTS_SELF_LIMITING_2026-09-12.md).
+		 * (CHANGELOG 1.7.0).
 		 *
 		 * When the file already holds enough low free space -- which is exactly the
 		 * bloated case we are called for -- a single low-first pack reaches the same
@@ -5040,7 +5040,7 @@ bm25_merge_segments(Relation index)
 	 * nothing, while one fts_vacuum returned it to 344 MB.  A cancelled pass was
 	 * strictly worse than no pass at all, which is what turned a missed
 	 * optimisation into unbounded growth.  See
-	 * bench/P1_VACUUM_NO_RECLAIM_2026-09-11.md.
+	 * CHANGELOG 1.7.0.
 	 *
 	 * Truncating our own free tail here fixes that at the source: it is O(free
 	 * tail) with no data rewrite, it needs no extra lock (the caller already holds
@@ -5582,7 +5582,7 @@ bm25_insert_oversized_as_segment(Relation index, FtsDoc doc, ItemPointer tid)
 	 * document, while still bounding the directory: the segment count stays below
 	 * the cap that a field deployment hit (8 -> 128 segments in ~1h), because a
 	 * merge still runs as soon as there are enough runs to be worth merging.
-	 * See bench/RESULTS_KNOWN_ISSUES_2026-09-14.md.
+	 * See CHANGELOG 1.7.2 (known issue).
 	 */
 	if (bm25_pending_segments_worth_merging(index) &&
 		bm25_maintenance_lock_conditional(index))
@@ -6197,7 +6197,7 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 			 * each lookup re-walk the chunk chain from the head: O(n x chunks).  With
 			 * ~1,068 chunks and millions of postings that is the SECOND half of the
 			 * VACUUM hang -- after the merge-path fix, gdb showed the next VACUUM
-			 * pinned here instead.  See bench/P0_VACUUM_HANG_2026-09-10.md.
+			 * pinned here instead.  See CHANGELOG 1.6.1.
 			 */
 			ccur = (sm_cursor_t) SM_CURSOR_INIT;
 			for (v = sm_next_member(seen, (uint64_t) -1, &cur);

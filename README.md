@@ -113,7 +113,7 @@ SELECT fts_vacuum('docs_bm25');   -- reclaim disk space (compact + truncate)
 
 See `doc/pg_fts.sgml` for the full reference (rendered to HTML and published to
 [GitHub Pages](https://gburd.github.io/pg_fts/) and
-[Codeberg Pages](https://gregburd.codeberg.page/pg_fts/)), `CAPABILITIES.md`
+[Codeberg Pages](https://gregburd.codeberg.page/pg_fts/)), `doc/CAPABILITIES.md`
 for the feature matrix, `ROADMAP.md` for the roadmap, and
 `doc/MIGRATING_FROM_PG_TEXTSEARCH.md` if you are moving from Timescale
 pg_textsearch.
@@ -232,31 +232,37 @@ Example
 Performance
 -----------
 
-bench/ contains reproducible benchmarks on EC2 (build time, index size, and
-per-query-type latency at 2M+ docs).  See bench/RESULTS_*.md for the full
-analysis.  The honest summary:
+`bench/INDEX.md` says which benchmark documents are current; the numbers below are
+from `bench/BENCHMARK_SUMMARY.md` (r6id.4xlarge, 2.19M Wikipedia docs, 8 runs, median
+of the last 5, every row parity-checked against regex ground truth).  This paragraph
+is regenerated from that file whenever it changes -- if they ever disagree, the
+summary is right and this is stale.
 
+  * **Where pg_fts wins.**  Exact `count(*)` is index-native: **2.20 ms** on a
+    common term vs 13.63 ms for pg_search; pg_textsearch and VectorChord-bm25
+    cannot answer the query at all.  Under load it is 2,923 tps vs 513
+    (**5.7x**).  Smallest index of the five engines measured (**1,421 MB** vs
+    1,887-2,902 MB).  The full query language -- phrase, NEAR, prefix, fuzzy,
+    regex, field zones -- through one operator; none of the specialist engines
+    offer all of it.  Exact top-k (no early termination), MVCC-correct results,
+    crash/replication/corruption tested, and an index that stays bounded under
+    unattended autovacuum (measured flat over churn at 1M docs).
+  * **Where pg_fts loses.**  Common-term ranked top-k: `year` (df 734,896) is
+    **36.16 ms** vs pg_search 2.12, VectorChord 3.49, pg_textsearch 20.71 -- ~17x
+    behind pg_search single-client and ~20x under load.  Rare and mid terms are
+    competitive but not leading (rare: 5.89 vs pg_search 2.13, pg_textsearch
+    7.36).  The gap is architectural: 45% of a common-term query is per-posting
+    doclen work and 37% candidate iteration, which bitmap+SIMD engines elide.
+    Closing it is a posting-format change tracked as item D in ROADMAP.md, not a
+    tuning matter.  Build time (381 s) trails pg_search (127 s) and VectorChord
+    (56 s).  Bulk-loading very long documents grows the index until an
+    `fts_vacuum` (see the known issue in the CHANGELOG).
+  * **A caveat on pg_search's speed.**  Tantivy does not stem: for `year` it
+    returns 495,580 matches where the correct stemmed count is 734,896.  Part of
+    its advantage is a smaller unit of work.
   * vs the built-in tsvector/GIN + ts_rank stack, pg_fts is far faster on ranked
     retrieval (up to ~40x on common-term top-k, because ts_rank must fetch and
-    sort every match) — see bench/RESULTS_WIKIPEDIA_2M.md.
-  * vs the specialist BM25 extensions (VectorChord-bm25, Timescale
-    pg_textsearch), pg_fts leads on rare/mid-term ranked latency and on the
-    index-native count(*); it trails on common-term ranked latency, and its
-    index size depends heavily on the trigram tier — which is now off by default
-    (1.3.0), removing what on high-vocabulary corpora is a large fraction of the
-    index (enable it only for regex/long-fuzzy-heavy workloads).  See
-    bench/RESULTS_VS_VCHORD_PGTEXTSEARCH.md and bench/RESULTS_130_vs_122.md.  The
-    remaining common-term latency gap is a posting-codec matter: the bm25 index
-    stores per-document length once per posting (per doc×term pair), which makes
-    its docid-ordered block-max WAND decode more per candidate.  (Token
-    positions live in the heap `ftsdoc`, not the index; `WITH (positions = on)`
-    adds a lazily-decoded positions column only when requested.)  Closing the
-    gap is a posting-codec change (a per-document doclen sidecar, then
-    impact-quantized postings) tracked in ROADMAP.md.
-  * pg_fts's distinguishing strengths are its query-language breadth
-    (phrase/NEAR/prefix/fuzzy/regex over one operator), an index-native
-    count(*) that the specialist engines do not expose, and MVCC/crash/
-    replication correctness.
+    sort every match).
 
 fts_bm25_opts variants reproduce Lucene/bm25s scores for conformance.
 Ranked-retrieval performance continues to iterate (see ROADMAP.md).
@@ -397,7 +403,7 @@ Documentation
 
 User-facing reference documentation is in doc/pg_fts.sgml (rendered in
 the "Additional Supplied Modules" appendix as "pg_fts").  This README is the
-developer/design overview; CAPABILITIES.md is the production-readiness /
+developer/design overview; doc/CAPABILITIES.md is the production-readiness /
 feature matrix (index-AM capability flags, concurrency, replication, and an
 honest comparison to tsvector/GIN and ParadeDB pg_search).
 

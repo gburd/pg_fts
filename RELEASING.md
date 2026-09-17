@@ -6,18 +6,43 @@ Releases are **tag-triggered**. The version lives in `META.json` and
 
 ## Cut a release
 
+0. **Gate first, every time.** All of these green before anything else:
+   `nix build .#checks.x86_64-linux.{installcheck-pg17,installcheck-pg18,tap-pg17,tap-pg18}`,
+   `bash ci/check-alloc.sh`, `make check-ascii`, `bash test/fuzz/run.sh` (prints
+   `== ALL CLEAN ==`), and the SGML re-rendered (`doc/build-html.sh`) with no
+   undefined-entity errors.  Local green means nothing for the delete/merge path:
+   any release touching tombstones, merge or vacuum also needs an at-scale run on
+   EC2 (`bench/` harnesses; the P0 shipped through a green local gate twice).
 1. Bump the version everywhere it appears and land it on `main`:
    - `pg_fts.control` `default_version`
    - `META.json` (`version` in two places; leave `meta-spec.version` = 1.0.0)
-   - rename `pg_fts--<old>.sql` → `pg_fts--<new>.sql` and update `Makefile`
+   - `git mv pg_fts--<old>.sql pg_fts--<new>.sql` and update `Makefile`
      `DATA`, `meson.build`, `flake.nix`, and the `CREATE EXTENSION ... VERSION`
-     line in `sql/pg_fts.sql` + `expected/pg_fts.out`
-   - add a `CHANGELOG.md` entry
+     line in `sql/pg_fts.sql` + `expected/pg_fts.out`.  **The `git mv` is the
+     point: the old base script must not remain tracked.** 31 dead base scripts
+     accumulated in the root before this was written down.
+   - add the upgrade edge `pg_fts--<old>--<new>.sql` and `git add` it (new files
+     are invisible to the nix build until tracked)
+   - verify the version graph: every prior version must reach `<new>` through
+     the edge files (a 10-line Python walk; see any recent release commit)
+   - add a `CHANGELOG.md` entry.  Anything you previously published that this
+     release shows to be wrong goes under a **"Retracted"** heading, stated
+     plainly.  The project's credibility rests on that heading existing.
+   - **if `bench/BENCHMARK_SUMMARY.md` changed, the README comparison paragraph
+     changes in the same commit.**  It drifted once to claim a lead the table
+     contradicts.
 2. **If the release changes the on-disk index format, provide an in-place
    upgrade path (see "On-disk format changes" below) — do NOT ship a
    format change that forces a REINDEX unless it is genuinely impossible to
-   migrate in place.**
-3. Tag and push (Codeberg is `origin`; it auto-mirrors to the GitHub mirror):
+   migrate in place.**  1.5.0 (v3 -> v4) is the worked precedent: an optional
+   per-segment pointer, dual-read of old segments, convergence as merges run.
+3. **If the release adds a TAP test, it goes in three places**: `flake.nix`
+   `PROVE_TESTS`, `.github/workflows/ci.yml`, and `.forgejo/workflows/ci.yml`.
+   `t/010` (the P1 regression test) ran only in the nix gate for a week.
+4. **Known issues ship as known issues** -- a CHANGELOG entry with a reproduction
+   and the measured size of the problem -- never silently carried, and never
+   "fixed" by a design change rushed into a correctness release.
+5. Tag and push (Codeberg is `origin`; it auto-mirrors to the GitHub mirror):
    ```sh
    git tag -a vX.Y.Z -m "pg_fts X.Y.Z — <summary>"
    git push origin vX.Y.Z

@@ -24,11 +24,14 @@ regression.out
 # other
 .memelord
 
-# agent tooling (not part of the extension)
+# agent tooling (not part of the extension).  AGENTS.md is deliberately TRACKED: it is
+# the project's own rules file (measurement discipline, hygiene, release gate), written
+# so the rules survive a fresh clone.  The generic per-machine steering under .agent/ and
+# the tool configs stay local.
 .claude/
 .mcp.json
-AGENTS.md
 .agent/
+.agent-steering-domains.md
 .kiro/
 .pi/
 
@@ -43,3 +46,4 @@ pg_fts-*.zip
 VSIC-FiC16.pdf
 bench_vac/
 pg_fts-managed-service-readiness.md
+result*

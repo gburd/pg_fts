@@ -1547,7 +1547,7 @@ bm25_gettuple(IndexScanDesc scan, ScanDirection dir)
  * have the phrase adjacent, seq scan (heap matcher), index scan with
  * positions=off (heap recheck) and index scan with positions=on (this path) all
  * return the same count, matching a regex ground truth (2026-09-08; see
- * bench/NOTE_PHRASE_PROFILE_2026-09-06.md).  The recheck fallback is also
+ * CHANGELOG 1.6.0).  The recheck fallback is also
  * genuinely correct rather than merely slower, as of the 1.6.0 fix that made an
  * UNVERIFIABLE phrase return false instead of degrading to a conjunction.
  *
