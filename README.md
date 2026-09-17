@@ -1,7 +1,7 @@
 # pg_fts — BM25 full-text search for PostgreSQL
 
 [![CI](https://github.com/gburd/pg_fts/actions/workflows/ci.yml/badge.svg)](https://github.com/gburd/pg_fts/actions/workflows/ci.yml)
-[![PGXN version](https://badge.fury.io/pg/pg_fts.svg)](https://pgxn.org/dist/pg_fts/)
+[![Release](https://img.shields.io/github/v/tag/gburd/pg_fts?label=release&sort=semver)](https://github.com/gburd/pg_fts/releases)
 [![License: PostgreSQL](https://img.shields.io/badge/license-PostgreSQL-blue)](LICENSE)
 
 A PostgreSQL extension for full-text search with true **BM25/BM25F** relevance
@@ -112,8 +112,7 @@ SELECT fts_vacuum('docs_bm25');   -- reclaim disk space (compact + truncate)
 ```
 
 See `doc/pg_fts.sgml` for the full reference (rendered to HTML and published to
-[GitHub Pages](https://gburd.github.io/pg_fts/) and
-[Codeberg Pages](https://gregburd.codeberg.page/pg_fts/)), `doc/CAPABILITIES.md`
+[GitHub Pages](https://gburd.github.io/pg_fts/)), `doc/CAPABILITIES.md`
 for the feature matrix, `ROADMAP.md` for the roadmap, and
 `doc/MIGRATING_FROM_PG_TEXTSEARCH.md` if you are moving from Timescale
 pg_textsearch.

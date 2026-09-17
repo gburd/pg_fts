@@ -1,8 +1,8 @@
 name: Docs
 
 # Build the HTML reference from doc/pg_fts.sgml and publish to GitHub Pages on
-# push to main. The Codeberg side publishes the same HTML to Codeberg Pages via
-# .forgejo/workflows/docs.yml.
+# push to main.  This is the only docs pipeline: its former Codeberg twin never
+# ran (Codeberg has no shared runners) and was removed on 2026-09-17.
 #
 # GitHub Pages must be enabled for the repo with source = "GitHub Actions"
 # (Settings -> Pages) so deploy-pages has a target.

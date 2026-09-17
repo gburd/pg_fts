@@ -113,8 +113,11 @@ style preferences.
     `bench/` file.
 25. **A release renames the base SQL script; delete the old one.** 31 dead base scripts
     accumulated in the root because nobody did.
-26. **Every new TAP test goes into BOTH `flake.nix` and the GitHub/Forgejo CI matrices.**
-    `t/010` (the P1 regression test) ran only in the nix gate for a week.
+26. **Every new TAP test goes into BOTH `flake.nix` and `.github/workflows/ci.yml`.**
+    `t/010` (the P1 regression test) ran only in the nix gate for a week. There is no
+    Codeberg CI: it has no shared runners, its workflows never ran once in 115 attempts,
+    and they were deleted on 2026-09-17. **A badge or workflow that has never produced a
+    run is not a gate -- check `started_at` before believing one.**
 27. **The README comparison paragraph must agree with `bench/BENCHMARK_SUMMARY.md`.** It
     drifted to claim a rare-term lead the project's own table contradicts. When the table
     changes, the paragraph changes in the same commit.

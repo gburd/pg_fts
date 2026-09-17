@@ -36,13 +36,9 @@ Releases are **tag-triggered**. The version lives in `META.json` and
    format change that forces a REINDEX unless it is genuinely impossible to
    migrate in place.**  1.5.0 (v3 -> v4) is the worked precedent: an optional
    per-segment pointer, dual-read of old segments, convergence as merges run.
-3. **If the release adds a TAP test, it goes in three places**: `flake.nix`
-   `PROVE_TESTS`, `.github/workflows/ci.yml`, and `.forgejo/workflows/ci.yml`.
-   `t/010` (the P1 regression test) ran only in the nix gate for a week.
-   **Caveat (2026-09-17):** the Forgejo workflow has never executed -- Codeberg
-   Actions is not enabled for the repo (ROADMAP R8).  Until that is resolved, the
-   nix gate and GitHub CI are the only pipelines that run; keep the Forgejo file
-   in sync anyway so it is correct the day it starts.
+3. **If the release adds a TAP test, it goes in two places**: `flake.nix`
+   `PROVE_TESTS` and `.github/workflows/ci.yml`.  `t/010` (the P1 regression
+   test) ran only in the nix gate for a week before this was written down.
 4. **Known issues ship as known issues** -- a CHANGELOG entry with a reproduction
    and the measured size of the problem -- never silently carried, and never
    "fixed" by a design change rushed into a correctness release.
@@ -149,11 +145,20 @@ the SQL script. A C-only format change therefore still ships a no-op
 
 ## What the tag triggers
 
-- **Codeberg** (`.forgejo/workflows/release.yml`): build + `installcheck`, then
-  `make dist` and attach `pg_fts-X.Y.Z.zip` to a Codeberg release.
-- **GitHub mirror** (`.github/workflows/release.yml`): the same build + test,
-  a GitHub Release with the zip, **and** the PGXN upload (done once, here — PGXN
-  rejects a duplicate version, so only the GitHub side publishes).
+- **GitHub** (`.github/workflows/release.yml`), the only pipeline that runs:
+  build + `installcheck`, `make dist`, a GitHub Release with `pg_fts-X.Y.Z.zip`,
+  the **PGXN upload**, and the postgresql.org announcement (`ci/announce.sh`).
+  PGXN rejects a duplicate version, so a re-run of a published tag reports 409
+  and continues.
+
+**Codeberg is the origin remote and mirror source, not a CI or release host.**
+It provides no shared Actions runners, so the `.forgejo/` workflows that used to
+live here queued 115 runs from v0.1.0 to v1.8.2 and executed none of them.
+Because PGXN publishing had been placed only there, **PGXN was frozen at 0.2.0
+for 45 releases** and the README pointed users at it.  The workflows were
+deleted on 2026-09-17 and every channel moved to GitHub.  If a Codeberg release
+page is ever wanted, register a self-hosted Forgejo runner first and confirm a
+run reaches `started_at` before trusting it with anything.
 
 The release artifact is a **source distribution** (`make dist` → a PGXN-layout
 `pg_fts-X.Y.Z.zip` via `git archive`), not a compiled binary: a PGXS C
@@ -165,18 +170,20 @@ out of the zip.
 
 | Secret | Where | Purpose |
 |--------|-------|---------|
-| `PGXN_USER` / `PGXN_PASSWORD` | GitHub repo secrets | PGXN Manager upload (skipped if unset) |
-| `RELEASE_TOKEN` | Codeberg repo secrets | create the Forgejo release (repo `write` scope) |
+| `PGXN_USER` / `PGXN_PASSWORD` | GitHub repo secrets | PGXN Manager upload (skipped with a warning if unset) |
+| `PGORG_USER` / `PGORG_PASSWORD` | GitHub repo secrets | postgresql.org news submission (skipped if unset) |
+
+**Check that `PGXN_USER`/`PGXN_PASSWORD` are actually set on the GitHub repo.**
+They were previously configured (if at all) on Codeberg, where they were never
+used.  The first GitHub release after 2026-09-17 will log a `::warning::` and
+skip PGXN if they are missing -- look for it.
 
 ## Dependency-update automation
 
 - **GitHub:** Dependabot (`.github/dependabot.yml`) opens weekly PRs bumping the
   GitHub Actions pins.
-- **Codeberg:** `renovate.json` configures the Codeberg-hosted Renovate bot to
-  do the equivalent for the `.forgejo/` (and `.github/`) workflow action pins.
-  **TODO (maintainer):** Renovate must be enabled for the repo on Codeberg — add
-  the Renovate app/bot under the repo (or org) settings so it reads
-  `renovate.json`. Until then the config is inert but harmless.
+- `renovate.json` remains for anyone who runs Renovate against the repo; with
+  the `.forgejo/` workflows gone it has nothing Codeberg-specific left to pin.
 
 ## Manual PGXN upload (fallback)
 

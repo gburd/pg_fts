@@ -1,10 +1,16 @@
 name: Release
 
-# Tag-triggered mirror build. Codeberg is the canonical origin and auto-mirrors
-# to this GitHub repo; a vX.Y.Z tag here builds + tests + attaches the source zip
-# to a GitHub Release. PGXN publishing and the PostgreSQL announcement happen
-# once, on the Codeberg (.forgejo) release workflow -- NOT here (PGXN rejects a
-# duplicate version).
+# Tag-triggered release. Codeberg is the canonical origin and auto-mirrors to
+# this GitHub repo; a vX.Y.Z tag here builds + tests, attaches the source zip to
+# a GitHub Release, publishes to PGXN, and announces.
+#
+# HISTORY (2026-09-17): PGXN publishing and the announcement originally lived
+# ONLY in a Codeberg (.forgejo) release workflow, with this file explicitly
+# deferring to it.  Codeberg provides no shared Actions runners, so that
+# workflow never executed -- not once in 115 queued runs -- and PGXN sat at
+# 0.2.0 while 45 releases shipped to 1.8.2.  Every release channel now lives in
+# the ONE workflow that actually runs.  PGXN rejects duplicate versions, so a
+# re-run of a published tag reports 409 and moves on rather than failing.
 on:
   push:
     tags:
@@ -54,3 +60,37 @@ jobs:
         with:
           generate_release_notes: true
           files: ${{ steps.dist.outputs.zip }}
+
+      - name: Publish to PGXN
+        env:
+          PGXN_USERNAME: ${{ secrets.PGXN_USER }}
+          PGXN_PASSWORD: ${{ secrets.PGXN_PASSWORD }}
+        run: |
+          if [ -z "$PGXN_USERNAME" ] || [ -z "$PGXN_PASSWORD" ]; then
+            echo "::warning::PGXN_USER/PGXN_PASSWORD secrets not set; skipping PGXN upload."
+            echo "Set them as repository secrets (a https://manager.pgxn.org account) to publish."
+            exit 0
+          fi
+          # PGXN Manager upload API. 2xx/3xx = accepted; 409 = this version is
+          # already published (idempotent re-run); anything else is a real failure.
+          code=$(curl -sS -o /tmp/pgxn_resp.txt -w '%{http_code}' \
+            --user "$PGXN_USERNAME:$PGXN_PASSWORD" \
+            -F "archive=@${{ steps.dist.outputs.zip }};type=application/zip" \
+            https://manager.pgxn.org/upload)
+          echo "PGXN upload HTTP $code"; cat /tmp/pgxn_resp.txt || true
+          case "$code" in
+            2*|3*) echo "PGXN upload accepted." ;;
+            409)   echo "::warning::PGXN reports this version already published; skipping." ;;
+            *)     echo "::error::PGXN upload failed (HTTP $code) -- verify PGXN_USER/PGXN_PASSWORD and META.json"; exit 1 ;;
+          esac
+
+      - name: Announce to PostgreSQL news/announce
+        env:
+          PGORG_USER: ${{ secrets.PGORG_USER }}
+          PGORG_PASSWORD: ${{ secrets.PGORG_PASSWORD }}
+        run: |
+          if [ -z "$PGORG_USER" ] || [ -z "$PGORG_PASSWORD" ]; then
+            echo "PGORG_USER/PGORG_PASSWORD secrets not set; skipping announcement."
+            exit 0
+          fi
+          bash ci/announce.sh "${GITHUB_REF_NAME#v}"
