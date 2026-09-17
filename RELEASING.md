@@ -173,10 +173,17 @@ out of the zip.
 | `PGXN_USER` / `PGXN_PASSWORD` | GitHub repo secrets | PGXN Manager upload (skipped with a warning if unset) |
 | `PGORG_USER` / `PGORG_PASSWORD` | GitHub repo secrets | postgresql.org news submission (skipped if unset) |
 
-**Check that `PGXN_USER`/`PGXN_PASSWORD` are actually set on the GitHub repo.**
-They were previously configured (if at all) on Codeberg, where they were never
-used.  The first GitHub release after 2026-09-17 will log a `::warning::` and
-skip PGXN if they are missing -- look for it.
+`PGXN_USER`/`PGXN_PASSWORD` are set on the GitHub repo and verified working
+(2026-09-17: `v1.8.2` re-published via `workflow_dispatch`, HTTP 303, PGXN now
+at 1.8.2).  `PGORG_*` is not set; the announce step skips cleanly without it.
+
+**To re-publish an existing tag** (e.g. after a workflow fix), do not re-tag --
+that rewrites published history.  Use the manual trigger:
+
+    gh workflow run Release --repo gburd/pg_fts -f tag=vX.Y.Z
+
+It checks out that tag and runs the *current* workflow definition against it.
+`gh run rerun` would not: it re-executes the definition the tag was pushed under.
 
 ## Dependency-update automation
 
