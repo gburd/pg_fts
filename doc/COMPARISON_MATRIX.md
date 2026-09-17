@@ -13,6 +13,24 @@ paradedb `c807ede`; VectorChord-bm25 `14fc2a3`.
 
 Legend: **Yes** = exercised and working · **No** = absent · *n/t* = not tested by us
 
+## Not in this matrix: TIN (PlanetScale)
+
+**TIN is deliberately absent from every table below, because it cannot be obtained.** It
+is a closed extension available only inside PlanetScale's managed Postgres: there is no
+public repository (`github.com/planetscale/tin` is 404), no source or package referenced in
+its documentation, and no TIN backend even in PlanetScale's own public fork of the
+benchmarker they used. Installation instructions direct you to update *your PlanetScale
+cluster*.
+
+So its capabilities cannot be exercised here and its published numbers cannot be
+reproduced or contested by anyone outside PlanetScale. Adding a TIN column with vendor
+figures would violate the rule this document is built on — competitor rows reflect what we
+ran ourselves. An architectural comparison, based on reading their published design in
+full, is in `bench/NOTE_VS_TIN_2026-09-14.md`; the short version is that TIN's headline
+architectural argument (use `ctid` as the posting identifier, so merges never renumber) is
+a design **pg_fts already implements**, while its two-level bitmap + AVX-512 execution
+engine is a genuine advantage over our scalar delta-packed postings.
+
 ---
 
 ## Query capability
