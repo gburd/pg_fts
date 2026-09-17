@@ -15,6 +15,17 @@ on:
   push:
     tags:
       - 'v*'
+  # Manual re-publish of an EXISTING tag.  Added 2026-09-17 so the PGXN gap
+  # (0.2.0 -> 1.8.2, caused by publishing living in a workflow that never ran)
+  # could be closed without re-tagging, which would rewrite published history.
+  # `gh run rerun` is not enough: it re-executes the workflow definition the tag
+  # was pushed under, i.e. the old one without the PGXN step.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to (re)publish, e.g. v1.8.2'
+        required: true
+        type: string
 
 permissions:
   contents: write   # create the GitHub Release
@@ -26,6 +37,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0   # need the tag + full history for `git archive`
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Resolve release version
+        id: ver
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
       - name: Install PostgreSQL 17 + server headers
         run: |
@@ -53,11 +72,12 @@ jobs:
         id: dist
         run: |
           make dist PG_CONFIG=/usr/lib/postgresql/17/bin/pg_config
-          echo "zip=pg_fts-${GITHUB_REF_NAME#v}.zip" >> "$GITHUB_OUTPUT"
+          echo "zip=pg_fts-${{ steps.ver.outputs.version }}.zip" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.ver.outputs.tag }}
           generate_release_notes: true
           files: ${{ steps.dist.outputs.zip }}
 
@@ -93,4 +113,4 @@ jobs:
             echo "PGORG_USER/PGORG_PASSWORD secrets not set; skipping announcement."
             exit 0
           fi
-          bash ci/announce.sh "${GITHUB_REF_NAME#v}"
+          bash ci/announce.sh "${{ steps.ver.outputs.version }}"
