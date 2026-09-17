@@ -2,6 +2,46 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.8.1 - 2026-09-17
+
+Counting-path work from the TIN feasibility review. No on-disk format change; **no REINDEX
+required**.
+
+### Added
+
+- **Ten gate-refusal tests for the single-term `count(*)` fast path.** That fast path
+  (answering from the dictionary's `df` with no posting decode and no heap access) has
+  existed since the COUNT pushdown work, but shipped with a single positive test and nothing
+  proving its gates actually refuse — the shape where a missed gate silently returns a
+  plausible **wrong count**. Each case is now compared against a ground truth computed
+  without the index: prefix, conjunction, disjunction, negation, unmerged pending documents,
+  tombstones, and a not-all-visible heap all fall back and agree exactly, and the fast path
+  is confirmed to resume after `VACUUM`.
+
+### Changed
+
+- `fts_count()` and the `COUNT(*)` pushdown now consult the visibility map **once per run of
+  matches on the same heap page** instead of once per matching tuple, and create one tuple
+  slot per call instead of one per probed tuple. Safe because matches arrive sorted and
+  de-duplicated and a docid is `block × MaxHeapTuplesPerPage + offset`, so matches on a page
+  are contiguous; the visibility map is page-granular.
+
+  **Measured effect: none significant (~1–2%, inside run-to-run noise).** An apparent 8.5%
+  improvement came from a single high outlier in the baseline; repeated same-arm runs
+  overlap (base 397.3–408.2 ms, fix 397.4–402.7 ms). The loop is dominated by
+  `table_index_fetch_tuple` heap probes, not by visibility-map lookups. Counts are
+  identical in both arms. Shipped as a code-quality change, not a performance feature.
+
+### Documentation
+
+- README and the SGML manual now describe when the `df` fast count applies and, more
+  importantly, when it refuses.
+- `bench/RESULTS_ABC_2026-09-17.md` records the measurements, including the two corrections
+  above; `bench/NOTE_TIN_FEASIBILITY_2026-09-14.md` is annotated with the outcome. A third
+  proposed item (copying posting bytes verbatim during a merge) was **withdrawn** after
+  reading the merge path: it decodes through the build hash table and re-encodes at flush,
+  so there is no byte-stream splice point.
+
 ## 1.8.0 - 2026-09-14
 
 **Query parsing fix with a behaviour change.** No on-disk format change; **no REINDEX

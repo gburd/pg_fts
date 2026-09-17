@@ -1,4 +1,4 @@
-CREATE EXTENSION pg_fts VERSION '1.8.0';
+CREATE EXTENSION pg_fts VERSION '1.8.1';
 
 -- ftsdoc: analysis, output shows terms with term frequencies
 SELECT to_ftsdoc('The quick brown fox, the QUICK fox!');
@@ -1034,6 +1034,56 @@ END $$;
 -- must still be exact (a wrong fast count would diff here).
 VACUUM big;
 SELECT count(*) AS big_fastpath FROM big WHERE d @@@ 'bigterm'::ftsquery;   -- 60
+
+-- ---------------------------------------------------------------------------
+-- Every gate of the df fast path must REFUSE and fall back to the exact count.
+--
+-- The fast path answers from Sum(df) with no posting decode and no heap probe.
+-- If a gate is missed, count(*) returns a plausible WRONG NUMBER -- the worst
+-- failure shape available for a counting path, and nothing here caught it before.
+-- Each case below is compared against a ground truth computed WITHOUT the index
+-- (seqscan + the @@@ recheck), so a broken gate shows up as a mismatch rather
+-- than as a number nobody questions.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION gate_check(qry text, why text) RETURNS text AS $$
+DECLARE viaidx bigint; viaheap bigint;
+BEGIN
+  EXECUTE format('SELECT count(*) FROM big WHERE d @@@ %L::ftsquery', qry) INTO viaidx;
+  SET LOCAL enable_seqscan = on;
+  SET LOCAL enable_indexscan = off;
+  SET LOCAL enable_bitmapscan = off;
+  EXECUTE format('SELECT count(*) FROM big WHERE d @@@ %L::ftsquery', qry) INTO viaheap;
+  RESET enable_seqscan; RESET enable_indexscan; RESET enable_bitmapscan;
+  IF viaidx <> viaheap THEN
+    RETURN format('MISMATCH %s: index=%s heap=%s', why, viaidx, viaheap);
+  END IF;
+  RETURN format('%s ok (%s)', why, viaidx);
+END $$ LANGUAGE plpgsql;
+
+-- gate (1) one plain positive term: prefix / fuzzy / regex / weighted / multi-term
+SELECT gate_check('bigterm', 'plain-term-fastpath');
+-- NOTE: these probes deliberately use terms the corpus really contains
+-- ('bigterm' in every doc; 't1d7' only in doc 7), so a fallback that wrongly
+-- returned 0 could not pass by matching a ground truth that is also 0.
+SELECT gate_check('bigterm:*', 'prefix-falls-back');            -- 60
+SELECT gate_check('bigterm & t1d7', 'conjunction-falls-back');   -- 1
+SELECT gate_check('bigterm | t1d7', 'disjunction-falls-back');   -- 60
+SELECT gate_check('t1d7', 'rare-single-term-fastpath');          -- 1
+SELECT gate_check('!t1d7', 'negation-falls-back');               -- 59
+-- gate (3) unmerged pending docs must defeat the fast path
+INSERT INTO big SELECT 100000+g, to_ftsdoc('simple','bigterm pend'||g) FROM generate_series(1,5) g;
+SELECT gate_check('bigterm', 'pending-falls-back');
+VACUUM big;
+-- gate (2) tombstones must defeat it: delete + VACUUM records deleted docids
+DELETE FROM big WHERE id > 100000;
+VACUUM big;
+SELECT gate_check('bigterm', 'tombstones-fall-back');
+-- gate (4) a not-all-visible heap must defeat it (fresh uncommitted-ish churn)
+INSERT INTO big SELECT 200000+g, to_ftsdoc('simple','bigterm vis'||g) FROM generate_series(1,3) g;
+SELECT gate_check('bigterm', 'not-all-visible-falls-back');
+VACUUM big;
+SELECT gate_check('bigterm', 'fastpath-again-after-vacuum');
+DROP FUNCTION gate_check(text, text);
 RESET enable_seqscan;
 DROP TABLE big;
 

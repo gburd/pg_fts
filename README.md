@@ -92,7 +92,11 @@ SELECT id FROM docs
  ORDER BY to_ftsdoc('english', body) <=> to_ftsquery('english', 'quick fox')
  LIMIT 10;
 
--- fast COUNT (transparent: a plain count(*) WHERE @@@ is pushed to the index)
+-- fast COUNT (transparent: a plain count(*) WHERE @@@ is pushed to the index).
+-- A single plain term on a VACUUMed, tombstone-free index is answered from the
+-- dictionary's document frequency alone -- no postings read, no heap touched.
+-- Anything else (prefix/fuzzy/regex/weighted/multi-term, pending docs, tombstones,
+-- or a heap that is not all-visible) falls back to the exact count automatically.
 SELECT count(*) FROM docs
  WHERE to_ftsdoc('english', body) @@@ to_ftsquery('english', 'quick');
 

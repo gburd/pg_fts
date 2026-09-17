@@ -714,3 +714,31 @@ validation under always-on-replica conditions. Keep `trusted = true`.
 #18 operator docs -> #19-#21 review + hardening. #13 and #15 are C-only, no-op
 upgrade SQL; #14 needs a real REVOKE/GRANT upgrade script + a privilege-model
 decision.
+
+## TIN-inspired items A/B/C/D (2026-09-17)
+
+Assessed in `bench/NOTE_TIN_FEASIBILITY_2026-09-14.md`, executed and measured in
+`bench/RESULTS_ABC_2026-09-17.md`.
+
+- **A -- block-run visibility checking: DONE, no measurable speedup.** One VM lookup per
+  run of matches on a heap page instead of per TID, plus one tuple slot per call instead of
+  per probed TID. Counts identical (2,000,000 / 300,000 both arms). Measured ~1-2%, inside
+  noise: an apparent 8.5% came from one high base outlier, and repeated same-arm runs
+  overlap (base 397.3-408.2 ms, fix 397.4-402.7 ms). The projected "32x fewer VM lookups"
+  counted calls, not time -- the loop is dominated by `table_index_fetch_tuple`. Kept as
+  cleanup.
+- **B -- df fast count: was ALREADY IMPLEMENTED** (`bm25_count_dictdf_fastpath`) with all
+  four gates. It shipped with essentially no test coverage, so the work became **ten
+  gate-refusal cases** in `sql/pg_fts.sql`, each compared against a heap-only ground truth.
+  One test-design bug found and fixed in the process: three probes used terms the corpus
+  did not contain and were comparing 0 against 0.
+- **C -- verbatim posting copy on merge: WITHDRAWN.** The merge decodes through
+  `add_posting()` into a build hash table re-encoded at flush; there is no byte-stream
+  splice point. The proposal was a guess about code not read closely enough.
+- **D -- two-level bitmaps + SIMD: OPEN, and the only one of the four that could close the
+  ranked-query gap** (45% doclen path / 37% candidate iteration). The format side is
+  tractable via the 1.5.0 dual-read + optional-per-segment-pointer precedent (no REINDEX);
+  the real cost is that we have no SIMD infrastructure at all (no intrinsics, no runtime
+  dispatch, no `-mavx2` plumbing) and must keep a scalar fallback for non-AVX and ARM.
+  Needs explicit sign-off; not a point release. **Do not vectorize sparsemap** -- see
+  `bench/NOTE_SIMD_VENUE_2026-09-14.md`.

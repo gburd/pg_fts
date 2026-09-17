@@ -211,8 +211,20 @@ SELECT id FROM docs
      <para>
       Count the documents matching <replaceable>query</replaceable> using the
       given <literal>fts</literal> index, in bulk, without per-row executor
-      overhead.  Visible rows are counted via the visibility map; the heap is
-      probed only for pages not marked all-visible.
+      overhead.  Visible rows are counted via the visibility map, one lookup per
+      run of matches on the same heap page; the heap is probed only for pages not
+      marked all-visible.
+     </para>
+     <para>
+      A <emphasis>single plain term</emphasis> is answered from the dictionary's
+      document frequency alone &mdash; no posting decode and no heap access at all
+      &mdash; when the index carries no unmerged pending documents, no segment has
+      tombstones, and the whole heap is marked all-visible (typically: after a
+      <command>VACUUM</command>, on a corpus that is not being written).  The fast
+      path refuses and falls back to the exact count if any of those conditions
+      fails, or if the query is a prefix, fuzzy, regex, weighted, or multi-term
+      expression.  Both paths return the same number; the regression suite asserts
+      that for every gate individually against a heap-only ground truth.
      </para>
     </listitem>
    </varlistentry>

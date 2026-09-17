@@ -4391,36 +4391,64 @@ bm25_count_visible(Relation index, FtsQuery q)
 	 * The collected TIDs are now exactly the matches (over-generation already
 	 * rechecked above), so we only need visibility.  Count visible via the VM,
 	 * heap-probing only pages the map does not mark all-visible.
+	 *
+	 * ONE VM LOOKUP PER BLOCK RUN, not per TID.  tidset_sort_uniq() has sorted
+	 * these with cmp_tid and de-duplicated them, and a docid is
+	 * block * MaxHeapTuplesPerPage + offset -- monotonic in (block, offset) -- so
+	 * every match on a given heap page forms a strictly contiguous run.  The
+	 * previous loop asked the VM about the same block once for every matching
+	 * tuple on it; a page holding 32 matches paid 32 identical lookups.
+	 * (PostgreSQL's own visibility map is page-granular, which is what makes this
+	 * safe: the answer cannot differ between two TIDs on one page within a scan.)
+	 *
+	 * The tuple slot is likewise created ONCE for the whole call rather than per
+	 * probed TID; it is only reset between probes.  Both are pure overhead
+	 * removals -- the set of counted tuples is unchanged.
 	 */
-	for (i = 0; i < matches.n; i++)
 	{
-		BlockNumber blk = ItemPointerGetBlockNumber(&matches.tids[i]);
+		BlockNumber lastblk = InvalidBlockNumber;
+		bool		lastvis = false;
+		TupleTableSlot *slot = NULL;
 
-		if (VM_ALL_VISIBLE(heap, blk, &vmbuf))
+		for (i = 0; i < matches.n; i++)
 		{
-			/* whole page visible: this TID counts, no heap access */
-			count++;
-			continue;
-		}
-		/* page not all-visible: probe the heap for this TID's visibility */
-		if (fetch == NULL)
-		{
-#if PG_VERSION_NUM >= 190000
-			fetch = table_index_fetch_begin(heap, SO_NONE);
-#else
-			fetch = table_index_fetch_begin(heap);
-#endif
-		}
-		{
-			ItemPointerData tid = matches.tids[i];
-			bool		ca = false,
-						ad = false;
-			TupleTableSlot *slot = table_slot_create(heap, NULL);
+			BlockNumber blk = ItemPointerGetBlockNumber(&matches.tids[i]);
 
-			if (table_index_fetch_tuple(fetch, &tid, snap, slot, &ca, &ad))
+			if (blk != lastblk)
+			{
+				lastvis = VM_ALL_VISIBLE(heap, blk, &vmbuf);
+				lastblk = blk;
+			}
+			if (lastvis)
+			{
+				/* whole page visible: this TID counts, no heap access */
 				count++;
-			ExecDropSingleTupleTableSlot(slot);
+				continue;
+			}
+			/* page not all-visible: probe the heap for this TID's visibility */
+			if (fetch == NULL)
+			{
+#if PG_VERSION_NUM >= 190000
+				fetch = table_index_fetch_begin(heap, SO_NONE);
+#else
+				fetch = table_index_fetch_begin(heap);
+#endif
+			}
+			if (slot == NULL)
+				slot = table_slot_create(heap, NULL);
+			else
+				ExecClearTuple(slot);
+			{
+				ItemPointerData tid = matches.tids[i];
+				bool		ca = false,
+							ad = false;
+
+				if (table_index_fetch_tuple(fetch, &tid, snap, slot, &ca, &ad))
+					count++;
+			}
 		}
+		if (slot != NULL)
+			ExecDropSingleTupleTableSlot(slot);
 	}
 	if (fetch != NULL)
 		table_index_fetch_end(fetch);

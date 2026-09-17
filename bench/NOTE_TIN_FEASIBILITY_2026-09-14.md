@@ -144,3 +144,25 @@ In this order, because it is also increasing risk:
 **And a standing caveat:** we cannot measure TIN, so "matching TIN" is not a testable goal.
 Each of these should be justified by *our own* profile and *our own* field reports — all
 four are, independently of TIN — rather than by a number in an article we cannot reproduce.
+
+
+---
+
+# Outcome (2026-09-17)
+
+A, B and C were planned, implemented where they survived review, and measured. Results in
+`bench/RESULTS_ABC_2026-09-17.md`. Corrections to this note:
+
+- **B was already implemented** (`bm25_count_dictdf_fastpath`), with every gate this note
+  said it needed. Listing it as work was wrong. It shipped untested, though, so the work
+  became ten gate-refusal cases against a heap-only ground truth.
+- **A is correct but not measurably faster** — ~1-2%, inside run-to-run noise on repeated
+  same-arm runs. This note's "up to ~32x fewer VM lookups" counted CALLS, not TIME:
+  `VM_ALL_VISIBLE` on a cached page is nearly free, and the loop is dominated by
+  `table_index_fetch_tuple`. Kept as cleanup, not as a performance feature.
+- **C was withdrawn.** The merge decodes through `add_posting()` into a build hash table
+  that is re-encoded at flush, so there is no byte-stream splice point for a "verbatim
+  copy". The claim was a guess about code I had not read closely enough.
+
+**Item D (bitmaps + SIMD) is untouched and remains the only one of the four that could
+close the ranked-query gap.** A and B address counting; C does not exist.

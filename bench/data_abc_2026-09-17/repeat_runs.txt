@@ -1,0 +1,6 @@
+base rep1 median=400.3 min=399.3 max=401.6
+base rep2 median=397.3 min=395.2 max=398.7
+base rep3 median=402.7 min=402.1 max=404.0
+fix rep1 median=397.5 min=396.1 max=399.7
+fix rep2 median=397.4 min=396.5 max=399.1
+fix rep3 median=399.0 min=397.1 max=400.8
