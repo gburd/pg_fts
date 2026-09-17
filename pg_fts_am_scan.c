@@ -3,7 +3,11 @@
  * pg_fts_am_scan.c
  *		Bitmap scan for the bm25 access method.
  *
- * Included directly into pg_fts_am.c (it shares static page helpers).  It
+ * Included directly into pg_fts_am.c -- NOT a separate translation unit.  This
+ * is deliberate (see the comment at the #include site in pg_fts_am.c for the
+ * measured reasons: 15 statics would go extern, shared types would land in the
+ * on-disk-format header, and the hot-path inlines would stop inlining).  To
+ * syntax-check this file, compile pg_fts_am.c.  It
  * evaluates an ftsquery by set algebra over posting lists (a term yields the
  * TIDs whose document contains it; AND intersects, OR unions, NOT complements
  * against the indexed universe) for the bitmap and index-only scans, and runs
@@ -366,7 +370,7 @@ bm25_dict_seek(Relation index, const BM25SegMeta *seg,
 		LockBuffer(buf, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buf);
 		ptr = (char *) PageGetContents(page);
-		end = (char *) page + ((PageHeader) page)->pd_lower;
+		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
 		while (ptr < end)
 		{
@@ -427,7 +431,7 @@ bm25_lookup_term(Relation index, const BM25SegMeta *seg,
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buffer);
 		ptr = (char *) PageGetContents(page);
-		end = (char *) page + ((PageHeader) page)->pd_lower;
+		end = bm25_page_data_end(page);
 
 		while (ptr < end)
 		{
@@ -698,7 +702,7 @@ bm25_lookup_prefix(Relation index, const BM25SegMeta *seg,
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buffer);
 		ptr = (char *) PageGetContents(page);
-		end = (char *) page + ((PageHeader) page)->pd_lower;
+		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
 
 		while (ptr < end)
@@ -949,7 +953,7 @@ bm25_fuzzy_terms(Relation index, const BM25SegMeta *seg,
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buffer);
 		ptr = (char *) PageGetContents(page);
-		end = (char *) page + ((PageHeader) page)->pd_lower;
+		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
 
 		while (ptr < end)
@@ -1220,7 +1224,7 @@ bm25_universe_bounded(Relation index, BlockNumber dictstart, double ndocs,
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buffer);
 		ptr = (char *) PageGetContents(page);
-		end = (char *) page + ((PageHeader) page)->pd_lower;
+		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
 
 		while (ptr < end)
@@ -1689,7 +1693,7 @@ bm25_lookup_term_pos(Relation index, const BM25SegMeta *seg,
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buffer);
 		ptr = (char *) PageGetContents(page);
-		end = (char *) page + ((PageHeader) page)->pd_lower;
+		end = bm25_page_data_end(page);
 		while (ptr < end)
 		{
 			BM25DictEntry *de = (BM25DictEntry *) ptr;
@@ -1894,6 +1898,287 @@ done:
 }
 
 /*
+ * Per-scan evaluation state shared between bm25_collect_matches and the
+ * per-segment evaluator it delegates to.  Bundled so the evaluator's signature
+ * stays readable; every field is owned by bm25_collect_matches.
+ */
+typedef struct BM25CollectCtx
+{
+	FtsQuery	query;
+	BM25Tombstones *seg_tombs;
+	/* query classification (set once, read per segment) */
+	bool		has_fuzzy_regex;
+	bool		has_not;
+	bool		has_phrase;
+	/* positional-phrase fast path */
+	bool		use_pos_phrase;
+	int		   *pterm;
+	uint32	   *pstep;
+	int			npterm;
+	ItemPointerData *ptids;
+	int			nptids;
+	int			captids;
+	/* accumulators */
+	TidSet		acc;
+	bool		need_recheck;
+} BM25CollectCtx;
+
+typedef enum
+{
+	SEG_OK,						/* segment evaluated (or skipped as empty) */
+	SEG_RESTART					/* positional fast path abandoned: caller restarts from segment 0 */
+} BM25SegStatus;
+
+/*
+ * bm25_collect_segment: evaluate the query against ONE segment and fold its
+ * matches into ctx->acc (or, on the positional-phrase fast path, into
+ * ctx->ptids).  Returns SEG_RESTART when the positional path had to be
+ * abandoned mid-way (a term lacked positions); the caller then discards all
+ * accumulated state and re-runs every segment on the AND+recheck path.
+ *
+ * Split out of bm25_collect_matches (was a 176-line loop body inside a 412-line
+ * function).  Behaviour is unchanged: the three branches -- fuzzy/regex
+ * candidates, positional phrase, general boolean -- are exactly as they were.
+ */
+static BM25SegStatus
+bm25_collect_segment(Relation index, BM25SegMeta *sg, uint32 s, BM25CollectCtx *ctx)
+{
+	FtsQuery	query = ctx->query;
+	TidSet		universe;
+
+	if (sg->dictstart == InvalidBlockNumber)
+		return SEG_OK;
+
+	if (ctx->has_fuzzy_regex)
+	{
+		TidSet		cands;
+		bool		any_trgm = false;
+		bool		exact = (query->nitems == 1);
+		uint32		qi;
+
+		cands.tids = NULL;
+		cands.n = 0;
+		for (qi = 0; qi < query->nitems; qi++)
+		{
+			FtsQueryItem *it = &query->items[qi];
+			TidSet		ts;
+
+			if (it->type != FTS_QI_VAL ||
+				!(it->flags & (FTS_QF_FUZZY | FTS_QF_REGEX)))
+				continue;
+
+			if (it->flags & FTS_QF_FUZZY)
+			{
+				if (bm25_fuzzy_terms(index, sg,
+									 FTS_QUERY_ITEMTEXT(query, it),
+									 it->termlen, (int) it->distance, &ts))
+				{
+					cands = tidset_or(cands, ts);
+					any_trgm = true;
+					continue;
+				}
+			}
+			exact = false;
+			if (bm25_trgm_candidates(index, sg->trgmstart,
+									 sg->dictstart,
+									 FTS_QUERY_ITEMTEXT(query, it),
+									 it->termlen, 3,
+									 (it->flags & FTS_QF_REGEX) != 0,
+									 sg->doclenstart == InvalidBlockNumber, &ts))
+			{
+				cands = tidset_or(cands, ts);
+				any_trgm = true;
+			}
+			else
+			{
+				any_trgm = false;
+				break;
+			}
+		}
+		if (any_trgm)
+		{
+			if (!exact)
+				ctx->need_recheck = true;
+			if (cands.n > 0)
+			{
+				bm25_filter_tombstoned_seg(ctx->seg_tombs, s, &cands);
+				if (cands.n > 0)
+					ctx->acc = tidset_or(ctx->acc, cands);
+			}
+		}
+		else
+		{
+			/*
+			 * No trigram acceleration for this fuzzy/regex term (index built
+			 * without trigrams, or the pattern is too short to yield the
+			 * minimum trigrams).  We fall back to rechecking every document
+			 * in the segment against the pattern -- correct, just slower, and
+			 * the documented behavior of a trigrams-off index (see the
+			 * "trigrams reloption" regression test).  bm25_universe_bounded
+			 * folds duplicates as it goes so the candidate scratch stays
+			 * O(ndocs); the older unbounded collect grew to Sum(df) and could
+			 * reach a multi-gigabyte "invalid memory alloc request size" on a
+			 * high-vocabulary corpus.
+			 */
+			ctx->need_recheck = true;
+			universe = bm25_universe_bounded(index, sg->dictstart, sg->ndocs,
+											 sg->doclenstart == InvalidBlockNumber);
+			if (universe.n > 0)
+			{
+				bm25_filter_tombstoned_seg(ctx->seg_tombs, s, &universe);
+				if (universe.n > 0)
+					ctx->acc = tidset_or(ctx->acc, universe);
+			}
+		}
+		return SEG_OK;
+	}
+
+	if (ctx->has_not)
+		universe = bm25_universe_bounded(index, sg->dictstart, sg->ndocs,
+										 sg->doclenstart == InvalidBlockNumber);
+	else
+	{
+		universe.tids = NULL;
+		universe.n = 0;
+	}
+
+	if (ctx->use_pos_phrase)
+	{
+		/* evaluate the phrase from this segment's positional postings; the
+		 * matched TIDs accumulate in ptids across segments, and are folded
+		 * into acc after the loop.  A false return means a term lacked
+		 * positions (a rare page-overflow block) -- abandon the fast path
+		 * and fall back to the AND + recheck path for correctness. */
+		int			seg_start = ctx->nptids;
+
+		if (ctx->ptids == NULL)
+		{
+			ctx->captids = 64;
+			ctx->ptids = (ItemPointerData *) palloc(ctx->captids * sizeof(ItemPointerData));
+		}
+		if (!bm25_phrase_eval_seg(index, sg, query, ctx->pterm, ctx->pstep, ctx->npterm,
+								  &ctx->ptids, &ctx->nptids, &ctx->captids))
+			return SEG_RESTART;
+
+		/* filter ONLY this segment's new hits (ptids[seg_start..nptids])
+		 * against THIS segment's tombstones -- they are docid-ascending (the
+		 * driver posting list is docid-sorted).  Prior segments' hits were
+		 * already filtered against their own maps. */
+		if (ctx->nptids > seg_start)
+		{
+			TidSet		phr;
+
+			phr.tids = ctx->ptids + seg_start;
+			phr.n = ctx->nptids - seg_start;
+			bm25_filter_tombstoned_seg(ctx->seg_tombs, s, &phr);
+			ctx->nptids = seg_start + phr.n;
+		}
+		return SEG_OK;
+	}
+
+	{
+		TidSet		result = bm25_eval_query(index, sg, query, universe);
+
+		if (result.n > 0)
+		{
+			bm25_filter_tombstoned_seg(ctx->seg_tombs, s, &result);
+			if (result.n > 0)
+			{
+				/* PHRASE/NEAR is evaluated as AND here (positions=off or a
+				 * non-pure-phrase query); the heap ftsdoc carries positions,
+				 * so a heap recheck of @@@ enforces adjacency exactly. */
+				if (ctx->has_phrase)
+					ctx->need_recheck = true;
+				ctx->acc = tidset_or(ctx->acc, result);
+			}
+		}
+	}
+	return SEG_OK;
+}
+
+/*
+ * bm25_collect_pending: walk the unmerged pending list and OR into *out every
+ * document that matches the query exactly (a pending doc is stored verbatim, so
+ * fts_doc_matches() is the full predicate -- no recheck needed).
+ *
+ * Split out of bm25_collect_matches, which had grown to 412 lines with this and
+ * the per-segment evaluation inlined.  Behaviour is unchanged.
+ */
+static void
+bm25_collect_pending(Relation index, const BM25MetaPageData *meta,
+					 FtsQuery query, TidSet *out)
+{
+	BlockNumber blk = meta->pendinghead;
+
+	while (blk != InvalidBlockNumber)
+	{
+		Buffer		buffer;
+		Page		page;
+		char	   *ptr,
+				   *end;
+		BlockNumber next;
+
+		CHECK_FOR_INTERRUPTS();	/* between pages, no buffer lock held: safe to let a cancel unwind */
+		buffer = bm25_scan_readbuf(index, blk);
+		if (buffer == InvalidBuffer)
+			break;			/* block truncated by a concurrent fts_vacuum: end of chain */
+		LockBuffer(buffer, BUFFER_LOCK_SHARE);
+		page = BufferGetPage(buffer);
+		ptr = (char *) PageGetContents(page);
+		end = bm25_page_data_end(page);
+		next = BM25PageGetOpaque(page)->nextblk;
+
+		while (ptr < end)
+		{
+			BM25PendingItem *pi = (BM25PendingItem *) ptr;
+			FtsDoc		pdoc;
+
+			/*
+			 * Bounds-guard the pending item before trusting pi->doclen.
+			 * The pending list is read under only BUFFER_LOCK_SHARE, and a
+			 * concurrent flush (INSERT pending-buffer -> segment, VACUUM,
+			 * fts_merge) clears the list and frees these pages, which a
+			 * concurrent insert can recycle and overwrite (pg_fts recycles
+			 * freed pages with no deletion-xid gate).  A scan that snapshotted
+			 * pendinghead before that then walks a recycled page whose
+			 * pi->doclen is arbitrary; without this guard fts_doc_is_valid /
+			 * fts_doc_matches read out of bounds and the ptr advance runs off
+			 * the page (observed as a wild multi-gigabyte allocation / crash
+			 * under concurrent merge + ingestion).  If the header or the
+			 * doclen-sized body does not fit the page, stop the page walk; the
+			 * scan's generation re-check then detects the stale read and
+			 * restarts.
+			 */
+			if ((char *) pi + sizeof(BM25PendingItem) > end ||
+				(char *) pi + MAXALIGN(sizeof(BM25PendingItem) + (Size) pi->doclen) > end)
+				break;
+			pdoc = (FtsDoc) ((char *) pi + sizeof(BM25PendingItem));
+
+			/* A pending doc is raw page bytes; validate before the matcher
+			 * walks its offsets, so a torn/corrupt page cannot segfault a
+			 * SELECT.  A malformed doc is simply not matched (and flagged). */
+			if (!fts_doc_is_valid(pdoc, pi->doclen))
+				ereport(WARNING,
+						(errcode(ERRCODE_DATA_CORRUPTED),
+						 errmsg("pg_fts: skipping malformed pending document in index \"%s\" during scan",
+								RelationGetRelationName(index)),
+						 errhint("REINDEX the index to rebuild it from the heap.")));
+			else if (fts_doc_matches(pdoc, query))
+			{
+				TidSet		one;
+
+				one.tids = &pi->tid;
+				one.n = 1;
+				*out = tidset_or(*out, one);	/* exact per-doc match */
+			}
+			ptr += MAXALIGN(sizeof(BM25PendingItem) + pi->doclen);
+		}
+		UnlockReleaseBuffer(buffer);
+		blk = next;
+	}
+}
+
+/*
  * bm25_collect_matches: evaluate the scan's query across all segments + the
  * pending list; return matching TIDs (sorted, unique) and a *recheck flag
  * (true iff any term used the over-generating trigram funnel / regex / NOT-
@@ -2006,176 +2291,57 @@ collect_retry:
 	 */
 	bm25_tombstones_load(index, &meta, &seg_tombs);
 
-	for (s = 0; s < meta.nsegments; s++)
 	{
-		BM25SegMeta *sg = &meta.segs[s];
-		TidSet		universe;
+		BM25CollectCtx ctx;
 
-		CHECK_FOR_INTERRUPTS();	/* per segment; no lock/window held (meta is in memory) */
-		if (sg->dictstart == InvalidBlockNumber)
-			continue;
+		ctx.query = query;
+		ctx.seg_tombs = &seg_tombs;
+		ctx.has_fuzzy_regex = has_fuzzy_regex;
+		ctx.has_not = has_not;
+		ctx.has_phrase = has_phrase;
+		ctx.use_pos_phrase = use_pos_phrase;
+		ctx.pterm = pterm;
+		ctx.pstep = pstep;
+		ctx.npterm = npterm;
+		ctx.ptids = ptids;
+		ctx.nptids = nptids;
+		ctx.captids = captids;
+		ctx.acc = acc;
+		ctx.need_recheck = need_recheck;
 
-		if (has_fuzzy_regex)
+		for (s = 0; s < meta.nsegments; s++)
 		{
-			TidSet		cands;
-			bool		any_trgm = false;
-			bool		exact = (query->nitems == 1);
-			uint32		qi;
-
-			cands.tids = NULL;
-			cands.n = 0;
-			for (qi = 0; qi < query->nitems; qi++)
+			CHECK_FOR_INTERRUPTS();	/* per segment; no lock/window held (meta is in memory) */
+			if (bm25_collect_segment(index, &meta.segs[s], s, &ctx) == SEG_RESTART)
 			{
-				FtsQueryItem *it = &query->items[qi];
-				TidSet		ts;
-
-				if (it->type != FTS_QI_VAL ||
-					!(it->flags & (FTS_QF_FUZZY | FTS_QF_REGEX)))
-					continue;
-
-				if (it->flags & FTS_QF_FUZZY)
+				/* positional fast path abandoned: restart collection from
+				 * scratch via the AND path (see bm25_collect_segment) */
+				ctx.use_pos_phrase = false;
+				if (ctx.ptids)
 				{
-					if (bm25_fuzzy_terms(index, sg,
-										 FTS_QUERY_ITEMTEXT(query, it),
-										 it->termlen, (int) it->distance, &ts))
-					{
-						cands = tidset_or(cands, ts);
-						any_trgm = true;
-						continue;
-					}
+					pfree(ctx.ptids);
+					ctx.ptids = NULL;
 				}
-				exact = false;
-				if (bm25_trgm_candidates(index, sg->trgmstart,
-										 sg->dictstart,
-										 FTS_QUERY_ITEMTEXT(query, it),
-										 it->termlen, 3,
-										 (it->flags & FTS_QF_REGEX) != 0,
-										 sg->doclenstart == InvalidBlockNumber, &ts))
+				ctx.nptids = 0;
+				if (ctx.acc.tids)
 				{
-					cands = tidset_or(cands, ts);
-					any_trgm = true;
+					pfree(ctx.acc.tids);
+					ctx.acc.tids = NULL;
 				}
-				else
-				{
-					any_trgm = false;
-					break;
-				}
-			}
-			if (any_trgm)
-			{
-				if (!exact)
-					need_recheck = true;
-				if (cands.n > 0)
-				{
-					bm25_filter_tombstoned_seg(&seg_tombs, s, &cands);
-					if (cands.n > 0)
-						acc = tidset_or(acc, cands);
-				}
-			}
-			else
-			{
-				/*
-				 * No trigram acceleration for this fuzzy/regex term (index built
-				 * without trigrams, or the pattern is too short to yield the
-				 * minimum trigrams).  We fall back to rechecking every document
-				 * in the segment against the pattern -- correct, just slower, and
-				 * the documented behavior of a trigrams-off index (see the
-				 * "trigrams reloption" regression test).  bm25_universe_bounded
-				 * folds duplicates as it goes so the candidate scratch stays
-				 * O(ndocs); the older unbounded collect grew to Sum(df) and could
-				 * reach a multi-gigabyte "invalid memory alloc request size" on a
-				 * high-vocabulary corpus.
-				 */
-				need_recheck = true;
-				universe = bm25_universe_bounded(index, sg->dictstart, sg->ndocs,
-												 sg->doclenstart == InvalidBlockNumber);
-				if (universe.n > 0)
-				{
-					bm25_filter_tombstoned_seg(&seg_tombs, s, &universe);
-					if (universe.n > 0)
-						acc = tidset_or(acc, universe);
-				}
-			}
-			continue;
-		}
-
-		if (has_not)
-			universe = bm25_universe_bounded(index, sg->dictstart, sg->ndocs,
-											 sg->doclenstart == InvalidBlockNumber);
-		else
-		{
-			universe.tids = NULL;
-			universe.n = 0;
-		}
-
-		if (use_pos_phrase)
-		{
-			/* evaluate the phrase from this segment's positional postings; the
-			 * matched TIDs accumulate in ptids across segments, and are folded
-			 * into acc after the loop.  A false return means a term lacked
-			 * positions (a rare page-overflow block) -- abandon the fast path
-			 * and fall back to the AND + recheck path for correctness. */
-			int			seg_start = nptids;
-
-			if (ptids == NULL)
-			{
-				captids = 64;
-				ptids = (ItemPointerData *) palloc(captids * sizeof(ItemPointerData));
-			}
-			if (!bm25_phrase_eval_seg(index, sg, query, pterm, pstep, npterm,
-									  &ptids, &nptids, &captids))
-			{
-				/* fall back: restart collection from scratch via the AND path */
-				use_pos_phrase = false;
-				if (ptids)
-				{
-					pfree(ptids);
-					ptids = NULL;
-				}
-				nptids = 0;
-				if (acc.tids)
-				{
-					pfree(acc.tids);
-					acc.tids = NULL;
-				}
-				acc.n = 0;
+				ctx.acc.n = 0;
 				s = (uint32) -1;	/* restart the segment loop (s++ -> 0) */
 				continue;
 			}
-			/* filter ONLY this segment's new hits (ptids[seg_start..nptids])
-			 * against THIS segment's tombstones -- they are docid-ascending (the
-			 * driver posting list is docid-sorted).  Prior segments' hits were
-			 * already filtered against their own maps. */
-			if (nptids > seg_start)
-			{
-				TidSet		phr;
-
-				phr.tids = ptids + seg_start;
-				phr.n = nptids - seg_start;
-				bm25_filter_tombstoned_seg(&seg_tombs, s, &phr);
-				nptids = seg_start + phr.n;
-			}
-			continue;
 		}
 
-		{
-			TidSet		result = bm25_eval_query(index,
-												 sg, query, universe);
-
-			if (result.n > 0)
-			{
-				bm25_filter_tombstoned_seg(&seg_tombs, s, &result);
-				if (result.n > 0)
-				{
-					/* PHRASE/NEAR is evaluated as AND here (positions=off or a
-					 * non-pure-phrase query); the heap ftsdoc carries positions,
-					 * so a heap recheck of @@@ enforces adjacency exactly. */
-					if (has_phrase)
-						need_recheck = true;
-					acc = tidset_or(acc, result);
-				}
-			}
-		}
+		/* hand the evaluator's state back to the function-scope locals the
+		 * remainder of this function was written against */
+		use_pos_phrase = ctx.use_pos_phrase;
+		ptids = ctx.ptids;
+		nptids = ctx.nptids;
+		captids = ctx.captids;
+		acc = ctx.acc;
+		need_recheck = ctx.need_recheck;
 	}
 
 	/* fold in the positional-phrase matches (already tombstone-filtered per
@@ -2202,75 +2368,7 @@ collect_retry:
 	pending_acc.tids = NULL;
 	pending_acc.n = 0;
 	if (meta.pendinghead != InvalidBlockNumber)
-	{
-		BlockNumber blk = meta.pendinghead;
-
-		while (blk != InvalidBlockNumber)
-		{
-			Buffer		buffer;
-			Page		page;
-			char	   *ptr,
-					   *end;
-			BlockNumber next;
-
-			CHECK_FOR_INTERRUPTS();	/* between pages, no buffer lock held: safe to let a cancel unwind */
-			buffer = bm25_scan_readbuf(index, blk);
-			if (buffer == InvalidBuffer)
-				break;		/* block truncated by a concurrent fts_vacuum: end of chain */
-			LockBuffer(buffer, BUFFER_LOCK_SHARE);
-			page = BufferGetPage(buffer);
-			ptr = (char *) PageGetContents(page);
-			end = (char *) page + ((PageHeader) page)->pd_lower;
-			next = BM25PageGetOpaque(page)->nextblk;
-
-			while (ptr < end)
-			{
-				BM25PendingItem *pi = (BM25PendingItem *) ptr;
-				FtsDoc		pdoc;
-
-				/*
-				 * Bounds-guard the pending item before trusting pi->doclen.
-				 * The pending list is read under only BUFFER_LOCK_SHARE, and a
-				 * concurrent flush (INSERT pending-buffer -> segment, VACUUM,
-				 * fts_merge) clears the list and frees these pages, which a
-				 * concurrent insert can recycle and overwrite (pg_fts recycles
-				 * freed pages with no deletion-xid gate).  A scan that snapshotted
-				 * pendinghead before that then walks a recycled page whose
-				 * pi->doclen is arbitrary; without this guard fts_doc_is_valid /
-				 * fts_doc_matches read out of bounds and the ptr advance runs off
-				 * the page (observed as a wild multi-gigabyte allocation / crash
-				 * under concurrent merge + ingestion).  If the header or the
-				 * doclen-sized body does not fit the page, stop the page walk; the
-				 * scan's generation re-check then detects the stale read and
-				 * restarts.
-				 */
-				if ((char *) pi + sizeof(BM25PendingItem) > end ||
-					(char *) pi + MAXALIGN(sizeof(BM25PendingItem) + (Size) pi->doclen) > end)
-					break;
-				pdoc = (FtsDoc) ((char *) pi + sizeof(BM25PendingItem));
-
-				/* A pending doc is raw page bytes; validate before the matcher
-				 * walks its offsets, so a torn/corrupt page cannot segfault a
-				 * SELECT.  A malformed doc is simply not matched (and flagged). */
-				if (!fts_doc_is_valid(pdoc, pi->doclen))
-					ereport(WARNING,
-							(errcode(ERRCODE_DATA_CORRUPTED),
-							 errmsg("pg_fts: skipping malformed pending document in index \"%s\" during scan",
-									RelationGetRelationName(index)),
-							 errhint("REINDEX the index to rebuild it from the heap.")));
-				else if (fts_doc_matches(pdoc, query))
-				{
-					TidSet		one;
-
-					one.tids = &pi->tid;
-					one.n = 1;
-					pending_acc = tidset_or(pending_acc, one);	/* exact per-doc match */				}
-				ptr += MAXALIGN(sizeof(BM25PendingItem) + pi->doclen);
-			}
-			UnlockReleaseBuffer(buffer);
-			blk = next;
-		}
-	}
+		bm25_collect_pending(index, &meta, query, &pending_acc);
 
 	tidset_sort_uniq(&acc);
 	/*
@@ -2448,7 +2546,7 @@ bm25_lookup_dict(Relation index, const BM25SegMeta *seg,
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buffer);
 		ptr = (char *) PageGetContents(page);
-		end = (char *) page + ((PageHeader) page)->pd_lower;
+		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
 
 		while (ptr < end)
@@ -2511,7 +2609,7 @@ bm25_lookup_df(Relation index, const BM25SegMeta *seg,
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buffer);
 		ptr = (char *) PageGetContents(page);
-		end = (char *) page + ((PageHeader) page)->pd_lower;
+		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
 
 		while (ptr < end)
@@ -2818,7 +2916,7 @@ wand_load_block(WandCursor *c)
 	buf = ReadBuffer(c->index, c->curblk);
 	LockBuffer(buf, BUFFER_LOCK_SHARE);
 	page = BufferGetPage(buf);
-	pend = (char *) page + ((PageHeader) page)->pd_lower;
+	pend = bm25_page_data_end(page);
 	p = (char *) page + c->curoff;
 
 	/* skip any empty tail; advance across pages until a real block or EOF */
@@ -2842,7 +2940,7 @@ wand_load_block(WandCursor *c)
 		buf = ReadBuffer(c->index, c->curblk);
 		LockBuffer(buf, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buf);
-		pend = (char *) page + ((PageHeader) page)->pd_lower;
+		pend = bm25_page_data_end(page);
 		p = (char *) page + c->curoff;
 	}
 
@@ -3077,7 +3175,7 @@ wand_skip_blocks(WandCursor *c, uint64 target)
 		buf = ReadBuffer(c->index, c->curblk);
 		LockBuffer(buf, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buf);
-		pend = (char *) page + ((PageHeader) page)->pd_lower;
+		pend = bm25_page_data_end(page);
 		nextblk = BM25PageGetOpaque(page)->nextblk;
 		p = (char *) page + c->curoff;
 		while (p + sizeof(BM25BlockHdr) <= pend && c->nread < (int) c->df)
@@ -4735,7 +4833,7 @@ fts_anomalous_docs(PG_FUNCTION_ARGS)
 				LockBuffer(buffer, BUFFER_LOCK_SHARE);
 				page = BufferGetPage(buffer);
 				ptr = (char *) PageGetContents(page);
-				end = (char *) page + ((PageHeader) page)->pd_lower;
+				end = bm25_page_data_end(page);
 				next = BM25PageGetOpaque(page)->nextblk;
 
 				while (ptr < end)
@@ -4796,7 +4894,7 @@ fts_anomalous_docs(PG_FUNCTION_ARGS)
 				LockBuffer(buffer, BUFFER_LOCK_SHARE);
 				page = BufferGetPage(buffer);
 				ptr = (char *) PageGetContents(page);
-				end = (char *) page + ((PageHeader) page)->pd_lower;
+				end = bm25_page_data_end(page);
 				next = BM25PageGetOpaque(page)->nextblk;
 
 				while (ptr < end)

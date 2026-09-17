@@ -2,6 +2,47 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.8.2 - 2026-09-17
+
+Code-quality release from the fresh-eyes review (`REVIEW_2026-09-17.md`), plus one real
+fix found while doing it. No on-disk format change; **no REINDEX required**.
+
+### Fixed
+
+- **A ninth unvalidated `pd_lower` read**, in the trigram blob reader
+  (`pg_fts_trgm_index.c`). It computed a `memcpy` length as `pd_lower - contents_offset`;
+  on a corrupt or recycled page whose `pd_lower` is below the contents offset that wraps
+  to a huge `Size` before the `Min()` clamps it, and the copy runs past the page. Same
+  defect class as the 1.7.0 P0 that made an index permanently unvacuumable. Now routed
+  through `bm25_page_data_end()`, as are the 14 remaining reads in `pg_fts_am_scan.c`.
+  1.7.1 claimed to have fixed "all eight" sites; this makes it nine, and the count is now
+  every read of `pd_lower` in the tree.
+
+### Changed (behaviour-preserving; full gate green after each)
+
+- **Allocator state is a scoped struct, and misuse is a hard error.** The four file-scope
+  globals (`bm25_lowfree`, `_n`, `_i`, `bm25_alloc_extend_only`) became one
+  `BM25AllocCtx` reachable only through `bm25_alloc_scope_enter()` /
+  `bm25_alloc_scope_exit()`, which nest by returning the previous context. In the 1.7.1
+  work, code read those globals without owning them and handed out garbage block numbers
+  ("could not open file ... target block 829694001: previous segment is only 527 blocks");
+  only `t/007_segment_cap.pl` noticed. `bm25_new_buffer()` now `elog(ERROR)`s on that
+  condition. Deliberately an `elog`, not an `Assert` -- the release gate is not a cassert
+  build, and a check that fires only in a build nobody ships is documentation, not
+  enforcement.
+- **`bm25_collect_matches` split, 412 -> 226 lines.** The per-segment loop body is now
+  `bm25_collect_segment()` (returns `SEG_RESTART` for the positional-phrase fallback the
+  loop used to express as `s = -1; continue`) and the pending-list walk is
+  `bm25_collect_pending()`. Shared state travels in a `BM25CollectCtx`.
+- **The single translation unit is now a documented decision, not an accident.**
+  `pg_fts_am.c` `#include`s `pg_fts_am_scan.c`, `pg_fts_trgm_index.c` and `pg_fts_lev.c`.
+  Splitting was costed: 15 statics would go extern, ~10 shared types would move into the
+  on-disk-format header, and the hot-path `static inline` helpers inside the 45%/37%
+  common-term profile would stop inlining (PGXS does not use LTO). In return, three `.o`
+  files and no behaviour change. Kept; the reasoning is at the `#include` site and in both
+  included files' headers, with the two prerequisites if separate compilation is ever
+  needed.
+
 ## 1.8.1 - 2026-09-17
 
 Counting-path work from the TIN feasibility review. No on-disk format change; **no REINDEX

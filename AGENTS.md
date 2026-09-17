@@ -86,10 +86,11 @@ style preferences.
 16. **Validate on-page integers BEFORE forming pointers from them.** `page + pd_lower` is
     itself UB for a corrupt value; the fuzzer caught this in a fix. Guard in the integer
     domain.
-17. **File-scope allocator state (`bm25_lowfree_*`, `bm25_alloc_extend_only`) is owned by a
-    begin/end pair.** Reading it without owning it handed out garbage block numbers; only
-    `t/007` caught it. Do not touch it outside `bm25_alloc_begin`/`_end`. (Open item:
-    pass it explicitly -- ROADMAP.)
+17. **Allocator state is a scoped `BM25AllocCtx`, reachable only through
+    `bm25_alloc_scope_enter`/`_exit`.** Reading the old globals without owning them handed
+    out garbage block numbers; only `t/007` caught it. `bm25_new_buffer` now `elog(ERROR)`s
+    on that condition. Always pair enter/exit in `PG_FINALLY`; scopes nest by returning the
+    previous context.
 18. **`bm25_page_recyclable`'s XID gate is correct and must not be bypassed.** Its comment
     records a real SIGSEGV from doing so. Pages freed in a transaction cannot be reused in
     that transaction; design around it, do not weaken it.

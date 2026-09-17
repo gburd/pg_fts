@@ -3,7 +3,9 @@
  * pg_fts_trgm_index.c
  *		On-disk trigram index for narrowing fuzzy/regex candidates.
  *
- * Included into pg_fts_am.c.  Maps every trigram of every indexed term to the
+ * Included into pg_fts_am.c -- NOT a separate translation unit, deliberately;
+ * see the comment at the #include site there.  To syntax-check this file,
+ * compile pg_fts_am.c.  Maps every trigram of every indexed term to the
  * set of TERM ORDINALS (positions in the segment's sorted dictionary) whose
  * term contains that trigram, stored as a namespaced sparsemap (see
  * pg_fts_sm.h).  Keying on the vocabulary rather than the docid space keeps
@@ -122,8 +124,13 @@ bm25_read_blob(Relation index, BlockNumber blk, Size len)
 		b = ReadBuffer(index, blk);
 		LockBuffer(b, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(b);
-		avail = ((PageHeader) page)->pd_lower -
-			((char *) PageGetContents(page) - (char *) page);
+		/*
+		 * Compute the filled length through the validated helper: a corrupt or
+		 * recycled page's pd_lower below the contents offset would otherwise
+		 * wrap `avail` to a huge Size before the Min() clamps it, and the
+		 * memcpy would read past the page.  Same defect class as the 1.7.0 P0.
+		 */
+		avail = (Size) (bm25_page_data_end(page) - (char *) PageGetContents(page));
 		avail = Min(avail, len - off);
 		memcpy(buf + off, PageGetContents(page), avail);
 		off += avail;

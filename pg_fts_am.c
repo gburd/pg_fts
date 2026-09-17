@@ -1114,26 +1114,51 @@ done:
  * Low-page-biased allocation context.  Normally bm25_new_buffer() hands out
  * whatever free page the FSM offers (unordered), then extends.  During a
  * space-reclaiming compaction we instead want to pack live pages toward the
- * FRONT of the file so the dead tail can be truncated.  bm25_alloc_begin()
- * gathers all currently-free blocks, sorts them ascending, and
- * bm25_new_buffer() hands them out low-first; when the low-free list is
+ * FRONT of the file so the dead tail can be truncated.  A
+ * BM25_ALLOC_LOWFIRST scope gathers all currently-free blocks, sorts them
+ * ascending, and bm25_new_buffer() hands them out low-first; when the list is
  * exhausted it falls back to the ordinary FSM/extend path.  The context is a
- * single backend-scoped hint (compaction is single-writer), reset by
- * bm25_alloc_end().
+ * single backend-scoped struct (compaction is single-writer) with a scoped
+ * lifetime -- see BM25AllocCtx below.
  */
-static BlockNumber *bm25_lowfree = NULL;
-static int	bm25_lowfree_n = 0;
-static int	bm25_lowfree_i = 0;
-
 /*
- * Extend-only allocation mode.  When set, bm25_new_buffer() skips ALL free-page
- * reuse (the low-free list AND the FSM) and only extends the relation, so a
- * rewrite writes its whole output to fresh high blocks.  Used by the vacuum
- * compactor's "vacate" phase to push a live segment above the free region,
- * turning the freed old pages into one contiguous low-free run big enough for
- * the following "pack" phase to relocate the segment to the front and truncate.
+ * The allocator context is ONE struct with a SCOPED lifetime, not a set of
+ * independent globals.  This is deliberate and it is the fix for a real bug:
+ * in the 1.7.1 work, code read the low-free cursor and flipped extend-only
+ * without owning the state -- outside any begin/end pair -- and handed out
+ * garbage block numbers from a dangling pointer ("could not open file ...
+ * target block 829694001: previous segment is only 527 blocks").  Only
+ * t/007_segment_cap.pl caught it.
+ *
+ * So the state is reachable only through bm25_alloc_scope_enter() /
+ * bm25_alloc_scope_exit(), which nest by returning the previous context, and
+ * bm25_new_buffer() asserts a scope is active before consulting it.  The
+ * failure mode that bit is now an assertion, not a test's job to notice.
+ *
+ * lowfree/n/i: the ascending free-block list gathered by a low-first
+ * (compacting) scope; NULL when the scope is extend-only or plain.
+ * extend_only: skip ALL free-page reuse (low-free list AND FSM) and only
+ * extend, so a rewrite lands on fresh high blocks.  Used by the compactor's
+ * "vacate" phase and by the merge loop while a merge is reading its inputs
+ * (merge N+1 must not recycle a page merge N still threads a chain through).
  */
-static bool bm25_alloc_extend_only = false;
+typedef struct BM25AllocCtx
+{
+	BlockNumber *lowfree;
+	int			lowfree_n;
+	int			lowfree_i;
+	bool		extend_only;
+	bool		active;			/* a scope has been entered */
+} BM25AllocCtx;
+
+static BM25AllocCtx bm25_alloc = {NULL, 0, 0, false, false};
+
+typedef enum BM25AllocMode
+{
+	BM25_ALLOC_PLAIN,			/* FSM reuse then extend (the default) */
+	BM25_ALLOC_LOWFIRST,		/* gather free blocks, hand out lowest first */
+	BM25_ALLOC_EXTEND_ONLY		/* never reuse; extend only */
+} BM25AllocMode;
 
 /* GUC: build finalizes to one segment only when total index <= this many MB;
  * above it the build stops at a bounded tiered set so it always converges.
@@ -1164,33 +1189,53 @@ cmp_blocknumber(const void *a, const void *b)
  * subsequent bm25_new_buffer() calls reuse the lowest blocks first.  Single
  * writer only.  Cheap relative to the segment rewrite it precedes.
  */
-static void
-bm25_alloc_begin(Relation index)
+/*
+ * Enter an allocator scope of the given mode.  Returns the PREVIOUS context so
+ * the caller can restore it with bm25_alloc_scope_exit() -- scopes nest (the
+ * vacuum compactor calls the merge, which opens its own scope), and the
+ * save/restore that two call sites used to do by hand is now the mechanism.
+ *
+ * Always pair with bm25_alloc_scope_exit() in PG_FINALLY.  A LOWFIRST scope
+ * gathers all currently-free blocks (linear FSM probe, O(nblocks), cheap next
+ * to the rewrite it precedes) into an ascending array.
+ */
+static BM25AllocCtx
+bm25_alloc_scope_enter(Relation index, BM25AllocMode mode)
 {
-	BlockNumber nblocks = RelationGetNumberOfBlocks(index);
-	BlockNumber blk;
+	BM25AllocCtx prev = bm25_alloc;
 
-	bm25_lowfree_i = 0;
-	bm25_lowfree_n = 0;
-	bm25_lowfree = NULL;
-	if (nblocks <= 1)
-		return;
-	bm25_lowfree = (BlockNumber *) palloc(sizeof(BlockNumber) * nblocks);
-	for (blk = 1; blk < nblocks; blk++)	/* block 0 = metapage, never free */
-		if (GetRecordedFreeSpace(index, blk) >= BLCKSZ / 2)
-			bm25_lowfree[bm25_lowfree_n++] = blk;
-	if (bm25_lowfree_n > 1)
-		qsort(bm25_lowfree, bm25_lowfree_n, sizeof(BlockNumber), cmp_blocknumber);
+	bm25_alloc.lowfree = NULL;
+	bm25_alloc.lowfree_n = 0;
+	bm25_alloc.lowfree_i = 0;
+	bm25_alloc.extend_only = (mode == BM25_ALLOC_EXTEND_ONLY);
+	bm25_alloc.active = true;
+
+	if (mode == BM25_ALLOC_LOWFIRST)
+	{
+		BlockNumber nblocks = RelationGetNumberOfBlocks(index);
+		BlockNumber blk;
+
+		if (nblocks > 1)
+		{
+			bm25_alloc.lowfree = (BlockNumber *) palloc(sizeof(BlockNumber) * nblocks);
+			for (blk = 1; blk < nblocks; blk++)	/* block 0 = metapage, never free */
+				if (GetRecordedFreeSpace(index, blk) >= BLCKSZ / 2)
+					bm25_alloc.lowfree[bm25_alloc.lowfree_n++] = blk;
+			if (bm25_alloc.lowfree_n > 1)
+				qsort(bm25_alloc.lowfree, bm25_alloc.lowfree_n,
+					  sizeof(BlockNumber), cmp_blocknumber);
+		}
+	}
+	return prev;
 }
 
+/* Leave the current scope, freeing its list, and restore the previous one. */
 static void
-bm25_alloc_end(void)
+bm25_alloc_scope_exit(BM25AllocCtx prev)
 {
-	if (bm25_lowfree)
-		pfree(bm25_lowfree);
-	bm25_lowfree = NULL;
-	bm25_lowfree_n = 0;
-	bm25_lowfree_i = 0;
+	if (bm25_alloc.lowfree)
+		pfree(bm25_alloc.lowfree);
+	bm25_alloc = prev;
 }
 
 static Buffer
@@ -1198,14 +1243,28 @@ bm25_new_buffer(Relation index)
 {
 	Buffer		buffer;
 
+	/*
+	 * The invariant that bit in 1.7.1, now enforced: if the context carries a
+	 * low-free list or the extend-only flag, some scope MUST own it.  A stale
+	 * list from a scope that already exited is exactly the dangling pointer that
+	 * produced garbage block numbers.  (A plain, unscoped allocation -- ordinary
+	 * insert -- has neither and is fine.)  An elog, not an Assert: the release
+	 * gate is not a cassert build, and a check that only fires in a build nobody
+	 * ships is documentation, not enforcement.  One predictable branch per
+	 * allocation is nothing next to the page read that follows.
+	 */
+	if (unlikely(!bm25_alloc.active &&
+				 (bm25_alloc.lowfree != NULL || bm25_alloc.extend_only)))
+		elog(ERROR, "pg_fts: allocator context used outside an allocation scope");
 
 	/*
 	 * Low-bias reuse: during a compaction, prefer the lowest free block so
 	 * live pages pack at the front of the file.
 	 */
-	while (!bm25_alloc_extend_only && bm25_lowfree && bm25_lowfree_i < bm25_lowfree_n)
+	while (!bm25_alloc.extend_only && bm25_alloc.lowfree &&
+		   bm25_alloc.lowfree_i < bm25_alloc.lowfree_n)
 	{
-		BlockNumber blk = bm25_lowfree[bm25_lowfree_i++];
+		BlockNumber blk = bm25_alloc.lowfree[bm25_alloc.lowfree_i++];
 
 		buffer = ReadBuffer(index, blk);
 		if (ConditionalLockBuffer(buffer))
@@ -1226,7 +1285,7 @@ bm25_new_buffer(Relation index)
 	}
 
 	/* Try to reuse a page freed by a previous merge before extending. */
-	while (!bm25_alloc_extend_only)
+	while (!bm25_alloc.extend_only)
 	{
 		BlockNumber blk = GetFreeIndexPage(index);
 
@@ -3711,10 +3770,10 @@ bm25_page_recyclable(Relation index, Page page)
 	 * during compaction -- bypassing it there let fts_vacuum recycle a segment's
 	 * pages while a concurrent reader was still copying them (e.g. a livedocs
 	 * blob), corrupting the read and crashing (a rare SIGSEGV under heavy
-	 * read+insert+merge+vacuum churn).  The bm25_lowfree/extend-only compaction
+	 * read+insert+merge+vacuum churn).  The lowfree/extend-only compaction
 	 * state alone is NOT sufficient license to bypass; the LOCK is.
 	 */
-	if ((bm25_lowfree != NULL || bm25_alloc_extend_only) &&
+	if ((bm25_alloc.lowfree != NULL || bm25_alloc.extend_only) &&
 		CheckRelationLockedByMe(index, AccessExclusiveLock, true))
 		return true;
 	op = BM25PageGetOpaque(page);
@@ -4322,7 +4381,7 @@ bm25_merge_all(Relation index, bool try_parallel)
 {
 	bool		didwork = false;
 	int			guard;
-	bool		saved_extend_only = bm25_alloc_extend_only;
+	BM25AllocCtx prev_alloc;
 
 	/*
 	 * Try a parallel merge first (unless already inside a parallel operation,
@@ -4348,7 +4407,7 @@ bm25_merge_all(Relation index, bool try_parallel)
 
 	/* extend-only serial collapse (same recycle-race avoidance as
 	 * bm25_merge_segments; freed inputs are reclaimed later) */
-	bm25_alloc_extend_only = true;
+	prev_alloc = bm25_alloc_scope_enter(index, BM25_ALLOC_EXTEND_ONLY);
 
 	PG_TRY();
 	{
@@ -4405,7 +4464,7 @@ bm25_merge_all(Relation index, bool try_parallel)
 	}
 	PG_FINALLY();
 	{
-		bm25_alloc_extend_only = saved_extend_only;
+		bm25_alloc_scope_exit(prev_alloc);
 	}
 	PG_END_TRY();
 	return didwork;
@@ -4516,11 +4575,11 @@ bm25_compact_to_one(Relation index, bool extend_only)
 {
 	bool		didwork = false;
 	int			guard;
+	BM25AllocCtx prev_alloc;
 
-	if (extend_only)
-		bm25_alloc_extend_only = true;
-	else
-		bm25_alloc_begin(index);	/* gather + hand out lowest free first */
+	prev_alloc = bm25_alloc_scope_enter(index,
+										extend_only ? BM25_ALLOC_EXTEND_ONLY
+										: BM25_ALLOC_LOWFIRST);
 
 	PG_TRY();
 	{
@@ -4570,10 +4629,7 @@ bm25_compact_to_one(Relation index, bool extend_only)
 	}
 	PG_FINALLY();
 	{
-		if (extend_only)
-			bm25_alloc_extend_only = false;
-		else
-			bm25_alloc_end();
+		bm25_alloc_scope_exit(prev_alloc);
 	}
 	PG_END_TRY();
 
@@ -4822,7 +4878,7 @@ bm25_vacuum_compact(Relation index)
 		 * When the file already holds enough low free space -- which is exactly the
 		 * bloated case we are called for -- a single low-first pack reaches the same
 		 * end state monotonically: the file only ever shrinks, so an interruption at
-		 * any point is never a net cost.  bm25_alloc_begin() hands out
+		 * any point is never a net cost.  A LOWFIRST scope hands out
 		 * lowest-free-first and falls back to extending only if it runs out, and the
 		 * bm25_page_recyclable() gate already makes low reuse safe under
 		 * ShareUpdateExclusiveLock with concurrent scans running (phase 2 has always
@@ -4910,7 +4966,7 @@ static void
 bm25_merge_segments(Relation index)
 {
 	int			guard;
-	bool		saved_extend_only = bm25_alloc_extend_only;
+	BM25AllocCtx prev_alloc;
 
 	/*
 	 * Leveled (HanoiDB/LSM) compaction: each pass, assign every live segment a
@@ -4932,7 +4988,7 @@ bm25_merge_segments(Relation index)
 	 * read chain ever points at a block this loop hands out; freed pages are
 	 * reclaimed later (VACUUM / bm25_truncate_free_tail).
 	 */
-	bm25_alloc_extend_only = true;
+	prev_alloc = bm25_alloc_scope_enter(index, BM25_ALLOC_EXTEND_ONLY);
 
 	PG_TRY();
 	{
@@ -5022,7 +5078,7 @@ bm25_merge_segments(Relation index)
 	}
 	PG_FINALLY();
 	{
-		bm25_alloc_extend_only = saved_extend_only;
+		bm25_alloc_scope_exit(prev_alloc);
 	}
 	PG_END_TRY();
 
@@ -5743,6 +5799,32 @@ bm25_insert(Relation index, Datum *values, bool *isnull,
 
 /* ----- scan ----- */
 
+/*
+ * ONE TRANSLATION UNIT, ON PURPOSE.
+ *
+ * The three files below are #included here rather than compiled separately, and
+ * this is a decision (2026-09-17, REVIEW_2026-09-17.md item C3), not an accident
+ * to be tidied.  The measured cost of splitting them:
+ *
+ *   - 15 static helpers in this file would have to become extern for the scan
+ *     and trigram code to see them, and 1 scan helper (bm25_scan_readbuf) for
+ *     this file to see it;
+ *   - ~10 shared struct types would move into pg_fts_am.h, which is the
+ *     ON-DISK FORMAT header and should stay free of scan-time internals;
+ *   - the hot-path helpers bm25_tid_to_docid / bm25_docid_to_tid /
+ *     bm25_page_data_end / bm25_doclen_cursor_lookup are `static inline` and
+ *     sit inside the 45%-doclen / 37%-candidate-iteration profile of a
+ *     common-term query.  Across a TU boundary they stop inlining (without
+ *     LTO, which the PGXS build does not use).
+ *
+ * In exchange we would get three .o files and no behaviour change.  Not worth
+ * it.  What the single TU costs is only that the files cannot be syntax-checked
+ * alone -- check THIS file (see AGENTS.md "Build / test") and the includes come
+ * with it.  If a future change needs separate compilation, the two things to
+ * do first are (1) move the shared types out of pg_fts_am.h into a new
+ * pg_fts_am_internal.h and (2) measure the common-term latency before and after
+ * de-inlining, since that is where the risk is.
+ */
 #include "pg_fts_lev.c"
 #include "pg_fts_am_scan.c"
 #include "pg_fts_trgm_index.c"
