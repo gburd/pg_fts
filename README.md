@@ -1,6 +1,6 @@
 # pg_fts — BM25 full-text search for PostgreSQL
 
-[![Codeberg CI](https://codeberg.org/gregburd/pg_fts/actions/workflows/ci.yml/badge.svg)](https://codeberg.org/gregburd/pg_fts/actions)
+[![CI](https://github.com/gburd/pg_fts/actions/workflows/ci.yml/badge.svg)](https://github.com/gburd/pg_fts/actions/workflows/ci.yml)
 [![PGXN version](https://badge.fury.io/pg/pg_fts.svg)](https://pgxn.org/dist/pg_fts/)
 [![License: PostgreSQL](https://img.shields.io/badge/license-PostgreSQL-blue)](LICENSE)
 

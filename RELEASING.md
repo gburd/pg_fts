@@ -39,6 +39,10 @@ Releases are **tag-triggered**. The version lives in `META.json` and
 3. **If the release adds a TAP test, it goes in three places**: `flake.nix`
    `PROVE_TESTS`, `.github/workflows/ci.yml`, and `.forgejo/workflows/ci.yml`.
    `t/010` (the P1 regression test) ran only in the nix gate for a week.
+   **Caveat (2026-09-17):** the Forgejo workflow has never executed -- Codeberg
+   Actions is not enabled for the repo (ROADMAP R8).  Until that is resolved, the
+   nix gate and GitHub CI are the only pipelines that run; keep the Forgejo file
+   in sync anyway so it is correct the day it starts.
 4. **Known issues ship as known issues** -- a CHANGELOG entry with a reproduction
    and the measured size of the problem -- never silently carried, and never
    "fixed" by a design change rushed into a correctness release.
