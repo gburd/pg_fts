@@ -2,6 +2,77 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.8.3 - 2026-09-18
+
+**Correctness release: two deadlocks that shipped in every prior version, found while
+fixing the bulk-ingest bloat -- which is also fixed.** No on-disk format change; **no
+REINDEX required**. Upgrade recommended for any index taking concurrent inserts.
+
+### Fixed
+
+- **Deadlock: concurrent insert + VACUUM on the same index.** The insert path's
+  "directory is full, merge to make room" (`bm25_add_segment_with_room`) was the only
+  merger that did not take the maintenance mutex, so it could run concurrently with
+  autovacuum's merge. Under the old extend-only allocation the two never touched the same
+  block and the race was merely wasteful; once merges reuse pages (below) both mergers
+  handed out the same block and deadlocked on its buffer lock. **Confirmed on v1.8.2 as
+  shipped**: the same row-per-transaction ingest with autovacuum on deadlocks at row 1,674
+  with no other change. Every merger now takes the mutex, and both merge entry points
+  `elog(ERROR)` if entered without it -- which immediately caught a second unprotected
+  site, `CREATE INDEX CONCURRENTLY`'s finalize (holds only ShareUpdateExclusiveLock), now
+  also covered.
+- **Deadlock: a live page handed out as merge output.** `bm25_page_recyclable()` returned
+  *true* for a page without the `BM25_FREED` flag ("older free, or in-use race"). The FSM
+  records free *space*, not liveness, so a partially filled **live** posting page qualified
+  -- instrumented live: `blk=65 flags=0x4 nextblk=66`, mid-chain -- and was written as
+  output while the same merge held it pinned as input. Self-deadlock. An un-flagged page
+  is now treated as live and never handed out, checked before the AccessExclusiveLock
+  bypass as well. Pages freed by builds predating the flag are reclaimed by tail
+  truncation instead of reuse.
+- **Bulk-ingest growth eliminated on row-per-transaction ingest.** Root cause: the merge
+  allocated `EXTEND_ONLY` for its whole loop and so never consulted the free list -- not
+  for pages freed by *this* call (the hazard it guards) and not for pages freed by
+  *previous* calls (safe, and nearly all of them). At high terms-per-document every insert
+  triggers a merge, so the merge was the dominant writer and its freed pages were reachable
+  only by `fts_vacuum`. New `BM25_ALLOC_SNAPSHOT` mode gathers the free list **once at
+  entry, before this call frees anything**, hands out only from that snapshot, and never
+  re-consults the live FSM -- so the recycle-race guard holds by construction and earlier
+  frees are reused.
+
+  Measured at field shape (40k docs at 1,660 terms/doc, then row-per-transaction churn,
+  autovacuum on, nothing manual): **v1.8.2 grew 1,823 -> 4,975 -> 8,383 MB then deadlocked;
+  1.8.3 held 1,823 -> 1,823 -> 1,823 -> 1,832 -> 1,831 -> 1,823 -> 1,823 MB over 30,000
+  documents.** A 100,000-document run ended at 1,875 MB with `fts_vacuum` finding **nothing
+  to reclaim** -- the resident size is the live size. Parity vs regex exact throughout.
+
+### Known issue (narrowed)
+
+- **A single very large `INSERT ... SELECT` of oversized rows still bloats until
+  `fts_vacuum`.** Inside one statement the freeing transaction is itself the oldest
+  snapshot, so no page it frees can pass the recyclability horizon until it ends; no
+  allocation policy changes that. Modelled the alternative (fewer, larger merges inside a
+  long statement): the leveled merge already amortises to log_F(N) rewrites, so it is worth
+  ~2x, not the 8x it looks like. `fts_vacuum` after a bulk load remains the guidance for
+  that one shape; it takes seconds.
+
+### Tests
+
+- `t/007_segment_cap.pl` runs repeated `VACUUM`s concurrently with its four
+  directory-filling inserters, under a 300 s deadline. **Verified red on v1.8.2's
+  `pg_fts_am.c` and green on 1.8.3** with the harness restored between runs. Two harness
+  defects fixed on the way: pumping one IPC::Run handle at a time starved the others
+  (mimicking the deadlock on correct code -- the wait events said `ClientRead`), and psql
+  fed from a scalar needs an explicit `\q` or completion is unobservable.
+
+### Retracted
+
+- 1.7.2's diagnosis that the bloat mechanism was "freed pages fail the recyclability XID
+  gate in the inserting transaction" was **half right**: that binds only inside a single
+  multi-row statement. On row-per-transaction ingest -- the field's live shape -- the
+  cause was the extend-only merge, and a fresh transaction per row changed the result by
+  only 1.4x until that was fixed. Details and the falsified prediction that exposed it:
+  `bench/RESULTS_I1_2026-09-18.md`.
+
 ## 1.8.2 - 2026-09-17
 
 Code-quality release from the fresh-eyes review (`REVIEW_2026-09-17.md`), plus one real

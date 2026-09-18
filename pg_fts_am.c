@@ -1148,15 +1148,18 @@ typedef struct BM25AllocCtx
 	int			lowfree_n;
 	int			lowfree_i;
 	bool		extend_only;
+	bool		no_fsm;			/* SNAPSHOT mode: skip the live-FSM fallback */
 	bool		active;			/* a scope has been entered */
 } BM25AllocCtx;
 
-static BM25AllocCtx bm25_alloc = {NULL, 0, 0, false, false};
+static BM25AllocCtx bm25_alloc = {NULL, 0, 0, false, false, false};
 
 typedef enum BM25AllocMode
 {
 	BM25_ALLOC_PLAIN,			/* FSM reuse then extend (the default) */
-	BM25_ALLOC_LOWFIRST,		/* gather free blocks, hand out lowest first */
+	BM25_ALLOC_LOWFIRST,		/* gather free blocks, hand out lowest first, then FSM, then extend */
+	BM25_ALLOC_SNAPSHOT,		/* gather free blocks ONCE at entry; hand out only those, then extend;
+								 * never re-consult the live FSM (see bm25_merge_segments) */
 	BM25_ALLOC_EXTEND_ONLY		/* never reuse; extend only */
 } BM25AllocMode;
 
@@ -1208,9 +1211,10 @@ bm25_alloc_scope_enter(Relation index, BM25AllocMode mode)
 	bm25_alloc.lowfree_n = 0;
 	bm25_alloc.lowfree_i = 0;
 	bm25_alloc.extend_only = (mode == BM25_ALLOC_EXTEND_ONLY);
+	bm25_alloc.no_fsm = (mode == BM25_ALLOC_SNAPSHOT);
 	bm25_alloc.active = true;
 
-	if (mode == BM25_ALLOC_LOWFIRST)
+	if (mode == BM25_ALLOC_LOWFIRST || mode == BM25_ALLOC_SNAPSHOT)
 	{
 		BlockNumber nblocks = RelationGetNumberOfBlocks(index);
 		BlockNumber blk;
@@ -1284,8 +1288,10 @@ bm25_new_buffer(Relation index)
 		ReleaseBuffer(buffer);
 	}
 
-	/* Try to reuse a page freed by a previous merge before extending. */
-	while (!bm25_alloc.extend_only)
+	/* Try to reuse a page freed by a previous merge before extending.  Skipped
+	 * in SNAPSHOT mode: the live FSM may now hold pages THIS operation freed a
+	 * moment ago while a reader chain of ours still threads through them. */
+	while (!bm25_alloc.extend_only && !bm25_alloc.no_fsm)
 	{
 		BlockNumber blk = GetFreeIndexPage(index);
 
@@ -3025,6 +3031,7 @@ static void bm25_merge_segments(Relation index);
 static bool bm25_merge_all(Relation index, bool try_parallel);
 /* maintenance serialization (defined in the vacuum/merge section below) */
 static inline void bm25_maintenance_lock(Relation index);
+static inline void bm25_assert_merge_serialized(Relation index);
 static inline bool bm25_maintenance_lock_conditional(Relation index);
 static inline void bm25_maintenance_unlock(Relation index);
 
@@ -3055,11 +3062,32 @@ bm25_add_segment_with_room(Relation index, const BM25SegMeta *seg)
 		 * capacity so the leveled selector picked a small batch), fall back to
 		 * the smallest-first collapse, which always reduces the count while any
 		 * two segments remain.
+		 *
+		 * UNDER THE MAINTENANCE MUTEX, blocking.  Until 1.8.3 this site merged
+		 * without it -- the only merger in the tree that did -- so a full
+		 * directory on the insert path could run a merge CONCURRENTLY with
+		 * autovacuum's.  Under extend-only allocation that was merely wasteful
+		 * (two mergers never touched the same block).  Once merges reused freed
+		 * pages, both mergers snapshotted the same free list, handed out the same
+		 * block, and deadlocked on its buffer lock (observed: INSERT and
+		 * autovacuum both in bm25_decode_term <- bm25_merge_segments_streaming,
+		 * waiting on LWLock BufferContent, at row 680 of a 5,000-row round).
+		 * Blocking rather than conditional is right here: this insert MUST make
+		 * room or fail, and the other merger will free slots when it finishes.
 		 */
-		if ((try & 1) == 0)
-			bm25_merge_segments(index);
-		else
-			bm25_merge_all(index, false);
+		bm25_maintenance_lock(index);
+		PG_TRY();
+		{
+			if ((try & 1) == 0)
+				bm25_merge_segments(index);
+			else
+				bm25_merge_all(index, false);
+		}
+		PG_FINALLY();
+		{
+			bm25_maintenance_unlock(index);
+		}
+		PG_END_TRY();
 		if (bm25_meta_add_segment(index, seg))
 			return;
 	}
@@ -3773,12 +3801,31 @@ bm25_page_recyclable(Relation index, Page page)
 	 * read+insert+merge+vacuum churn).  The lowfree/extend-only compaction
 	 * state alone is NOT sufficient license to bypass; the LOCK is.
 	 */
+	op = BM25PageGetOpaque(page);
+
+	/*
+	 * LIVENESS FIRST, before any lock-based bypass.  A page without BM25_FREED is
+	 * a LIVE page -- part of some segment's chain -- and must never be handed out,
+	 * whatever the FSM says about it.  The FSM is a free-SPACE hint, not a
+	 * liveness oracle: a partially filled live posting page can carry recorded
+	 * free space, and until 1.8.3 this function returned true for exactly that
+	 * case ("older free, or in-use race").  Harmless while merges were
+	 * extend-only and never consulted the free list; fatal once they did.
+	 * Observed: a live posting page (flags=0x4, nextblk=66, mid-chain) handed out
+	 * as merge output while the same merge still held it pinned as input --
+	 * self-deadlock on its buffer lock at row 1,184 of a 5,000-row churn round.
+	 *
+	 * Cost of the stricter rule: a page freed by a build older than the FREED
+	 * flag is no longer reusable via the free list.  It is still reclaimed by
+	 * bm25_truncate_free_tail when it sits in the tail, which is where old
+	 * frees accumulate.  Safety over that corner.
+	 */
+	if (!(op->flags & BM25_FREED))
+		return false;
+
 	if ((bm25_alloc.lowfree != NULL || bm25_alloc.extend_only) &&
 		CheckRelationLockedByMe(index, AccessExclusiveLock, true))
 		return true;
-	op = BM25PageGetOpaque(page);
-	if (!(op->flags & BM25_FREED))
-		return true;			/* not gated (older free, or in-use race) */
 	/*
 	 * Is the freeing xid old enough that no snapshot can still reference this
 	 * page?  Use the GLOBAL visibility horizon (NULL relation): the per-relation
@@ -4383,6 +4430,8 @@ bm25_merge_all(Relation index, bool try_parallel)
 	int			guard;
 	BM25AllocCtx prev_alloc;
 
+	bm25_assert_merge_serialized(index);
+
 	/*
 	 * Try a parallel merge first (unless already inside a parallel operation,
 	 * e.g. the parallel build leader -- no nested parallelism).  It compacts
@@ -4517,6 +4566,17 @@ bm25_build_finalize(Relation index)
 	 * so the parallel pass is no longer needed for convergence; an explicit
 	 * fts_merge() (run outside ambuild) still parallelizes on demand.
 	 */
+	/*
+	 * Under the maintenance mutex, like every other merger.  A plain CREATE
+	 * INDEX holds AccessExclusiveLock and nothing else can reach this index; a
+	 * CREATE INDEX CONCURRENTLY holds only ShareUpdateExclusiveLock and a
+	 * concurrent autovacuum CAN see the not-yet-valid index and merge it, so
+	 * the mutex is required, not decorative.  Cheap here: uncontended in the
+	 * common case.
+	 */
+	bm25_maintenance_lock(index);
+	PG_TRY();
+	{
 	bm25_merge_segments(index);
 
 	/*
@@ -4548,6 +4608,12 @@ bm25_build_finalize(Relation index)
 		elog(LOG, "pg_fts build: index \"%s\": leaving %d size-tiered segments (%lu MB > collapse cap %d MB); run fts_merge('%s') to collapse to one",
 			 RelationGetRelationName(index), nseg, (unsigned long) sizemb,
 			 pg_fts_build_collapse_max_mb, RelationGetRelationName(index));
+	}
+	PG_FINALLY();
+	{
+		bm25_maintenance_unlock(index);
+	}
+	PG_END_TRY();
 }
 
 /*
@@ -4968,6 +5034,8 @@ bm25_merge_segments(Relation index)
 	int			guard;
 	BM25AllocCtx prev_alloc;
 
+	bm25_assert_merge_serialized(index);
+
 	/*
 	 * Leveled (HanoiDB/LSM) compaction: each pass, assign every live segment a
 	 * level from its size, and if any level holds >= BM25_MERGE_FANOUT runs,
@@ -4979,16 +5047,35 @@ bm25_merge_segments(Relation index)
 	 * first (cheapest), converging in O(log) passes; the guard bounds it (each
 	 * successful merge strictly reduces nsegments).
 	 *
-	 * Allocate merge output EXTEND-ONLY for the whole loop: a committed merge
-	 * frees its input pages to the FSM, and without this the NEXT merge's
-	 * bm25_new_buffer would recycle those freed blocks for its output while it is
-	 * still reading input posting/dict chains -- whose on-page nextblk pointers
-	 * may thread through a just-recycled (rewritten, or past-EOF) block, giving a
-	 * wrong read or a SIGBUS.  Extending to fresh high blocks means no in-flight
-	 * read chain ever points at a block this loop hands out; freed pages are
-	 * reclaimed later (VACUUM / bm25_truncate_free_tail).
+	 * ALLOCATION MODE -- this choice is the difference between an index that
+	 * stays near its live size under ingest and one that grows ~35-50 pages per
+	 * document.
+	 *
+	 * The hazard: a merge frees its input pages to the FSM, and if the NEXT merge
+	 * in this same loop took those blocks for its output while still reading
+	 * input posting/dict chains -- whose on-page nextblk pointers may thread
+	 * through a just-recycled block -- the result is a wrong read or a SIGBUS.
+	 *
+	 * Until 1.8.3 this used EXTEND_ONLY, which forbids ALL reuse.  That is exact
+	 * against the hazard but over-approximates it badly: it also forbids reusing
+	 * pages freed by EARLIER calls -- previous inserts' merges, already committed,
+	 * with no reader of ours anywhere near them.  Because at high terms-per-doc
+	 * every document mints a one-doc segment and triggers a merge, the merge is
+	 * the dominant writer and its freed pages were reachable only by fts_vacuum.
+	 * Measured: 34 pages/doc with one transaction per row, 49 with one statement
+	 * for all rows, against ~0.5 pages/doc of real data; fts_vacuum recovered
+	 * 65-95x.  The XID horizon was NOT the cause -- a fresh transaction per row
+	 * changed it by only 1.4x -- the extend-only mode was.
+	 *
+	 * SNAPSHOT mode makes the guard exact instead of conservative: the free list
+	 * is gathered ONCE here, before this call frees anything, and the loop hands
+	 * out only from that snapshot, then extends.  It never re-consults the live
+	 * FSM, so a page freed by merge N in this loop cannot be handed to merge N+1
+	 * -- it is not in the snapshot.  Pages from previous calls ARE in it and are
+	 * reused.  bm25_page_recyclable() still gates every one against concurrent
+	 * scans holding directory snapshots, unchanged.
 	 */
-	prev_alloc = bm25_alloc_scope_enter(index, BM25_ALLOC_EXTEND_ONLY);
+	prev_alloc = bm25_alloc_scope_enter(index, BM25_ALLOC_SNAPSHOT);
 
 	PG_TRY();
 	{
@@ -5858,6 +5945,26 @@ static inline void
 bm25_maintenance_lock(Relation index)
 {
 	LockPage(index, BM25_METAPAGE_BLKNO, ExclusiveLock);
+}
+
+/*
+ * Every merger must run under the maintenance mutex -- or on an index no other
+ * backend can see (ambuild: the relation is being created).  Enforced, not
+ * documented: the one site that skipped it deadlocked two merges on a shared
+ * buffer the moment merges started reusing pages.  An elog, not an Assert -- the
+ * release gate is not a cassert build.
+ */
+static inline void
+bm25_assert_merge_serialized(Relation index)
+{
+	LOCKTAG		tag;
+
+	SET_LOCKTAG_PAGE(tag, index->rd_lockInfo.lockRelId.dbId,
+					 index->rd_lockInfo.lockRelId.relId, BM25_METAPAGE_BLKNO);
+	if (unlikely(!LockHeldByMe(&tag, ExclusiveLock, false) &&
+				 !CheckRelationLockedByMe(index, AccessExclusiveLock, true)))
+		elog(ERROR, "pg_fts: merge entered without the maintenance mutex on index \"%s\"",
+			 RelationGetRelationName(index));
 }
 
 static inline bool

@@ -91,9 +91,12 @@ style preferences.
     out garbage block numbers; only `t/007` caught it. `bm25_new_buffer` now `elog(ERROR)`s
     on that condition. Always pair enter/exit in `PG_FINALLY`; scopes nest by returning the
     previous context.
-18. **`bm25_page_recyclable`'s XID gate is correct and must not be bypassed.** Its comment
-    records a real SIGSEGV from doing so. Pages freed in a transaction cannot be reused in
-    that transaction; design around it, do not weaken it.
+18. **`bm25_page_recyclable`'s two gates are both load-bearing.** The XID gate: its comment
+    records a real SIGSEGV from bypassing it. The liveness gate (no `BM25_FREED` => not
+    recyclable, 1.8.3): the FSM records free SPACE not liveness, and a live mid-chain page
+    handed out as merge output self-deadlocked. **Every merger runs under
+    `bm25_maintenance_lock`**; the two merge entry points `elog(ERROR)` otherwise -- the
+    one site that skipped it deadlocked against autovacuum in every release to 1.8.2.
 19. **Every corpus-scale allocation goes through `FTS_ALLOC_MAYBE_HUGE`.** `ci/check-alloc.sh`
     enforces it. A missed site made an index permanently unvacuumable in the field.
 20. **On-disk format changes need dual-read + optional per-segment pointer + in-place

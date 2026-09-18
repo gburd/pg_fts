@@ -77,6 +77,10 @@ END $$;
 
 sub psql_proc {
     my ($sql) = @_;
+    # Terminate the script with \q: with stdin fed from a scalar and pumped
+    # non-blocking, psql otherwise sits in ClientRead forever after the last
+    # statement, and the timeout loop below cannot tell that from a hang.
+    $sql .= "\n\\q\n" unless $sql =~ /\\q\s*$/;
     my ($in, $out, $err) = ($sql, '', '');
     my $h = start(['psql', '-X', '-v', 'ON_ERROR_STOP=0', '-d', $node->connstr('postgres')],
                   '<', \$in, '>', \$out, '2>', \$err);
@@ -89,8 +93,54 @@ my @ins;
 push @ins, [ psql_proc(inserter_sql($_)) ] for (1 .. 4);
 my ($rh, $rout, $rerr) = psql_proc($reader_sql);
 
-finish($_->[0]) for @ins;
-finish($rh);
+# ...plus a CONCURRENT VACUUM, which runs the index cleanup's merge in its own
+# backend while the inserters' full-directory merges run in theirs.
+#
+# This is the regression case for a deadlock that shipped in every release up to
+# 1.8.2: bm25_add_segment_with_room() -- the insert path's "directory is full, merge
+# to make room" -- was the ONLY merger that did not take the maintenance mutex, so it
+# ran concurrently with autovacuum's merge on the same index.  Under extend-only
+# allocation the two never touched the same block and it was merely wasteful; the
+# moment merges reused freed pages (1.8.3) both mergers handed out the same block and
+# deadlocked on its buffer lock.  Reproduced at row 680 and again at row 1,184 of a
+# 5,000-row ingest round with autovacuum on; the shipped 1.8.2 deadlocked the same
+# way at row 1,674 with no other change.
+#
+# Repeated VACUUMs (not one) so the window is hit reliably: the inserters take a few
+# seconds to fill the directory, and cleanup must be merging AT that moment.
+my $vac_sql = join("\n", map { "VACUUM docs;\nSELECT pg_sleep(0.2);" } 1 .. 40) . "\n\\q\n";
+my ($vh, $vout, $verr) = psql_proc($vac_sql);
+
+# If the deadlock is present nothing below returns.  IPC::Run's finish() has no
+# timeout of its own, so bound the whole phase: a hang is the FAILURE this test
+# exists to detect and must show up as a failed test, not a stuck CI job.
+my $deadline = time() + 300;
+my @all = (@ins, [ $rh, $rout, $rerr ], [ $vh, $vout, $verr ]);
+my $hung = 0;
+# Pump EVERY harness each iteration.  Pumping one at a time starves the others
+# (their psql never receives stdin), and since the inserters contend on the segment
+# cap they need each other to make progress -- that looked exactly like the deadlock
+# this test hunts, on the fixed code, until the wait events said ClientRead.
+while (time() < $deadline) {
+    my $live = 0;
+    for my $p (@all) {
+        next unless $p->[0]->pumpable;
+        $live++;
+        $p->[0]->pump_nb;
+    }
+    last if $live == 0;
+    select(undef, undef, undef, 0.1);
+}
+$hung = 1 if time() >= $deadline;
+finish($_->[0]) for grep { !$hung } @all;
+if ($hung) {
+    diag("HUNG: concurrent inserters + VACUUM did not finish in 300s (concurrent-merge deadlock)");
+    diag($node->safe_psql('postgres',
+        q{SELECT pid, wait_event_type, wait_event, left(query,40) FROM pg_stat_activity
+          WHERE backend_type IN ('client backend','autovacuum worker') AND pid <> pg_backend_pid()}));
+    $_->[0]->kill_kill for @all;
+}
+is($hung, 0, 'inserters filling the segment directory and a concurrent VACUUM both complete (no concurrent-merge deadlock)');
 
 my $ins_err = join("\n", map { ${ $_->[2] } } @ins);
 my $all_err = "$ins_err\n$$rerr";
