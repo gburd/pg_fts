@@ -27,6 +27,18 @@ every tombstone blob already on disk opens unchanged); **no REINDEX required**.
   with declarations hoisted to block scope -- which is also friendlier to this project's
   `-Wdeclaration-after-statement`.
 
+### Release-process defect found and fixed while shipping this
+
+- **The Codeberg->GitHub mirror delivered the `v1.8.5` tag two hours before the commits
+  it pointed at.** GitHub's tag therefore resolved to v1.8.4's commit; the release job ran
+  *that* commit's workflow (predating the checkout guard added the same morning, so the
+  guard could not run), built `pg_fts-1.8.4.zip`, and only the filename mismatch stopped
+  it publishing 1.8.4's code as 1.8.5. Recovered by pushing `main` then the annotated tag
+  to GitHub directly and re-running; the published 1.8.5 is sha256-identical on PGXN and
+  GitHub and contains sparsemap 5.7.0. `RELEASING.md` now pushes to GitHub directly, main
+  before tag, and verifies the peeled tag before trusting a run. The mirror is no longer
+  on the release path.
+
 ### Qualified, not assumed
 
 - **The new encoding is exercised by pg_fts, and the 1.8.4 guard holds for it.**
