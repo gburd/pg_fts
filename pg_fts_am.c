@@ -2933,6 +2933,8 @@ static BlockNumber bm25_write_trigrams_iter(Relation index, DictNextFn next,
 /* forward decls: blob read/write live in pg_fts_trgm_index.c (included below) */
 static BlockNumber bm25_write_blob(Relation index, const uint8 *data, Size len);
 static uint8 *bm25_read_blob(Relation index, BlockNumber blk, Size len);
+static void bm25_sm_open_checked(Relation index, BlockNumber blk, const char *what,
+								 sm_t *map, uint8 *buf, Size len);
 
 /*
  * Write one immutable segment (dictionary + postings + trigram index) from a
@@ -3364,7 +3366,8 @@ merge_source_open(Relation index, const BM25SegMeta *seg, MergeSource *src,
 	if (seg->livedocs != InvalidBlockNumber && seg->livedocslen > 0)
 	{
 		src->tombbuf = bm25_read_blob(index, seg->livedocs, seg->livedocslen);
-		sm_open(&src->tomb, (uint8_t *) src->tombbuf, seg->livedocslen);
+		bm25_sm_open_checked(index, seg->livedocs, "tombstone",
+							 &src->tomb, src->tombbuf, seg->livedocslen);
 		src->hastomb = true;
 
 		/*
@@ -3836,6 +3839,42 @@ bm25_page_recyclable(Relation index, Page page)
 	 * heap-scoped horizon would, never shorter -- so it is always safe here.
 	 */
 	return GlobalVisCheckRemovableXid(NULL, (TransactionId) op->nextblk);
+}
+
+/*
+ * bm25_sm_open_checked -- open a sparsemap blob WE wrote, and refuse a corrupt one.
+ *
+ * sparsemap 5.6.0 hardened sm_open: a buffer that fails sm_validate is silently
+ * REPLACED WITH AN EMPTY MAP (the caller's copy is zeroed; sm_open is void and sets
+ * no errno).  That is the right contract for a general library taking untrusted
+ * bytes.  It is the wrong outcome for us: an empty TOMBSTONE map means "nothing is
+ * deleted", so a corrupt livedocs blob would silently resurrect every vacuumed
+ * document in query results -- a plausible wrong answer, the failure mode this
+ * project refuses everywhere else.  (A collapsed TRIGRAM map drops fuzzy/regex
+ * candidates instead: also wrong, quieter.)
+ *
+ * We can detect it without library support because every blob here was produced
+ * by us: livedocslen / smlen is exactly sm_get_size() at write time, so a valid
+ * blob reopens to that size and a rejected one reopens to the bare header.  A
+ * legitimately empty set is never stored (callers require len > 0), so a size
+ * collapse is unambiguous.  sm_validate() is checked too, which is what catches
+ * structural damage on a library that does NOT rewrite on open.
+ *
+ * Raises ERRCODE_DATA_CORRUPTED naming the index and block, same as the pd_lower
+ * guards: loud and attributable, never silent.
+ */
+static void
+bm25_sm_open_checked(Relation index, BlockNumber blk, const char *what,
+					 sm_t *map, uint8 *buf, Size len)
+{
+	sm_open(map, (uint8_t *) buf, len);
+	if (unlikely(!sm_validate(map) || sm_get_size(map) != len))
+		ereport(ERROR,
+				(errcode(ERRCODE_DATA_CORRUPTED),
+				 errmsg("pg_fts: corrupt %s bitmap in index \"%s\" at block %u (stored %zu bytes, reopened as %zu)",
+						what, RelationGetRelationName(index), blk,
+						(size_t) len, (size_t) sm_get_size(map)),
+				 errhint("REINDEX the index to rebuild it from the heap.")));
 }
 
 /* Recycle a chained page list (dict/trigram/posting/data) to the FSM. */
@@ -6333,7 +6372,8 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 			int			ncarry = 0,
 						carrycap = 0;
 
-			sm_open(&old, (uint8_t *) buf, sg->livedocslen);
+			bm25_sm_open_checked(index, sg->livedocs, "tombstone",
+								 &old, buf, sg->livedocslen);
 			for (dv = sm_next_member(&old, (uint64_t) -1, &oc);
 				 dv != SM_IDX_MAX;
 				 dv = sm_next_member(&old, dv, &oc))

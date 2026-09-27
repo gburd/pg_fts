@@ -148,3 +148,5 @@ Local syntax check (note the `.c` files `#include`d into `pg_fts_am.c`):
 
 Benchmarks and scale validation run on EC2 (`/tmp/launch.sh`, `/tmp/teardown.sh`); local
 green means nothing for the delete/merge path. Terminate the instance when done.
+
+See .agent-steering-domains.md for domain-specific steering (local).

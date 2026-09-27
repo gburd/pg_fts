@@ -2,6 +2,51 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.8.4 - 2026-09-27
+
+Vendored sparsemap **5.5.1 -> 5.6.0** (upstream's security-hardening release), and a guard
+that its one behaviour change made necessary. No on-disk format change on either side
+(`BM25_VERSION` unchanged; sparsemap wire format still version 2); **no REINDEX required**.
+
+### Changed
+
+- **sparsemap 5.6.0.** `vendor/sm.h` is byte-identical to upstream; `vendor/sm.c` is
+  upstream plus the same 9-line `SPARSEMAP_PREFIX` block as before, and nothing else.
+  Upstream's own 14-test suite passes against the vendored copy with the prefix defined
+  empty. What reaches pg_fts from the release: `sm_validate` now rejects an RLE chunk whose
+  length exceeds its capacity, misaligned chunk starts, `start + capacity` overflow,
+  overlapping chunks, and a stored chunk count that disagrees with the walk; several
+  memory-safety fixes on valid-but-adversarial maps (a source over-read in `sm_split`, a
+  non-terminating per-bit loop, a destination over-write, an out-of-range shift); and the
+  set-comparison family now completes in microseconds rather than O(set bits) on a
+  two-billion-bit run. A NULL map is now a defined empty read-only map for all public
+  functions (nineteen previously segfaulted).
+
+### Fixed
+
+- **A corrupt tombstone bitmap is now a loud error, not a silent resurrection of deleted
+  rows.** 5.6.0's `sm_open()` hardening replaces a buffer that fails validation with an
+  **empty map** -- void return, no `errno`. That is the right contract for a library taking
+  untrusted bytes. It is the wrong outcome for a *tombstone* map, where "empty" means
+  "nothing is deleted": with a plain library swap, a corrupt livedocs blob would make every
+  vacuumed document reappear in query results with no error. (A collapsed trigram blob would
+  silently drop fuzzy/regex candidates instead.) Every `sm_open` in pg_fts now goes through
+  `bm25_sm_open_checked()`, which requires the reopened size to equal the stored length --
+  exact for any blob pg_fts wrote, since `livedocslen` *is* `sm_get_size()` at write time --
+  and `sm_validate()` to pass, and otherwise raises `ERRCODE_DATA_CORRUPTED` naming the index
+  and block, with a REINDEX hint. Same contract as the `pd_lower` guards.
+
+### Tests
+
+- `t/003_corruption.pl` gains a tombstone-corruption phase: delete half the rows, VACUUM
+  (2,000 tombstones), smash the blob's contents on disk, and assert the scan **errors**
+  rather than returning 4,000. **Verified to discriminate**: with the guard disabled the test
+  fails exactly as predicted -- `got: '0'` (a successful scan) where an error was required,
+  i.e. the resurrected-deletes answer. Two test-authoring corrections on the way, both
+  recorded in the test: REINDEX changes the relfilenode so the on-disk path must be
+  re-resolved, and the tombstone blob is stamped `BM25_TRGM_DATA` (1<<5) by the shared blob
+  writer -- `BM25_LIVEDOCS` (1<<6) is a dead define nothing writes.
+
 ## 1.8.3 - 2026-09-18
 
 **Correctness release: two deadlocks that shipped in every prior version, found while

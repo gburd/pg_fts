@@ -67,6 +67,9 @@ These do not touch the index and are the cheapest, highest-leverage work in the 
 
 ## Closed (one line each; detail in CHANGELOG)
 
+- **1.8.4** sparsemap 5.5.1 -> 5.6.0 (upstream security hardening); every `sm_open` now goes through `bm25_sm_open_checked`, so a corrupt tombstone/trigram bitmap raises `ERRCODE_DATA_CORRUPTED` instead of silently opening as EMPTY -- which for a tombstone map would have resurrected every deleted row. `t/003` proves it (red unguarded, green guarded).
+- **1.8.3** two deadlocks that shipped in every prior version (insert-path full-directory merge ran without the maintenance mutex; a live page could be handed out as merge output), and the bulk-ingest bloat root cause (merge was extend-only, never reused pages) -- zero net growth over 100k row-per-txn docs.
+- **1.8.2** allocator state is a scoped struct with misuse an `elog(ERROR)`; `bm25_collect_matches` 412 -> 226 lines; the single translation unit kept as a costed, documented decision; a 9th `pd_lower` read site guarded.
 - **1.8.1** count-path: df fast-count gate tests (10, non-vacuous); block-run VM checking measured ~1%, kept as cleanup.
 - **1.8.0** intra-word `-` `.` `/` are terms, not operators (`pkg-config` no longer parses as `pkg & !config`).
 - **1.7.2** insert-time merge gated on segment pressure: bulk-ingest growth -31%.

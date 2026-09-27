@@ -216,7 +216,8 @@ bm25_tombstones_load(Relation index, const BM25MetaPageData *meta, BM25Tombstone
 		if (sg->livedocs != InvalidBlockNumber && sg->livedocslen > 0)
 		{
 			t->blobs[s] = bm25_read_blob(index, sg->livedocs, sg->livedocslen);
-			sm_open(&t->maps[s], (uint8_t *) t->blobs[s], sg->livedocslen);
+			bm25_sm_open_checked(index, sg->livedocs, "tombstone",
+								 &t->maps[s], t->blobs[s], sg->livedocslen);
 			t->present[s] = true;
 		}
 	}
