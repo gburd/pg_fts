@@ -183,9 +183,14 @@ while `refs/tags/vX.Y.Z` there still resolves to the *previous* release's commit
 v1.8.4 the job checked out 1.8.3, built `pg_fts-1.8.3.zip`, and failed only because the
 filename did not match the tag -- had it matched, 1.8.3's code would have been published
 as 1.8.4. The workflow now refetches the tag until the checked-out `META.json` version
-equals the tag's version (bounded, 2 min) and **refuses to build** otherwise. If a release
-fails at "Verify checkout matches the tag", wait a minute and use the manual trigger
-below; do not touch the tag.
+equals the tag's version (bounded, 2 min) and **refuses to build** otherwise. The mirror also
+**double-fires** the tag-push event -- once at the racy resolution, once when it corrects
+the tag -- so a failed first run is normally followed by a successful second one within
+~10 minutes, and a manual re-dispatch then gets a benign `409 already published`. Read
+each run's own log; do not grep across runs. If a release fails at "Verify checkout
+matches the tag" and no second run appears, use the manual trigger below; do not touch
+the tag. Confirm on `api.pgxn.org` and diff the PGXN zip against the GitHub asset -- the
+1.8.4 artifacts were verified byte-identical (`sha256 dd836069...`).
 
 **To re-publish an existing tag** (e.g. after a workflow fix), do not re-tag --
 that rewrites published history.  Use the manual trigger:
