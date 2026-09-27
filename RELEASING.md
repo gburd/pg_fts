@@ -177,6 +177,16 @@ out of the zip.
 (2026-09-17: `v1.8.2` re-published via `workflow_dispatch`, HTTP 303, PGXN now
 at 1.8.2).  `PGORG_*` is not set; the announce step skips cleanly without it.
 
+**The mirror race, and why the workflow checks the checkout.** Codeberg mirrors `main`
+and a new tag to GitHub as separate ref updates, and GitHub's tag-push event can fire
+while `refs/tags/vX.Y.Z` there still resolves to the *previous* release's commit. On
+v1.8.4 the job checked out 1.8.3, built `pg_fts-1.8.3.zip`, and failed only because the
+filename did not match the tag -- had it matched, 1.8.3's code would have been published
+as 1.8.4. The workflow now refetches the tag until the checked-out `META.json` version
+equals the tag's version (bounded, 2 min) and **refuses to build** otherwise. If a release
+fails at "Verify checkout matches the tag", wait a minute and use the manual trigger
+below; do not touch the tag.
+
 **To re-publish an existing tag** (e.g. after a workflow fix), do not re-tag --
 that rewrites published history.  Use the manual trigger:
 

@@ -136,6 +136,12 @@ style preferences.
     never rush a design change into a correctness release.
 31. **When a published claim turns out wrong, the CHANGELOG says so under "Retracted".**
     The project's credibility rests on this more than on any benchmark.
+32. **A release job must prove its checkout IS the tag before building.** The
+    Codeberg->GitHub mirror races tag and commit; v1.8.4's job checked out 1.8.3 and only
+    a filename mismatch stopped it publishing the wrong code. The workflow now verifies
+    `META.json` against the tag and refuses otherwise. When a release fails, read the
+    failing step's log -- do not grep the last run's log for "accepted" (I did, and it
+    was the previous release's).
 
 ## Build / test
 
