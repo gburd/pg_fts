@@ -2,6 +2,51 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.8.5 - 2026-09-27
+
+Vendored sparsemap **5.6.0 -> 5.7.0**. No on-disk format change on either side
+(`BM25_VERSION` unchanged; sparsemap wire format still version 2 and mutually readable, so
+every tombstone blob already on disk opens unchanged); **no REINDEX required**.
+
+### Changed
+
+- **sparsemap 5.7.0.** Same vendoring contract as every prior bump: `vendor/sm.h`
+  byte-identical to upstream, `vendor/sm.c` upstream plus the 9-line `SPARSEMAP_PREFIX`
+  block (diff confirms exactly 9 added lines), all 95 public symbols still namespaced.
+  Upstream's own suite -- now 20 tests -- passes against the vendored copy with the prefix
+  defined empty.
+
+  What reaches pg_fts: a **small-set encoding** for maps whose largest index is below 1,024
+  -- a bare `uint64` word array behind the same 8-byte header (the header's top bit selects
+  the mode). A segment's tombstone map takes this form whenever its deleted docids are all
+  small, which is common; a two-tombstone map is now 16 bytes instead of the ~32+ of the
+  chunk form. The four 5.7.0 correctness fixes (`sm_equals`/`sm_hash`/`sm_compare` on
+  equal-but-differently-built maps, `sm_split` emitting an invalid map, `sm_offset` signed
+  overflow, a length-1 RLE edge) are all in functions pg_fts does not call. `sm.c`/`sm.h`
+  are now warning-clean under `-Wall -Wextra -Wpedantic -Wconversion -Wshadow` and friends,
+  with declarations hoisted to block scope -- which is also friendlier to this project's
+  `-Wdeclaration-after-statement`.
+
+### Qualified, not assumed
+
+- **The new encoding is exercised by pg_fts, and the 1.8.4 guard holds for it.**
+  `bm25_sm_open_checked()` requires the reopened size to equal the stored length; in
+  small-set mode `sm_get_size()` returns the stored `m_data_used` directly and `sm_open()`
+  validates the header word count against it, so the invariant is exact in both encodings.
+  Verified end to end through the real path: an index with two low-docid tombstones,
+  VACUUMed, read via `pageinspect` -- the blob's header top bit is **set** (small mode) and
+  the query returns the correct 48 of 50 rows.
+- **New fuzz target `test/fuzz/fuzz_smblob.c`**, in the sanitizer gate: 20,000 random docid
+  sets straddling the small/chunk boundary, written the way bulkdelete and merge write
+  (`sm_get_data`/`sm_get_size`) and reopened the way every reader does, asserting size
+  round-trip, `sm_validate`, bit-exact membership including the 1,020..1,030 boundary,
+  ascending enumeration equal to the set, and that a toggled mode bit cannot open as a
+  valid map of the same size. Compiles the vendored `sm.c` directly, unprefixed --
+  single source of truth. Two authoring errors caught while writing it: `sm_add` returns
+  `uint64_t` (`SM_IDX_MAX` on failure), not `bool`; and an O(span) membership sweep over a
+  200k span made 20k cases take minutes -- the property is kept, the cost made proportional
+  to the set.
+
 ## 1.8.4 - 2026-09-27
 
 Vendored sparsemap **5.5.1 -> 5.6.0** (upstream's security-hardening release), and a guard
