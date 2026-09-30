@@ -228,6 +228,13 @@ regression. **The delete-heavy half is unmeasured**: the rig's suppression contr
 turned out not to exist in our source.
 `bench/RESULTS_SPARSEMAP_2026-09-08.md`.
 
+### Delete-heavy VACUUM, sparsemap 5.7.0 vs 5.8.0 (1.8.5 vs 1.8.6)
+On 5M rows, VACUUM after the second and third large delete rounds takes 33.1-33.3 s ->
+21.5-23.1 s (~30%), and after the first round 151 s -> 138 s (8.5%). Build time is
+unchanged (382-389 s on both). Two runs per arm, same-arm spread under 1%; counts match
+seqscan and each other at every step; final index byte-identical in size.
+`bench/RESULTS_SPARSEMAP58_2026-09-30.md`.
+
 ---
 
 ## 6. Hypotheses tested and rejected
