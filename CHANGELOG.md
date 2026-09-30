@@ -2,7 +2,7 @@
 
 All notable changes to pg_fts are documented here.
 
-## Unreleased
+## 1.8.6 - 2026-09-30
 
 Vendored sparsemap **5.7.0 -> 5.8.0**. No on-disk format change on either side
 (`BM25_VERSION` unchanged; sparsemap wire format still version 2); **no REINDEX required**.
@@ -31,6 +31,17 @@ Vendored sparsemap **5.7.0 -> 5.8.0**. No on-disk format change on either side
   runtime-only cardinality cache, never serialized; pg_fts embeds `sm_t` by value but
   always via `sm_open`/`sm_create`, and recompiles against the new header). The O(1)
   `sm_cardinality` and O(runs) `sm_add_range` are in functions pg_fts does not call.
+
+### Qualified, not assumed
+
+- **Local delete-heavy scale run, 1.8.5 vs 1.8.6 side by side** (PG 17.10, 2.2M synthetic
+  rows, 40 Zipf-ish terms each, one segment): build, then three rounds of
+  `DELETE ... id % {7,4,3}` + `VACUUM`, then `fts_merge`/`fts_vacuum`. Index counts equal
+  seqscan counts, all non-zero, after every step on both arms, and the two arms agree with
+  each other. Build 1681 s vs 1682 s (no build-time change: this corpus's build is not
+  dominated by `sm_add_many_grow`). VACUUM 137/31/28 s vs 130/24/22 s -- one run with both
+  arms sharing the host, so **not claimed as a speedup**. EC2 at-scale run follows
+  the release; see `bench/INDEX.md`.
 
 ## 1.8.5 - 2026-09-27
 

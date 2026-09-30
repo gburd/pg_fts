@@ -67,6 +67,7 @@ These do not touch the index and are the cheapest, highest-leverage work in the 
 
 ## Closed (one line each; detail in CHANGELOG)
 
+- **1.8.6** sparsemap 5.7.0 -> 5.8.0: bulk `sm_add_many_grow` merges instead of inserting per bit (1.4-4x faster standalone; unmeasured in pg_fts at scale), plus a coalesce over-read fix. Byte-identical wire output.
 - **1.8.5** sparsemap 5.6.0 -> 5.7.0: small-set tombstone encoding, verified live through pageinspect and by a new sanitizer fuzz target over the vendored library; the 1.8.4 open guard holds in both encodings.
 - **1.8.4** sparsemap 5.5.1 -> 5.6.0 (upstream security hardening); every `sm_open` now goes through `bm25_sm_open_checked`, so a corrupt tombstone/trigram bitmap raises `ERRCODE_DATA_CORRUPTED` instead of silently opening as EMPTY -- which for a tombstone map would have resurrected every deleted row. `t/003` proves it (red unguarded, green guarded).
 - **1.8.3** two deadlocks that shipped in every prior version (insert-path full-directory merge ran without the maintenance mutex; a live page could be handed out as merge output), and the bulk-ingest bloat root cause (merge was extend-only, never reused pages) -- zero net growth over 100k row-per-txn docs.
