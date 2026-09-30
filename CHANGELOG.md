@@ -2,6 +2,36 @@
 
 All notable changes to pg_fts are documented here.
 
+## Unreleased
+
+Vendored sparsemap **5.7.0 -> 5.8.0**. No on-disk format change on either side
+(`BM25_VERSION` unchanged; sparsemap wire format still version 2); **no REINDEX required**.
+
+### Changed
+
+- **sparsemap 5.8.0.** Same vendoring contract: `vendor/sm.h` byte-identical to upstream,
+  `vendor/sm.c` upstream plus the 9-line `SPARSEMAP_PREFIX` block. Upstream's suite (21
+  tests) passes against the vendored copy under ASan+UBSan with the prefix defined empty.
+
+  What reaches pg_fts: `sm_add_many_grow` -- the only bulk-build call, used by the trigram
+  term-set build, `bm25_segment_docids` and the bulkdelete tombstone set -- now
+  sort+coalesce+merges in one pass instead of inserting bit by bit. Measured standalone
+  (5.7.0 vs 5.8.0, same inputs, 3 runs each, serialized bytes compared first and
+  identical in every case), 20M ids: dense ascending docids 6.3-9.9 s -> 1.7-2.3 s;
+  unsorted with duplicates (the `bm25_segment_docids` shape) 36-54 s -> 11-12 s; sparse
+  ascending (trigram shape) 5.3-5.4 s -> 3.8-4.5 s. **Not measured inside pg_fts at
+  scale**; whether it moves the open superlinear trigram-build item is unmeasured.
+  Cost: the new path holds two extra `n`-sized run arrays plus a result copy, so peak
+  transient memory is higher on sparse input (909 MB vs 434 MB for the 20M sparse case
+  above; unchanged for the dense cases). This is libc malloc outside
+  `FTS_ALLOC_MAYBE_HUGE`, as before.
+
+  Also in: a `__sm_coalesce_map` heap over-read fix (UB, results were correct) on a path
+  pg_fts reaches only through the new `sm_add_many_grow`; `sizeof(sm_t)` 24 -> 32 (a
+  runtime-only cardinality cache, never serialized; pg_fts embeds `sm_t` by value but
+  always via `sm_open`/`sm_create`, and recompiles against the new header). The O(1)
+  `sm_cardinality` and O(runs) `sm_add_range` are in functions pg_fts does not call.
+
 ## 1.8.5 - 2026-09-27
 
 Vendored sparsemap **5.6.0 -> 5.7.0**. No on-disk format change on either side
