@@ -158,7 +158,10 @@ typedef struct FtsQueryData
 {
 	int32		vl_len_;		/* varlena header (do not touch directly!) */
 	uint16		version;		/* format version, currently 1 */
-	uint16		flags;			/* reserved */
+	uint16		flags;			/* PLANNER-ONLY hint, never parsed/sent/stored: the
+								 * LIMIT(+OFFSET) of an ORDER BY <=> scan, 0 = none.
+								 * Set by pg_fts_customscan.c's planner hook on its own
+								 * copy of the plan Const; see CHANGELOG 1.9.0. */
 	uint32		nitems;			/* number of items in RPN list */
 	FtsQueryItem items[FLEXIBLE_ARRAY_MEMBER];
 	/* term texts follow items[] */

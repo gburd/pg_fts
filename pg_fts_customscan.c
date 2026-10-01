@@ -63,9 +63,148 @@ pg_fts_customscan_dummy(PG_FUNCTION_ARGS)
 
 /* ---- saved previous hooks (chain, do not clobber) ---- */
 static create_upper_paths_hook_type prev_upper_paths_hook = NULL;
+static planner_hook_type prev_planner_hook = NULL;
 
 /* cached OID of the @@@ (ftsdoc, ftsquery) operator; resolved lazily */
 static Oid	fts_match_op = InvalidOid;
+
+/*
+ * ===== LIMIT hint for the ORDER BY <=> ordering scan (1.9.0) =====
+ *
+ * An index AM is never told the query's LIMIT, so bm25_gettuple used to compute
+ * a fixed top-100 (and bm25_topk_visible over-fetched x4 on top: WAND top-400
+ * for a LIMIT 10).  A deep k keeps WAND's threshold low and disables block
+ * skipping.  After planning, walk the plan: for every  Limit -> IndexScan  on a
+ * bm25 index whose single ORDER BY is  <expr> <=> <ftsquery Const>  and whose
+ * LIMIT/OFFSET are constants, replace that Const with a COPY carrying
+ * k = limit + offset in FtsQueryData.flags.
+ *
+ * Safety: the hint only sizes the FIRST batch.  bm25_gettuple's grow-and-
+ * recompute path is unchanged, so an executor that pulls past k (a cursor, a
+ * changed plan) still gets every row in exact order -- the hint can cost a
+ * recompute, never a wrong or missing row.  The original Const is never written
+ * (it may be shared with the plan cache); a fresh one replaces it.  Same
+ * approach as pg_textsearch's tp_attach_seed_hint.
+ */
+static bool
+fts_limit_const(Node *n, int64 *v)
+{
+	Const	   *c;
+
+	if (n == NULL || !IsA(n, Const))
+		return false;
+	c = (Const *) n;
+	if (c->constisnull || c->consttype != INT8OID)
+		return false;
+	*v = DatumGetInt64(c->constvalue);
+	return true;
+}
+
+static void
+fts_hint_indexscan(IndexScan *scan, Limit *limit, Oid ftsqueryoid)
+{
+	int64		count,
+				offset = 0,
+				k;
+	Node	   *expr;
+	OpExpr	   *op;
+	Const	   *orig,
+			   *repl;
+	FtsQuery	q;
+	Relation	irel;
+	bool		isfts;
+
+	if (list_length(scan->indexorderby) != 1)
+		return;
+	if (!fts_limit_const(limit->limitCount, &count) || count <= 0)
+		return;
+	if (limit->limitOffset != NULL &&
+		(!fts_limit_const(limit->limitOffset, &offset) || offset < 0))
+		return;
+	k = count + offset;
+	if (k <= 0 || k > PG_UINT16_MAX)
+		return;					/* deep page: leave the default batching alone */
+
+	expr = (Node *) linitial(scan->indexorderby);
+	if (!IsA(expr, OpExpr) || list_length(((OpExpr *) expr)->args) != 2)
+		return;
+	op = (OpExpr *) expr;
+	if (!IsA(lsecond(op->args), Const))
+		return;
+	orig = (Const *) lsecond(op->args);
+	if (orig->constisnull || orig->consttype != ftsqueryoid)
+		return;
+
+	/* only our AM interprets the hint */
+	irel = index_open(scan->indexid, NoLock);
+	isfts = (irel->rd_indam != NULL && irel->rd_indam->amgettuple == bm25_gettuple);
+	index_close(irel, NoLock);
+	if (!isfts)
+		return;
+
+	q = (FtsQuery) DatumGetPointer(datumCopy(
+		PointerGetDatum(PG_DETOAST_DATUM(orig->constvalue)), false, -1));
+	q->flags = (uint16) k;
+	repl = makeConst(orig->consttype, orig->consttypmod, orig->constcollid,
+					 -1, PointerGetDatum(q), false, false);
+	repl->location = orig->location;
+	lsecond(op->args) = repl;
+}
+
+static void
+fts_hint_walk(Plan *plan, Oid ftsqueryoid)
+{
+	ListCell   *lc;
+
+	if (plan == NULL)
+		return;
+	if (IsA(plan, Limit) && plan->lefttree != NULL && IsA(plan->lefttree, IndexScan))
+		fts_hint_indexscan((IndexScan *) plan->lefttree, (Limit *) plan, ftsqueryoid);
+	fts_hint_walk(plan->lefttree, ftsqueryoid);
+	fts_hint_walk(plan->righttree, ftsqueryoid);
+	switch (nodeTag(plan))
+	{
+		case T_Append:
+			foreach(lc, ((Append *) plan)->appendplans)
+				fts_hint_walk(lfirst(lc), ftsqueryoid);
+			break;
+		case T_MergeAppend:
+			foreach(lc, ((MergeAppend *) plan)->mergeplans)
+				fts_hint_walk(lfirst(lc), ftsqueryoid);
+			break;
+		case T_SubqueryScan:
+			fts_hint_walk(((SubqueryScan *) plan)->subplan, ftsqueryoid);
+			break;
+		case T_CustomScan:
+			foreach(lc, ((CustomScan *) plan)->custom_plans)
+				fts_hint_walk(lfirst(lc), ftsqueryoid);
+			break;
+		default:
+			break;
+	}
+}
+
+static PlannedStmt *
+fts_planner(Query *parse, const char *query_string, int cursorOptions,
+			ParamListInfo boundParams)
+{
+	PlannedStmt *stmt;
+	Oid			ftsqueryoid;
+	ListCell   *lc;
+
+	stmt = prev_planner_hook
+		? prev_planner_hook(parse, query_string, cursorOptions, boundParams)
+		: standard_planner(parse, query_string, cursorOptions, boundParams);
+
+	/* pg_fts not installed in this database / not visible: nothing to hint */
+	ftsqueryoid = TypenameGetTypid("ftsquery");
+	if (!OidIsValid(ftsqueryoid))
+		return stmt;
+	fts_hint_walk(stmt->planTree, ftsqueryoid);
+	foreach(lc, stmt->subplans)
+		fts_hint_walk((Plan *) lfirst(lc), ftsqueryoid);
+	return stmt;
+}
 
 /* ===== count-pushdown CustomScan: path/plan/exec ===== */
 
@@ -457,4 +596,6 @@ _PG_init(void)
 
 	prev_upper_paths_hook = create_upper_paths_hook;
 	create_upper_paths_hook = fts_create_upper_paths;
+	prev_planner_hook = planner_hook;
+	planner_hook = fts_planner;
 }

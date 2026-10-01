@@ -1475,8 +1475,14 @@ bm25_gettuple(IndexScanDesc scan, ScanDirection dir)
 		 * WAND pass instead of a pass-then-recompute (which for a common-term
 		 * query is ~35ms vs ~12ms) -- a net reduction for typical "first page of
 		 * results" pagination.  Beyond 100, grow x4 (capped).
+		 *
+		 * 1.9.0: when the planner hook attached the query's LIMIT(+OFFSET) to the
+		 * ORDER BY Const (FtsQueryData.flags), start at exactly that k.  A deep k
+		 * keeps WAND's threshold low enough that no block can be skipped; the
+		 * hinted k is what lets block-max WAND prune.  Growth below is unchanged,
+		 * so pulling past the hint still returns every row in exact order.
 		 */
-		so->curk = 100;
+		so->curk = so->query->flags > 0 ? (int) so->query->flags : 100;
 		if ((double) so->curk > so->maxhits)
 			so->curk = Max((int) so->maxhits, 1);
 		so->nordered = bm25_topk_visible(scan->indexRelation, so->query,
@@ -2785,6 +2791,21 @@ fts_index_df(PG_FUNCTION_ARGS)
  */
 /* ----- document-at-a-time block-max WAND top-k (item 2) ----- */
 
+/*
+ * scored_worse(a, b): a ranks strictly below b under the final result order
+ * (score descending, then TID ascending -- cmp_scored_desc).  The top-k heaps
+ * evict the WORST entry by this order, so among equal-scored docs at the
+ * cut-off the lowest TIDs survive.  That makes every top-k batch a prefix of
+ * any larger batch, which the ordering scan's grow-and-resume depends on.
+ */
+static inline bool
+scored_worse(const ScoredTid *a, const ScoredTid *b)
+{
+	if (a->score != b->score)
+		return a->score < b->score;
+	return ItemPointerCompare((ItemPointer) &a->tid, (ItemPointer) &b->tid) > 0;
+}
+
 static int
 cmp_scored_desc(const void *a, const void *b)
 {
@@ -2795,7 +2816,16 @@ cmp_scored_desc(const void *a, const void *b)
 		return 1;
 	if (sa > sb)
 		return -1;
-	return 0;
+	/*
+	 * Ties: ascending TID.  WAND admits a doc only when it STRICTLY beats the
+	 * threshold and walks docids ascending, so among equal scores the lowest
+	 * docids are the ones kept.  Ordering ties the same way makes a top-k batch a
+	 * prefix of every larger batch, which the ordering scan's grow-and-resume
+	 * (ordpos = prev) relies on; an unstable tie order could repeat or skip a
+	 * row across a recompute.  More recomputes happen since 1.9.0's LIMIT hint.
+	 */
+	return ItemPointerCompare((ItemPointer) &((const ScoredTid *) a)->tid,
+							  (ItemPointer) &((const ScoredTid *) b)->tid);
 }
 
 /*
@@ -3653,7 +3683,7 @@ fts_search_bmw(WandCursor *cursors, int nterms, int k, const DocidFilter *filter
 				int			minpos = 0;
 
 				for (i = 1; i < nheap; i++)
-					if (heap[i].score < heap[minpos].score)
+					if (scored_worse(&heap[i], &heap[minpos]))
 						minpos = i;
 				heap[minpos].tid = tid;
 				heap[minpos].score = score;
@@ -3818,7 +3848,7 @@ fts_search_maxscore(WandCursor *cursors, int nterms, int k,
 
 				bm25_docid_to_tid(cand, &tid);
 				for (i = 1; i < nheap; i++)
-					if (heap[i].score < heap[minpos].score)
+					if (scored_worse(&heap[i], &heap[minpos]))
 						minpos = i;
 				heap[minpos].tid = tid;
 				heap[minpos].score = score;
@@ -4213,6 +4243,22 @@ bm25_topk_visible(Relation index, FtsQuery q, int k, bool as_distance,
 	if (k < 1)
 		k = 1;
 	wantk_cap = Max(k * 64, 4096);
+
+	/*
+	 * Over-fetch only where visibility is uncertain (1.9.0).  The x4 margin (and
+	 * the 64 floor) exist purely to avoid the retry below when some top
+	 * candidates turn out invisible; correctness never depended on them, because
+	 * a short result with a full batch always retries with a doubled wantk.  But
+	 * a deep wantk keeps WAND's threshold low and defeats block skipping, so a
+	 * LIMIT 10 ran as a top-400.  When pg_class says the heap is (almost) all-
+	 * visible -- the normal state after VACUUM -- ask for exactly k.  relallvisible
+	 * is a statistic and may be stale: that can only cost a retry, never a row.
+	 */
+	heap = table_open(index->rd_index->indrelid, AccessShareLock);
+	if (heap->rd_rel->relpages > 0 &&
+		(double) heap->rd_rel->relallvisible >= 0.99 * (double) heap->rd_rel->relpages)
+		wantk = k;
+	table_close(heap, AccessShareLock);
 
 	for (;;)
 	{
