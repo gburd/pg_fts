@@ -56,6 +56,14 @@ alone.
 
 ## 2. Comparative latency
 
+### 2a'. Unreleased branch `perf-a-limit-hint` vs pg_textsearch 1.4.0 (2026-10-01)
+
+NOT a release; the README describes 1.8.6. On Debian 13 hosts, same protocol:
+rare 0.71 vs 0.84, mid 0.85 vs 1.07, common k10 11.37 vs 11.40, common k100 14.67 vs
+**13.87**, count 0.18 vs seqscan, AND 1.57 vs 25.0, OR2 1.54 vs 24.9, prefix 6.36 vs 10.5,
+phrase 146-185 vs **42.9** ms; rare tps at 16/64 clients 11,895/8,278 vs 8,115/8,209,
+common tps 562 vs **650**. `bench/RESULTS_AC_PGTS_2026-10-01.md`.
+
 ### 2a. Current: pg_fts 1.8.6 vs pg_textsearch 1.4.0 (2026-09-30)
 
 Same rig, corpus (md5-identical TSV on every host) and 8-run protocol, plus 3 independent

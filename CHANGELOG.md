@@ -2,6 +2,48 @@
 
 All notable changes to pg_fts are documented here.
 
+## Unreleased (branch perf-a-limit-hint)
+
+### Fixed
+
+- **Ranked queries could miss true top-k documents (every prior release).** A WAND/BMW
+  seek proved a posting block entirely below its target by reading the next block's
+  header on the same page; for a term's last block that header belongs to the next term
+  in the shared chain, so the live last block was skipped and never scored whenever that
+  term began at a lower docid. Ranked OR at small k dropped real results (2,000-row repro
+  in `sql/wand_last_block.sql`; on 2.19M docs 1.8.6 was exact on 26/28 OR (query, k)
+  pairs, now 28/28). A seek no longer prove-skips once the block reaches the term's df.
+
+### Changed (performance; measured, see bench/RESULTS_AC_PGTS_2026-10-01.md)
+
+- The planner passes `LIMIT`+`OFFSET` to the ordering scan, so the first WAND batch is k
+  rather than a fixed 100 with x4 over-fetch; over-fetch is skipped on an all-visible heap.
+- Resident slot-indexed doclen array per backend (new GUC `pg_fts.doclen_cache_mb`,
+  default 64, 0 = off): a document's length is two array reads instead of a sidecar page
+  decode.
+- `count(*)` fast path checks visibility with one `visibilitymap_count` instead of a
+  per-heap-block loop.
+- The sort-key copy of an ordering scan's own `<=>` is replaced by the scan's exact
+  distance (`fts_current_distance()`, internal) instead of detoasting and re-scoring each
+  returned row. Visible `<=>` values are unchanged.
+- Inlined TID sort in the collect path; galloping probe in the positional phrase
+  intersection.
+- Net on 2.19M Wikipedia vs 1.8.6: rare 10.2 -> 0.71 ms, mid 16.0 -> 0.85, common k10
+  49 -> 11.4, count 2.5 -> 0.18, AND 9.0 -> 1.57, OR2 10.7 -> 1.54, prefix 18.4 -> 6.4,
+  phrase (positions=on) 239 -> 146. Ranked results unchanged; counts unchanged.
+
+### Known issue
+
+- Rare-term ranked throughput falls ~30% from 16 to 64 clients with the slot array on
+  (not with it off); cause not yet measured. Still equal to pg_textsearch 1.4.0 at 64.
+
+### Retracted
+
+- The 2026-09-30 note that pg_textsearch 1.4.0 "leads on every single-term ranked query
+  4-14x" is true of 1.8.6 only; on this branch pg_fts leads rare and mid. And
+  `parity_check.sh` passing was cited as proof of exact top-k throughout 1.x -- it did not
+  detect the last-block bug above.
+
 ## 1.8.6 - 2026-09-30
 
 Vendored sparsemap **5.7.0 -> 5.8.0**. No on-disk format change on either side
