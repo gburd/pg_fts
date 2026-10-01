@@ -138,6 +138,32 @@ typedef BM25ScanOpaqueData *BM25ScanOpaque;
 double		fts_current_distance_value = 0.0;
 
 /*
+ * IDF for index-side scoring: the SAME formula and clamping as the heap-side
+ * scorer bm25_idf(BM25_LUCENE) in pg_fts_rank.c.  N is the LIVE corpus size
+ * (metapage ndocs, tombstones subtracted) but df is the dictionary df, which
+ * still counts tombstoned postings until a merge rewrites the segment.  After
+ * enough deletes df > N, the unclamped formula goes NEGATIVE, every score flips
+ * sign, and block-max WAND -- whose bounds assume non-negative contributions --
+ * returned the WORST documents as the top-k (found by the dense_score test,
+ * 2026-10-01; present in every release).  Clamping df to [1, N] keeps idf >= 0
+ * and makes index scores equal fts_bm25's.  See CHANGELOG 1.9.0.
+ */
+static inline double
+bm25_index_idf(double N, double df)
+{
+	if (df < 1.0)
+		df = 1.0;
+	if (df > N)
+		df = N;
+	return log(1.0 + (N - df + 0.5) / (df + 0.5));
+}
+
+/* GUC (1.9.0, C2): a single-term, single-segment ranked query whose df is at
+ * least this many postings is scored exhaustively (fts_search_dense1) instead of
+ * via WAND.  0 disables.  Registered in pg_fts_customscan.c. */
+int			pg_fts_dense_score_min_df = 32768;
+
+/*
  * Inlined TID sort for tidset_sort_uniq (every collect path funnels through it).
  * qsort + a function-pointer ItemPointerCompare was 75% of a ranked prefix
  * query (perf, 2026-10-01): 52k TIDs, ~800k out-of-line compares.  Comparing
@@ -3952,10 +3978,114 @@ fts_search_maxscore(WandCursor *cursors, int nterms, int k,
  * progressively less work as terms become non-essential, winning on long
  * queries / large k.  Both return the identical exact top-k.
  */
+/*
+ * fts_search_dense1 (1.9.0, C2): exact top-k for ONE cursor (a single plain term
+ * in a single segment) by scoring EVERY posting, without WAND.
+ *
+ * For a common term block-max WAND skips ~9% of blocks on real text (the bound
+ * and the threshold sit ~12% apart on a flat impact plateau), so per posting it
+ * pays a cursor sort, a pivot accumulation and a block-max bound check before
+ * it scores -- control overhead that was the largest single cost of a
+ * common-term ranked query after C1 (perf, 2026-10-01).  This loop instead
+ * decodes each block's tf column once (bm25_for_unpack), reads each doclen
+ * through the cursor's normal lookup (C1's slot array when resident), and keeps
+ * a top-k min-heap.
+ *
+ * Exactness: every live posting is scored with the same arithmetic as
+ * wand_contrib_cur, tombstoned docids are skipped exactly as wand_next does, and
+ * the heap evicts by scored_worse (score, then TID), the order WAND uses -- so
+ * the result is the same top-k, ties included.  It is the reference algorithm
+ * WAND approximates.  Gated by pg_fts.dense_score_min_df (fts_search_wand).
+ */
+static int
+fts_search_dense1(WandCursor *c, int k, ScoredTid **out)
+{
+	ScoredTid  *heap = (ScoredTid *) palloc(Max(k, 1) * sizeof(ScoredTid));
+	int			nheap = 0;
+	int			minpos = 0;
+	double		threshold = -1.0;
+	uint64		tfs[BM25_BLOCK_SIZE];
+
+	wand_prime(c);
+	while (c->docid != UINT64_MAX)
+	{
+		int			i;
+
+		CHECK_FOR_INTERRUPTS();	/* per 128-posting block; block is a palloc'd copy, no lock held */
+		bm25_for_unpack(c->blkbuf + c->tfoff, c->blkcount, tfs);
+		for (i = c->cur; i < c->blkcount; i++)
+		{
+			uint64		docid = c->docids[i];
+			double		tf,
+						dl,
+						score;
+			ScoredTid	st;
+
+			if (docid >= c->docid_hi)
+				break;
+			if (c->tombs != NULL && c->tombs->hasany)
+			{
+				c->cur = i;
+				c->docid = docid;
+				if (wand_cur_own_tombstoned(c))
+					continue;
+			}
+			tf = (double) tfs[i];
+			dl = c->has_doclen_col
+				? (double) bm25_for_get(c->blkbuf + c->dloff, i)
+				: (double) bm25_doclen_cursor_lookup(&c->doclenc, docid);
+			score = c->idf_k1p1 * tf / (tf + c->k1_1mb + c->k1b_inv_avgdl * dl);
+			if (nheap == k && score < threshold)
+				continue;		/* cannot enter: strictly below the k-th score */
+			bm25_docid_to_tid(docid, &st.tid);
+			st.score = score;
+			if (nheap < k)
+			{
+				heap[nheap++] = st;
+				if (nheap == k)
+				{
+					int			j;
+
+					minpos = 0;
+					for (j = 1; j < nheap; j++)
+						if (scored_worse(&heap[j], &heap[minpos]))
+							minpos = j;
+					threshold = heap[minpos].score;
+				}
+			}
+			else if (scored_worse(&heap[minpos], &st))
+			{
+				int			j;
+
+				heap[minpos] = st;
+				minpos = 0;
+				for (j = 1; j < nheap; j++)
+					if (scored_worse(&heap[j], &heap[minpos]))
+						minpos = j;
+				threshold = heap[minpos].score;
+			}
+		}
+		if (c->blkcount > 0 && c->docids[c->blkcount - 1] >= c->docid_hi)
+			break;
+		wand_load_block(c);
+	}
+	if (c->blkbuf)
+		pfree(c->blkbuf);
+	c->blkbuf = NULL;
+	bm25_doclen_cursor_free(&c->doclenc);
+	qsort(heap, nheap, sizeof(ScoredTid), cmp_scored_desc);
+	*out = heap;
+	return nheap;
+}
+
 static int
 fts_search_wand(WandCursor *cursors, int nterms, int k,
 				const DocidFilter *filter, BoolGate *gate, ScoredTid **out)
 {
+	if (nterms == 1 && filter == NULL && gate == NULL &&
+		pg_fts_dense_score_min_df > 0 &&
+		cursors[0].df >= (uint32) pg_fts_dense_score_min_df)
+		return fts_search_dense1(&cursors[0], k, out);
 	if (nterms >= 4)
 		return fts_search_maxscore(cursors, nterms, k, filter, gate, out);
 	return fts_search_bmw(cursors, nterms, k, filter, gate, out);
@@ -4205,7 +4335,7 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 		}
 		if (gdf == 0)
 			continue;			/* term absent in every segment */
-		idf = log(1.0 + (N - (double) gdf + 0.5) / ((double) gdf + 0.5));
+		idf = bm25_index_idf(N, (double) gdf);
 
 		/* one cursor per segment that contains the term */
 		for (s = 0; s < meta.nsegments; s++)
@@ -5048,8 +5178,7 @@ fts_anomalous_docs(PG_FUNCTION_ARGS)
 						continue;
 					}
 
-					idf = log(1.0 + (N - (double) gdf + 0.5) /
-							  ((double) gdf + 0.5));
+					idf = bm25_index_idf(N, (double) gdf);
 
 					np = bm25_decode_term(index, de->firstposting,
 										  de->firstoffset, de->df,

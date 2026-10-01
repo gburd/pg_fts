@@ -680,6 +680,13 @@ _PG_init(void)
 							4096, 0, INT_MAX,
 							PGC_USERSET, GUC_UNIT_MB, NULL, NULL, NULL);
 
+	DefineCustomIntVariable("pg_fts.dense_score_min_df",
+							"Single-term ranked queries on a term with at least this many postings (in one segment) are scored exhaustively instead of with block-max WAND; 0 disables.",
+							"WAND prunes almost nothing for a very common term, so scoring every posting in a tight loop is faster; results are identical.",
+							&pg_fts_dense_score_min_df,
+							32768, 0, INT_MAX,
+							PGC_USERSET, 0, NULL, NULL, NULL);
+
 	DefineCustomIntVariable("pg_fts.doclen_cache_mb",
 							"Per-backend memory budget (MB) for the resident slot-indexed document-length arrays used by ranked scans; 0 disables.",
 							"Each backend decodes an index's doclen sidecar once per segment-directory generation into a dense array (about 2.6 bytes per document) so scoring reads a document's length with two array reads. A segment that does not fit keeps the page-directory lookup.",
