@@ -91,5 +91,58 @@ EXECUTE p10; EXECUTE p10; EXECUTE p10; EXECUTE p10; EXECUTE p10; EXECUTE p10; EX
 DEALLOCATE p;
 DEALLOCATE p10;
 
+-- shapes the hook must leave correct (each runs a guard branch in fts_hint_walk)
+-- 1. LIMIT with a non-constant OFFSET / LIMIT: no hint, still exact
+SELECT lh_check(10, 5, 'tie') AS const_off_ok;
+PREPARE lp(bigint, bigint) AS SELECT array_agg(id) FROM (SELECT id FROM lh WHERE d @@@ to_ftsquery('simple','tie')
+  ORDER BY d <=> to_ftsquery('simple','tie') LIMIT $1 OFFSET $2) s;
+EXECUTE lp(5, 3);
+DEALLOCATE lp;
+-- 2. a deep page: LIMIT beyond the 16-bit hint range -> no hint, all rows
+SELECT count(*) AS deep_limit_rows FROM (SELECT id FROM lh WHERE d @@@ to_ftsquery('simple','tie')
+  ORDER BY d <=> to_ftsquery('simple','tie') LIMIT 70000) s;
+-- 3. the ordering scan under UNION ALL and MergeAppend: each branch hinted/correct
+SELECT count(*) AS union_rows FROM (
+  (SELECT id FROM lh WHERE d @@@ to_ftsquery('simple','tie') ORDER BY d <=> to_ftsquery('simple','tie') LIMIT 7)
+  UNION ALL
+  (SELECT id FROM lh WHERE d @@@ to_ftsquery('simple','rare') ORDER BY d <=> to_ftsquery('simple','rare') LIMIT 3)) u;
+-- 4. a btree index scan under Limit (not bm25): untouched
+CREATE INDEX lh_id ON lh (id);
+SELECT array_agg(id) AS btree_ok FROM (SELECT id FROM lh ORDER BY id LIMIT 3) s;
+-- 5. ordering scan inside a subplan (EXISTS) and a CTE
+SELECT count(*) AS subplan_ok FROM lh o WHERE o.id IN (SELECT id FROM lh WHERE d @@@ to_ftsquery('simple','rare')
+  ORDER BY d <=> to_ftsquery('simple','rare') LIMIT 4);
+WITH c AS MATERIALIZED (SELECT id FROM lh WHERE d @@@ to_ftsquery('simple','tie') ORDER BY d <=> to_ftsquery('simple','tie') LIMIT 6)
+SELECT count(*) AS cte_rows FROM c;
+
+-- 6. LIMIT ALL (a NULL Const) and a parameterized query (not a Const): no
+--    hint; results must equal the unhinted full ranking
+SELECT (SELECT array_agg(id) FROM (SELECT id FROM lh WHERE d @@@ to_ftsquery('simple','rare')
+          ORDER BY d <=> to_ftsquery('simple','rare') LIMIT ALL) s)
+     = (SELECT array_agg(id) FROM (SELECT id FROM lh WHERE d @@@ to_ftsquery('simple','rare')
+          ORDER BY d <=> to_ftsquery('simple','rare')) s) AS limit_all_ok;
+PREPARE pq(ftsquery) AS SELECT array_agg(id) FROM (SELECT id FROM lh WHERE d @@@ $1 ORDER BY d <=> $1 LIMIT 5) s;
+EXECUTE pq(to_ftsquery('simple','rare'));
+EXECUTE pq(to_ftsquery('simple','rare')); EXECUTE pq(to_ftsquery('simple','rare')); EXECUTE pq(to_ftsquery('simple','rare'));
+EXECUTE pq(to_ftsquery('simple','rare')); EXECUTE pq(to_ftsquery('simple','rare'));
+SELECT array_agg(id) AS direct_rare5 FROM (SELECT id FROM lh WHERE d @@@ to_ftsquery('simple','rare')
+  ORDER BY d <=> to_ftsquery('simple','rare') LIMIT 5) s;
+DEALLOCATE pq;
+
+-- 7. a partitioned table: ranked ORDER BY ... LIMIT over a MergeAppend of per-
+--    partition bm25 ordering scans must equal the ranking over the union
+CREATE TABLE lhp (id int, d ftsdoc) PARTITION BY RANGE (id);
+CREATE TABLE lhp1 PARTITION OF lhp FOR VALUES FROM (1) TO (1501);
+CREATE TABLE lhp2 PARTITION OF lhp FOR VALUES FROM (1501) TO (3001);
+INSERT INTO lhp SELECT id, d FROM lh;
+CREATE INDEX ON lhp1 USING fts (d);
+CREATE INDEX ON lhp2 USING fts (d);
+VACUUM ANALYZE lhp1; VACUUM ANALYZE lhp2;
+EXPLAIN (COSTS OFF) SELECT id FROM lhp WHERE d @@@ to_ftsquery('simple','rare')
+  ORDER BY d <=> to_ftsquery('simple','rare') LIMIT 8;
+SELECT count(*) AS part_rows, count(DISTINCT id) AS part_distinct FROM (SELECT id FROM lhp WHERE d @@@ to_ftsquery('simple','rare')
+  ORDER BY d <=> to_ftsquery('simple','rare') LIMIT 8) s;
+DROP TABLE lhp;
+
 DROP FUNCTION lh_check(int, int, text);
 DROP TABLE lh;

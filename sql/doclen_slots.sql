@@ -46,5 +46,21 @@ SELECT ds_scores('alpha', 64) = ds_scores('alpha', 0) AS two_segments,
 SELECT fts_vacuum('ds_fts') IS NOT NULL AS vacuumed;
 SELECT ds_scores('alpha', 1) = ds_scores('alpha', 0) AS after_vacuum;
 
+-- a budget too small for any segment: every segment keeps the cursor path, and
+-- scores are still identical (exercises the over-budget skip in the builder)
+SELECT fts_merge('ds_fts') IS NOT NULL AS merged2;
+SELECT ds_scores('alpha', 1) = ds_scores('alpha', 0) AS tiny_budget_same;
+-- docids outside the resident array (rows inserted after the array was built
+-- land on new heap blocks) must read as absent and fall through correctly
+BEGIN;
+SET LOCAL pg_fts.doclen_cache_mb = 64;
+SELECT count(*) > 0 AS warm FROM (SELECT id FROM ds WHERE d @@@ to_ftsquery('simple','alpha')
+  ORDER BY d <=> to_ftsquery('simple','alpha') LIMIT 5) s;
+COMMIT;
+INSERT INTO ds SELECT g, to_ftsdoc('simple', 'alpha omega ' || repeat('q ', g % 30)) FROM generate_series(9001, 9400) g;
+SELECT fts_merge('ds_fts') IS NOT NULL AS merged3;
+SELECT ds_scores('omega', 64) = ds_scores('omega', 0) AS new_blocks_same,
+       length(ds_scores('omega', 64)) > 0 AS omega_nonempty;
+
 DROP FUNCTION ds_scores(text, int);
 DROP TABLE ds;
