@@ -238,20 +238,22 @@ is regenerated from that file whenever it changes -- if they ever disagree, the
 summary is right and this is stale.
 
   * **Where pg_fts wins.**  Exact `count(*)` is index-native: **2.20 ms** on a
-    common term vs 13.63 ms for pg_search; pg_textsearch and VectorChord-bm25
-    cannot answer the query at all.  Under load it is 2,923 tps vs 513
-    (**5.7x**).  Smallest index of the five engines measured (**1,421 MB** vs
+    common term vs 13.63 ms for pg_search; VectorChord-bm25 cannot answer the query,
+    and pg_textsearch 1.4.0 answers it only by sequential scan (251 s).  Multi-term
+    boolean ranked (AND/OR) is 2-4x faster than pg_textsearch 1.4.0.  Under load
+    the count is 2,923 tps vs pg_search's 513 (**5.7x**).  Smallest index of the five engines measured (**1,421 MB** vs
     1,887-2,902 MB).  The full query language -- phrase, NEAR, prefix, fuzzy,
     regex, field zones -- through one operator; none of the specialist engines
     offer all of it.  Exact top-k (no early termination), MVCC-correct results,
     crash/replication/corruption tested, and an index that stays bounded under
     unattended autovacuum (measured flat over churn at 1M docs).
-  * **Where pg_fts loses.**  Common-term ranked top-k: `year` (df 734,896) is
-    **36.16 ms** vs pg_search 2.12, VectorChord 3.49, pg_textsearch 20.71 -- ~17x
-    behind pg_search single-client and ~20x under load.  Rare and mid terms are
-    competitive but not leading (rare: 5.89 vs pg_search 2.13, pg_textsearch
-    7.36).  The gap is architectural: 45% of a common-term query is per-posting
-    doclen work and 37% candidate iteration, which bitmap+SIMD engines elide.
+  * **Where pg_fts loses.**  Single-term ranked top-k, every band.  Against
+    pg_textsearch 1.4.0 on identical query forms (2026-09-30): rare **10.21 ms vs
+    0.92**, mid 15.99 vs 1.17, common `year` (df 734,896) 49.16 vs 11.41; at
+    saturation 1,050 vs 8,130 tps rare.  Against pg_search (September), common
+    `year` is ~17x behind single-client and ~20x under load.  (September's 5.89 ms
+    rare figure used a different pg_fts query form; see the CHANGELOG retraction.)
+    The gap is architectural: 45% of a common-term query is per-posting doclen work and 37% candidate iteration, which bitmap+SIMD engines elide.
     Closing it is a posting-format change tracked as item D in ROADMAP.md, not a
     tuning matter.  Build time (381 s) trails pg_search (127 s) and VectorChord
     (56 s).  Bulk-loading very long documents grows the index until an

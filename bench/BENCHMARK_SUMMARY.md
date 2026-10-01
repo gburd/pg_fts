@@ -1,4 +1,4 @@
-# pg_fts benchmark summary — methodology and results (as of v1.6.0, 2026-09-09)
+# pg_fts benchmark summary — methodology and results (as of v1.8.6, 2026-09-30)
 
 Consolidated view of the current measurements. Every number here is traceable to a
 run recorded under `bench/`; nothing is estimated. Where a figure was previously
@@ -54,7 +54,36 @@ alone.
 
 ---
 
-## 2. Comparative latency — 4 engines, identical corpus
+## 2. Comparative latency
+
+### 2a. Current: pg_fts 1.8.6 vs pg_textsearch 1.4.0 (2026-09-30)
+
+Same rig, corpus (md5-identical TSV on every host) and 8-run protocol, plus 3 independent
+passes per band. Both engines use `ORDER BY` query forms. `bench/RESULTS_PGTS_2026-09-30.md`.
+
+| query | pg_fts 1.8.6 | pg_textsearch 1.4.0 |
+|---|---|---|
+| rare k10 | 10.21 | **0.92** |
+| mid k10 | 15.99 | **1.17** |
+| common k10 | 49.16 | **11.41** |
+| common k100 | 50.14 | **13.75** |
+| exact `count(*)` common | **2.50** | 251 s (seqscan) |
+| AND 2-term k10 | **9.03** | 37.69 |
+| OR 2-term / 3-term k10 | **10.69 / 15.40** | 36.94 / 31.79 |
+| prefix k10 | 18.38 | **13.41** |
+| phrase k10 | 239 (`positions=on`) | **41.8** |
+
+At 16/32/64 clients both engines saturate the 8-core host (flat tps). Rare k10 is
+1,050 vs **8,130** tps, common k10 205 vs **640**, and exact count **2,645** tps vs none.
+Match counts identical on both engines (10,875 / 24,097 / 734,896); pg_fts parity 10/10.
+pg_textsearch got 8x faster on rare since September; pg_fts is unchanged since 1.6.1.
+
+### 2b. Historical: 4 engines, identical corpus (2026-09-06)
+
+> **Query-form caveat (CHANGELOG 1.8.6, Retracted):** the pg_fts column below was
+> measured with `fts_search()`, the competitors with `ORDER BY` forms. On the same
+> `ORDER BY ... LIMIT` form pg_fts is ~10.2 / 16.0 / 48 ms (rare / mid / common k10), not
+> 5.89 / 10.64 / 36.16. Measured on 1.6.1 and 1.8.6 alike (`data_pgts_2026-09-30/form_*`).
 
 Median ms, warm. pg_fts figures are **v1.6.0**; the three competitors were measured
 in the 5-way run (`bench/RESULTS_5WAY_159b_2026-09-06.md`) and are unchanged since,
@@ -290,8 +319,8 @@ would matter far less than a throughput cliff.
 ## 8. Honest summary
 
 **Strengths.** Smallest index in the field (1,421 MB, 25% under next best). Fastest
-exact `count(*)` (2.20 ms — 6× pg_search, the only other engine that offers it).
-Rare-term ranked beats the like-for-like comparator (5.89 vs 7.36 ms). Correct
+exact `count(*)` (2.20 ms — 6× pg_search; pg_textsearch 1.4.0 can now count, but only by
+seqscan, 251 s). Multi-term boolean ranked beats pg_textsearch 1.4.0 2-4x. Correct
 English stemming, verified against regex ground truth. Widest query language by a
 large margin (see `CAPABILITIES.md` and the feature matrix).
 
@@ -304,7 +333,8 @@ corruption that reached our tombstone iteration).
 
 **Comparator note.** `pg_textsearch` is the fairest reference point — same
 PostgreSQL `english` config, byte-identical match counts, same C-extension model.
-Against it pg_fts is faster on rare, slower on mid, 1.7× slower on common k10, 1.1×
-faster on common k100, 25% smaller, and adds count/AND/OR/phrase/prefix/fuzzy/regex
-it does not have. The larger deficits are against the two engines shipping their own
+Against **v1.4.0** (2026-09-30), pg_fts is 11x slower on rare, 14x on mid and 4.3x on
+common k10; 2-4x faster on AND/OR; 25% smaller; and the only one of the two with an
+index-backed count, NEAR, fuzzy and regex. The September claim "faster on rare" compared
+different query forms and is retracted. The larger deficits are against the two engines shipping their own
 posting formats — one of which does not stem.

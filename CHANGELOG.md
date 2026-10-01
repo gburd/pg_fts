@@ -32,6 +32,21 @@ Vendored sparsemap **5.7.0 -> 5.8.0**. No on-disk format change on either side
   always via `sm_open`/`sm_create`, and recompiles against the new header). The O(1)
   `sm_cardinality` and O(runs) `sm_add_range` are in functions pg_fts does not call.
 
+### Retracted
+
+- **"pg_fts rare-term ranked beats pg_textsearch (5.89 vs 7.36 ms)"** -- published in
+  `bench/BENCHMARK_SUMMARY.md`, `README.md` and `doc/COMPARISON_MATRIX.md` from the
+  2026-09-06 5-way run -- **compared different query forms.** The pg_fts column was timed
+  with `fts_search(idx, q, k)`; the competitors were timed with their `ORDER BY ... LIMIT`
+  forms. On the same `WHERE d @@@ q ORDER BY d <=> q LIMIT k` form, pg_fts rare/mid/common
+  k10 is ~10.2 / 16.0 / 48 ms. That is measured on two identical hosts, on 1.6.1 and
+  1.8.6, both forms against the same index, 3 passes each
+  (`bench/data_pgts_2026-09-30/form_*`). 1.6.1 and 1.8.6 agree within noise, so this is
+  not a regression: the published figure was the fast form. The September concurrency run
+  (C1X) used the `ORDER BY` form and is unaffected. Separately, pg_textsearch v1.4.0 is now
+  0.92 ms on rare, so pg_fts trails it on every single-term ranked band whichever form is
+  used (`bench/RESULTS_PGTS_2026-09-30.md`).
+
 ### Qualified, not assumed
 
 - **Local delete-heavy scale run, 1.8.5 vs 1.8.6 side by side** (PG 17.10, 2.2M synthetic
