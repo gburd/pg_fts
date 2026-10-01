@@ -64,6 +64,14 @@ one internal function (`pg_fts--1.8.6--1.9.0.sql`).
   not identified; per-backend copies of the length array competing for cache is the leading
   unconfirmed hypothesis. Still ahead of pg_textsearch at every client count measured.
 
+### Release note
+
+- GitHub CI's coverage job failed on the `v1.9.0` commit: branch coverage 72.8% against a
+  73% gate (the new code added 243 branches and the suite took 172 of them). The published
+  1.9.0 artifact was built and its installcheck and TAP passed, so no code changed. Tests
+  for the new paths landed on `main` afterwards (`dabc30e`, branch coverage 73.1%), and CI
+  is green there. A gate that failed on a release tag is recorded here, not hidden.
+
 ### Retracted
 
 - The 2026-09-30 note that pg_textsearch 1.4.0 "leads on every single-term ranked query
