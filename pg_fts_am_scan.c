@@ -1802,24 +1802,48 @@ bm25_free_posterm(PosTermList *pl)
 	pl->nposts = 0;
 }
 
-/* find the PosPosting for docid via binary search; NULL if absent */
+/*
+ * Find the PosPosting for docid (NULL if absent), for an ASCENDING sequence of
+ * docids: gallop forward from *hint
+ * (the previous hit or insertion point) instead of binary-searching the whole
+ * list each time.  The phrase intersection drives docids in increasing order,
+ * so this makes the per-term probe O(log gap) rather than O(log n) -- the
+ * full-list binary search it replaced was ~18% of a positions=on ranked
+ * phrase query (perf, 2026-10-01).  Requires docid >= the previous call's
+ * docid; *hint only ever moves forward.
+ */
 static PosPosting *
-bm25_pospost_find(PosTermList *pl, uint64 docid)
+bm25_pospost_find_fwd(PosTermList *pl, uint64 docid, int *hint)
 {
-	int			lo = 0,
-				hi = pl->nposts - 1;
+	int			lo = *hint,
+				step = 1,
+				hi;
 
-	while (lo <= hi)
+	if (lo >= pl->nposts)
+		return NULL;
+	/* gallop: find hi with posts[hi].docid >= docid */
+	hi = lo;
+	while (hi < pl->nposts && pl->posts[hi].docid < docid)
 	{
-		int			mid = (lo + hi) / 2;
+		lo = hi + 1;
+		hi += step;
+		step <<= 1;
+	}
+	if (hi >= pl->nposts)
+		hi = pl->nposts - 1;
+	/* binary search in [lo, hi] for the first docid >= target */
+	while (lo < hi)
+	{
+		int			mid = lo + (hi - lo) / 2;
 
 		if (pl->posts[mid].docid < docid)
 			lo = mid + 1;
-		else if (pl->posts[mid].docid > docid)
-			hi = mid - 1;
 		else
-			return &pl->posts[mid];
+			hi = mid;
 	}
+	*hint = lo;
+	if (lo < pl->nposts && pl->posts[lo].docid == docid)
+		return &pl->posts[lo];
 	return NULL;
 }
 
@@ -1863,6 +1887,10 @@ bm25_phrase_eval_seg(Relation index, const BM25SegMeta *seg, FtsQuery q,
 
 	/* drive the docid intersection from the smallest posting list */
 	driver = tl[base].posts;
+	{
+		int			fwd[FTS_QUERY_MAX_PHRASE_TERMS];
+
+		memset(fwd, 0, sizeof(fwd));
 	for (di = 0; di < tl[base].nposts; di++)
 	{
 		uint64		docid = driver[di].docid;
@@ -1875,7 +1903,7 @@ bm25_phrase_eval_seg(Relation index, const BM25SegMeta *seg, FtsQuery q,
 
 		for (t = 0; t < nterms; t++)
 		{
-			pp[t] = (t == base) ? &driver[di] : bm25_pospost_find(&tl[t], docid);
+			pp[t] = (t == base) ? &driver[di] : bm25_pospost_find_fwd(&tl[t], docid, &fwd[t]);
 			if (pp[t] == NULL)
 			{
 				allpresent = false;
@@ -1918,6 +1946,7 @@ bm25_phrase_eval_seg(Relation index, const BM25SegMeta *seg, FtsQuery q,
 			(*tids)[(*ntids)++] = tid;
 		}
 	}
+	}							/* fwd[] scope */
 
 done:
 	for (t = 0; t < nterms; t++)
