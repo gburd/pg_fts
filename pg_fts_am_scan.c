@@ -4393,8 +4393,6 @@ bm25_count_dictdf_fastpath(Relation index, FtsQuery q)
 	uint32		s;
 	Relation	heap;
 	BlockNumber nblocks;
-	BlockNumber blk;
-	Buffer		vmbuf = InvalidBuffer;
 	bool		all_visible = true;
 
 	/* Gate (1): exactly one plain positive term. */
@@ -4444,16 +4442,24 @@ bm25_count_dictdf_fastpath(Relation index, FtsQuery q)
 	 */
 	heap = table_open(index->rd_index->indrelid, AccessShareLock);
 	nblocks = RelationGetNumberOfBlocks(heap);
-	for (blk = 0; blk < nblocks; blk++)
+	/*
+	 * One visibilitymap_count() -- a popcount over the VM pages -- instead of a
+	 * VM_ALL_VISIBLE() call per heap block, which was ~90% of this path on a
+	 * 501k-block heap (perf, 2026-10-01).  Every heap block is all-visible iff
+	 * the number of all-visible bits equals nblocks: the count cannot exceed
+	 * the blocks that exist (the VM's tail bits past nblocks are zero -- the VM
+	 * is extended zero-filled and truncated with the heap), and a block the VM
+	 * does not cover is simply not counted, so count < nblocks -> bail.  The
+	 * count is read without the VM page lock, exactly like the per-block loop
+	 * it replaces (VM_ALL_VISIBLE reads the bit unlocked too); the generation
+	 * re-check below still guards the index side.
+	 */
 	{
-		if (!VM_ALL_VISIBLE(heap, blk, &vmbuf))
-		{
-			all_visible = false;
-			break;
-		}
+		BlockNumber nvis = 0;
+
+		visibilitymap_count(heap, &nvis, NULL);
+		all_visible = (nvis >= nblocks);	/* nblocks == 0: vacuously true, as before */
 	}
-	if (vmbuf != InvalidBuffer)
-		ReleaseBuffer(vmbuf);
 	table_close(heap, AccessShareLock);
 	if (!all_visible)
 		return -1;

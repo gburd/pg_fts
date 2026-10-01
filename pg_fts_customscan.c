@@ -570,6 +570,13 @@ _PG_init(void)
 							4096, 0, INT_MAX,
 							PGC_USERSET, GUC_UNIT_MB, NULL, NULL, NULL);
 
+	DefineCustomIntVariable("pg_fts.doclen_cache_mb",
+							"Per-backend memory budget (MB) for the resident slot-indexed document-length arrays used by ranked scans; 0 disables.",
+							"Each backend decodes an index's doclen sidecar once per segment-directory generation into a dense array (about 2.6 bytes per document) so scoring reads a document's length with two array reads. A segment that does not fit keeps the page-directory lookup.",
+							&pg_fts_doclen_cache_mb,
+							64, 0, 1024,
+							PGC_USERSET, GUC_UNIT_MB, NULL, NULL, NULL);
+
 	DefineCustomIntVariable("pg_fts.build_mem_ceiling_mb",
 							"Per-participant build flush-budget growth ceiling (MB); 0 = 2*maintenance_work_mem.",
 							"Raise to trade RAM for fewer, larger segments on a very large build so its segment count stays under the cap. Peak build memory is about (max_parallel_maintenance_workers + 1) * this. 0 keeps the memory-safe default ceiling.",
