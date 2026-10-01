@@ -133,11 +133,28 @@ typedef struct BM25ScanOpaqueData
 
 typedef BM25ScanOpaqueData *BM25ScanOpaque;
 
-static int
-cmp_tid(const void *a, const void *b)
+/*
+ * Inlined TID sort for tidset_sort_uniq (every collect path funnels through it).
+ * qsort + a function-pointer ItemPointerCompare was 75% of a ranked prefix
+ * query (perf, 2026-10-01): 52k TIDs, ~800k out-of-line compares.  Comparing
+ * the 48-bit (block, offset) key inline gives the same order.
+ */
+static inline int
+tid_key_cmp(const ItemPointerData *a, const ItemPointerData *b)
 {
-	return ItemPointerCompare((ItemPointer) a, (ItemPointer) b);
+	uint64		ka = ((uint64) ItemPointerGetBlockNumberNoCheck(a) << 16) |
+		ItemPointerGetOffsetNumberNoCheck(a);
+	uint64		kb = ((uint64) ItemPointerGetBlockNumberNoCheck(b) << 16) |
+		ItemPointerGetOffsetNumberNoCheck(b);
+
+	return (ka > kb) - (ka < kb);
 }
+#define ST_SORT sort_tids_inline
+#define ST_ELEMENT_TYPE ItemPointerData
+#define ST_COMPARE(a, b) tid_key_cmp(a, b)
+#define ST_SCOPE static
+#define ST_DEFINE
+#include "lib/sort_template.h"
 
 static void
 tidset_sort_uniq(TidSet *s)
@@ -156,9 +173,9 @@ tidset_sort_uniq(TidSet *s)
 	}
 	if (s->n <= 1)
 		return;
-	qsort(s->tids, s->n, sizeof(ItemPointerData), cmp_tid);
+	sort_tids_inline(s->tids, s->n);
 	for (i = 0, j = 1; j < s->n; j++)
-		if (ItemPointerCompare(&s->tids[i], &s->tids[j]) != 0)
+		if (!ItemPointerEquals(&s->tids[i], &s->tids[j]))
 			s->tids[++i] = s->tids[j];
 	s->n = i + 1;
 }
@@ -4544,7 +4561,7 @@ bm25_count_visible(Relation index, FtsQuery q)
 	 * heap-probing only pages the map does not mark all-visible.
 	 *
 	 * ONE VM LOOKUP PER BLOCK RUN, not per TID.  tidset_sort_uniq() has sorted
-	 * these with cmp_tid and de-duplicated them, and a docid is
+	 * these by (block, offset) and de-duplicated them, and a docid is
 	 * block * MaxHeapTuplesPerPage + offset -- monotonic in (block, offset) -- so
 	 * every match on a given heap page forms a strictly contiguous run.  The
 	 * previous loop asked the VM about the same block once for every matching
