@@ -2,47 +2,75 @@
 
 All notable changes to pg_fts are documented here.
 
-## Unreleased (branch perf-a-limit-hint)
+## 1.9.0 - 2026-10-01
+
+Ranked-retrieval performance release, and two exactness fixes that affect every prior
+release. **No on-disk format change** (`BM25_VERSION` unchanged); **no REINDEX required**.
+An index built by 1.8.6 was qualified in place under 1.9.0: counts equal seqscan and
+ranked top-20 scores equal the heap-side `fts_bm25` reference before and after
+`ALTER EXTENSION pg_fts UPDATE`, and after further writes on 1.9.0. The only SQL change is
+one internal function (`pg_fts--1.8.6--1.9.0.sql`).
 
 ### Fixed
 
+- **Ranked queries could return the WORST documents after deletes (every prior release).**
+  Index-side idf used N = live documents but df = the dictionary df, which still counts
+  tombstoned postings until a merge rewrites the segment. Once deletes push df above N,
+  the idf goes negative, every score flips sign, and block-max WAND -- whose bounds assume
+  non-negative contributions -- returns the lowest-scoring documents as the top-k.
+  Repro (`sql/dense_score.sql`): 6,000 docs, 1/7 deleted, a term in every doc; 1.8.6's
+  top-3 was (0,15),(0,33),(1,6), and the correct top-3 is (0,17),(1,8),(2,51). df is now
+  clamped to [1, N] at both index idf sites, exactly as the heap-side `bm25_idf` already
+  did, so index scores equal `fts_bm25`'s.
 - **Ranked queries could miss true top-k documents (every prior release).** A WAND/BMW
   seek proved a posting block entirely below its target by reading the next block's
-  header on the same page; for a term's last block that header belongs to the next term
-  in the shared chain, so the live last block was skipped and never scored whenever that
-  term began at a lower docid. Ranked OR at small k dropped real results (2,000-row repro
-  in `sql/wand_last_block.sql`; on 2.19M docs 1.8.6 was exact on 26/28 OR (query, k)
-  pairs, now 28/28). A seek no longer prove-skips once the block reaches the term's df.
+  header on the same page. For a term's last block that header belongs to the next term
+  in the shared chain, so the live last block was skipped whenever that term began at a
+  lower docid. Ranked OR at small k dropped real results (`sql/wand_last_block.sql`; on
+  2.19M docs 1.8.6 was exact on 26/28 OR (query, k) pairs, now 28/28).
 
-### Changed (performance; measured, see bench/RESULTS_AC_PGTS_2026-10-01.md)
+### Changed (performance; bench/RESULTS_190_2026-10-01.md)
 
 - The planner passes `LIMIT`+`OFFSET` to the ordering scan, so the first WAND batch is k
   rather than a fixed 100 with x4 over-fetch; over-fetch is skipped on an all-visible heap.
-- Resident slot-indexed doclen array per backend (new GUC `pg_fts.doclen_cache_mb`,
-  default 64, 0 = off): a document's length is two array reads instead of a sidecar page
-  decode.
-- `count(*)` fast path checks visibility with one `visibilitymap_count` instead of a
-  per-heap-block loop.
-- The sort-key copy of an ordering scan's own `<=>` is replaced by the scan's exact
-  distance (`fts_current_distance()`, internal) instead of detoasting and re-scoring each
-  returned row. Visible `<=>` values are unchanged.
+- New GUC `pg_fts.doclen_cache_mb` (default 64, 0 = off): a resident per-backend document
+  length array; a length is two array reads instead of a sidecar page decode.
+- New GUC `pg_fts.dense_score_min_df` (default 32768, 0 = off): a single-term,
+  single-segment ranked query on a high-df term is scored exhaustively instead of with
+  block-max WAND, which prunes almost nothing for common terms. Same top-k, ties included.
+- FOR unpack: one load per value for widths <= 56 (identical output to the old decoder on
+  335,400 width/length cases under ASan/UBSan).
+- `count(*)` fast path: one `visibilitymap_count` instead of a per-heap-block loop.
+- The sort-key copy of an ordering scan's own `<=>` reuses the scan's exact distance
+  (internal `fts_current_distance()`) instead of detoasting and re-scoring each returned
+  row. Visible `<=>` values are unchanged.
 - Inlined TID sort in the collect path; galloping probe in the positional phrase
   intersection.
-- Net on 2.19M Wikipedia vs 1.8.6: rare 10.2 -> 0.71 ms, mid 16.0 -> 0.85, common k10
-  49 -> 11.4, count 2.5 -> 0.18, AND 9.0 -> 1.57, OR2 10.7 -> 1.54, prefix 18.4 -> 6.4,
-  phrase (positions=on) 239 -> 146. Ranked results unchanged; counts unchanged.
+- 2.19M Wikipedia, vs 1.8.6 / vs pg_textsearch 1.4.0 (ms): rare 10.21 -> 0.67 (0.84),
+  mid 15.99 -> 0.79 (1.07), common k10 49.2 -> 7.19 (11.40), common k100 50.1 -> 7.37
+  (13.87), count 2.50 -> 0.19 (seqscan), AND 9.03 -> 1.51 (25.0), OR 10.7 -> 1.46 (24.9),
+  prefix 18.4 -> 6.21 (10.5), phrase 239 -> 138 (42.9). Throughput at 16 clients: rare
+  12,412 tps (8,115), common 968 (650), count 45,694 (n/a).
 
-### Known issue
+### Known issues
 
-- Rare-term ranked throughput falls ~30% from 16 to 64 clients with the slot array on
-  (not with it off); cause not yet measured. Still equal to pg_textsearch 1.4.0 at 64.
+- **Phrase.** pg_textsearch 1.4.0 is 3.2x faster on a ranked phrase (42.9 vs 138 ms with
+  `positions=on`). pg_fts materializes the whole phrase match set before ranking; the lazy
+  phrase gate is the planned fix.
+- **Rare-term throughput falls with oversubscription.** 12,412 tps at 16 clients, 8,590 at
+  64; pg_textsearch is flat (~8,200). Measured: not lock waits, not slot-array rebuilds
+  (built once per backend, 28 ms), and not the thread count; it scales with the number of
+  concurrent backends (12.4k at 16, 10.5k at 32, 8.4k at 64 for the same total work). Cause
+  not identified; per-backend copies of the length array competing for cache is the leading
+  unconfirmed hypothesis. Still ahead of pg_textsearch at every client count measured.
 
 ### Retracted
 
 - The 2026-09-30 note that pg_textsearch 1.4.0 "leads on every single-term ranked query
-  4-14x" is true of 1.8.6 only; on this branch pg_fts leads rare and mid. And
-  `parity_check.sh` passing was cited as proof of exact top-k throughout 1.x -- it did not
-  detect the last-block bug above.
+  4-14x" is true of 1.8.6 only; 1.9.0 leads on all of them.
+- `parity_check.sh` passing was cited throughout 1.x as proof of exact top-k. It did not
+  detect either bug above: its 1% tolerance, its five default query shapes and its
+  delete-free corpus left both invisible.
 
 ## 1.8.6 - 2026-09-30
 

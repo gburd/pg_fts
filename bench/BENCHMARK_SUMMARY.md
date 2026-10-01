@@ -1,4 +1,4 @@
-# pg_fts benchmark summary — methodology and results (as of v1.8.6, 2026-09-30)
+# pg_fts benchmark summary — methodology and results (as of v1.9.0, 2026-10-01)
 
 Consolidated view of the current measurements. Every number here is traceable to a
 run recorded under `bench/`; nothing is estimated. Where a figure was previously
@@ -56,15 +56,15 @@ alone.
 
 ## 2. Comparative latency
 
-### 2a'. Unreleased branch `perf-a-limit-hint` vs pg_textsearch 1.4.0 (2026-10-01)
+### 2a'. Current: pg_fts 1.9.0 vs pg_textsearch 1.4.0 (2026-10-01, Debian 13)
 
-NOT a release; the README describes 1.8.6. On Debian 13 hosts, same protocol:
-rare 0.71 vs 0.84, mid 0.85 vs 1.07, common k10 11.37 vs 11.40, common k100 14.67 vs
-**13.87**, count 0.18 vs seqscan, AND 1.57 vs 25.0, OR2 1.54 vs 24.9, prefix 6.36 vs 10.5,
-phrase 146-185 vs **42.9** ms; rare tps at 16/64 clients 11,895/8,278 vs 8,115/8,209,
-common tps 562 vs **650**. `bench/RESULTS_AC_PGTS_2026-10-01.md`.
+`bench/RESULTS_190_2026-10-01.md`. ms: rare **0.67** vs 0.84, mid **0.79** vs 1.07, common
+k10 **7.19** vs 11.40, common k100 **7.37** vs 13.87, count **0.19** vs seqscan, AND **1.51**
+vs 25.0, OR2 **1.46** vs 24.9, OR3 **2.79** vs 32.2, prefix **6.21** vs 10.5, phrase 138 vs
+**42.9**. tps at 16 clients: rare **12,412** vs 8,115, common **968** vs 650, count 45,694.
+Rare-term tps falls to 8,590 at 64 clients (pg_textsearch 8,209): known issue.
 
-### 2a. Current: pg_fts 1.8.6 vs pg_textsearch 1.4.0 (2026-09-30)
+### 2a. Historical: pg_fts 1.8.6 vs pg_textsearch 1.4.0 (2026-09-30)
 
 Same rig, corpus (md5-identical TSV on every host) and 8-run protocol, plus 3 independent
 passes per band. Both engines use `ORDER BY` query forms. `bench/RESULTS_PGTS_2026-09-30.md`.
