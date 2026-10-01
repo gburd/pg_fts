@@ -47,6 +47,8 @@
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
+#include "catalog/pg_proc.h"
+#include "catalog/pg_language.h"
 
 #include "pg_fts.h"
 #include "pg_fts_am.h"			/* bm25_init_reloptions */
@@ -100,6 +102,98 @@ fts_limit_const(Node *n, int64 *v)
 	return true;
 }
 
+/*
+ * The OID of pg_fts's own fts_current_distance(), resolved in the same schema
+ * as the ftsquery type, and only if its C symbol is the one in this module
+ * (pg_proc.prosrc = 'fts_current_distance', language C).  InvalidOid if the
+ * installed SQL predates it -- score reuse is then simply off.
+ */
+static Oid
+fts_lookup_current_distance_fn(void)
+{
+	Oid			typoid = TypenameGetTypid("ftsquery");
+	Oid			nsp;
+	Oid			fn;
+	HeapTuple	tup;
+	bool		ok = false;
+
+	if (!OidIsValid(typoid))
+		return InvalidOid;
+	tup = SearchSysCache1(TYPEOID, ObjectIdGetDatum(typoid));
+	if (!HeapTupleIsValid(tup))
+		return InvalidOid;
+	nsp = ((Form_pg_type) GETSTRUCT(tup))->typnamespace;
+	ReleaseSysCache(tup);
+	fn = GetSysCacheOid3(PROCNAMEARGSNSP, Anum_pg_proc_oid,
+						 CStringGetDatum("fts_current_distance"),
+						 PointerGetDatum(buildoidvector(NULL, 0)),
+						 ObjectIdGetDatum(nsp));
+	if (!OidIsValid(fn))
+		return InvalidOid;
+	tup = SearchSysCache1(PROCOID, ObjectIdGetDatum(fn));
+	if (HeapTupleIsValid(tup))
+	{
+		Form_pg_proc p = (Form_pg_proc) GETSTRUCT(tup);
+		bool		isnull;
+		Datum		src = SysCacheGetAttr(PROCOID, tup, Anum_pg_proc_prosrc, &isnull);
+
+		ok = (p->prolang == ClanguageId && p->prorettype == FLOAT8OID && !isnull &&
+			  strcmp(TextDatumGetCString(src), "fts_current_distance") == 0);
+		ReleaseSysCache(tup);
+	}
+	return ok ? fn : InvalidOid;
+}
+
+static bool
+fts_is_bm25_indexscan(IndexScan *scan)
+{
+	Relation	irel;
+	bool		isfts;
+
+	irel = index_open(scan->indexid, NoLock);
+	isfts = (irel->rd_indam != NULL && irel->rd_indam->amgettuple == bm25_gettuple);
+	index_close(irel, NoLock);
+	return isfts;
+}
+
+/*
+ * Score reuse (1.9.0).  An ORDER BY <=> ordering scan computes each row's exact
+ * distance from the index, but the planner also places the same `d <=> q`
+ * expression in the scan's target list (it feeds the sort key / Limit), so the
+ * executor RE-EVALUATED fts_distance per returned row: a heap detoast of the
+ * whole ftsdoc plus a fresh BM25.  That was 28% of a rare-term ranked query
+ * (perf, 2026-10-01).  Replace each target-list entry that is equal() to the
+ * scan's own indexorderbyorig with fts_current_distance(), which returns the
+ * distance bm25_gettuple stored for the current tuple.
+ *
+ * Exactness: only RESJUNK entries are replaced -- the copy the planner carries
+ * purely as the sort key, never shown to the user.  A visible `d <=> q` keeps
+ * fts_distance() (its N=1/avgdl=|D| neutral score), so no user-visible value
+ * changes with the plan.  equal() to indexorderbyorig means it is the SAME
+ * expression the index is ordering by, and bm25_gettuple sets
+ * xs_recheckorderby = false, so the substituted value is the very Datum the
+ * scan ordered on.  Only bm25 index scans are touched.
+ */
+static void
+fts_reuse_distance(IndexScan *scan, Oid distfn)
+{
+	ListCell   *lc;
+	Node	   *orig;
+
+	if (list_length(scan->indexorderbyorig) != 1)
+		return;
+	orig = (Node *) linitial(scan->indexorderbyorig);
+	foreach(lc, scan->scan.plan.targetlist)
+	{
+		TargetEntry *tle = (TargetEntry *) lfirst(lc);
+
+		if (tle->resjunk && equal(tle->expr, orig))
+			tle->expr = (Expr *) makeFuncExpr(distfn, FLOAT8OID, NIL,
+											  InvalidOid, InvalidOid,
+											  COERCE_EXPLICIT_CALL);
+	}
+}
+
 static void
 fts_hint_indexscan(IndexScan *scan, Limit *limit, Oid ftsqueryoid)
 {
@@ -111,8 +205,6 @@ fts_hint_indexscan(IndexScan *scan, Limit *limit, Oid ftsqueryoid)
 	Const	   *orig,
 			   *repl;
 	FtsQuery	q;
-	Relation	irel;
-	bool		isfts;
 
 	if (list_length(scan->indexorderby) != 1)
 		return;
@@ -135,13 +227,6 @@ fts_hint_indexscan(IndexScan *scan, Limit *limit, Oid ftsqueryoid)
 	if (orig->constisnull || orig->consttype != ftsqueryoid)
 		return;
 
-	/* only our AM interprets the hint */
-	irel = index_open(scan->indexid, NoLock);
-	isfts = (irel->rd_indam != NULL && irel->rd_indam->amgettuple == bm25_gettuple);
-	index_close(irel, NoLock);
-	if (!isfts)
-		return;
-
 	q = (FtsQuery) DatumGetPointer(datumCopy(
 		PointerGetDatum(PG_DETOAST_DATUM(orig->constvalue)), false, -1));
 	q->flags = (uint16) k;
@@ -152,32 +237,36 @@ fts_hint_indexscan(IndexScan *scan, Limit *limit, Oid ftsqueryoid)
 }
 
 static void
-fts_hint_walk(Plan *plan, Oid ftsqueryoid)
+fts_hint_walk(Plan *plan, Oid ftsqueryoid, Oid distfn)
 {
 	ListCell   *lc;
 
 	if (plan == NULL)
 		return;
-	if (IsA(plan, Limit) && plan->lefttree != NULL && IsA(plan->lefttree, IndexScan))
+	if (IsA(plan, IndexScan) && ((IndexScan *) plan)->indexorderbyorig != NIL &&
+		fts_is_bm25_indexscan((IndexScan *) plan) && OidIsValid(distfn))
+		fts_reuse_distance((IndexScan *) plan, distfn);
+	if (IsA(plan, Limit) && plan->lefttree != NULL && IsA(plan->lefttree, IndexScan) &&
+		fts_is_bm25_indexscan((IndexScan *) plan->lefttree))
 		fts_hint_indexscan((IndexScan *) plan->lefttree, (Limit *) plan, ftsqueryoid);
-	fts_hint_walk(plan->lefttree, ftsqueryoid);
-	fts_hint_walk(plan->righttree, ftsqueryoid);
+	fts_hint_walk(plan->lefttree, ftsqueryoid, distfn);
+	fts_hint_walk(plan->righttree, ftsqueryoid, distfn);
 	switch (nodeTag(plan))
 	{
 		case T_Append:
 			foreach(lc, ((Append *) plan)->appendplans)
-				fts_hint_walk(lfirst(lc), ftsqueryoid);
+				fts_hint_walk(lfirst(lc), ftsqueryoid, distfn);
 			break;
 		case T_MergeAppend:
 			foreach(lc, ((MergeAppend *) plan)->mergeplans)
-				fts_hint_walk(lfirst(lc), ftsqueryoid);
+				fts_hint_walk(lfirst(lc), ftsqueryoid, distfn);
 			break;
 		case T_SubqueryScan:
-			fts_hint_walk(((SubqueryScan *) plan)->subplan, ftsqueryoid);
+			fts_hint_walk(((SubqueryScan *) plan)->subplan, ftsqueryoid, distfn);
 			break;
 		case T_CustomScan:
 			foreach(lc, ((CustomScan *) plan)->custom_plans)
-				fts_hint_walk(lfirst(lc), ftsqueryoid);
+				fts_hint_walk(lfirst(lc), ftsqueryoid, distfn);
 			break;
 		default:
 			break;
@@ -200,10 +289,31 @@ fts_planner(Query *parse, const char *query_string, int cursorOptions,
 	ftsqueryoid = TypenameGetTypid("ftsquery");
 	if (!OidIsValid(ftsqueryoid))
 		return stmt;
-	fts_hint_walk(stmt->planTree, ftsqueryoid);
-	foreach(lc, stmt->subplans)
-		fts_hint_walk((Plan *) lfirst(lc), ftsqueryoid);
+	{
+		/* fts_current_distance() exists from 1.9.0's SQL; on an older installed
+		 * extension version it is absent and score reuse is simply skipped */
+		Oid			distfn = fts_lookup_current_distance_fn();
+
+		fts_hint_walk(stmt->planTree, ftsqueryoid, distfn);
+		foreach(lc, stmt->subplans)
+			fts_hint_walk((Plan *) lfirst(lc), ftsqueryoid, distfn);
+	}
 	return stmt;
+}
+
+/*
+ * fts_current_distance() -> float8: the exact <=> distance the bm25 ordering scan
+ * stored for the tuple it most recently returned in this backend.  Only ever
+ * placed in a plan by fts_reuse_distance(), directly in the target list of the
+ * bm25 IndexScan that sets it, so it is read for the same tuple it was set for.
+ * Not meant to be called by users (it is not exposed with a useful meaning
+ * outside that position).
+ */
+PG_FUNCTION_INFO_V1(fts_current_distance);
+Datum
+fts_current_distance(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_FLOAT8(fts_current_distance_value);
 }
 
 /* ===== count-pushdown CustomScan: path/plan/exec ===== */

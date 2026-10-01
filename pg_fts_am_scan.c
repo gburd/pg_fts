@@ -133,6 +133,10 @@ typedef struct BM25ScanOpaqueData
 
 typedef BM25ScanOpaqueData *BM25ScanOpaque;
 
+/* last <=> distance returned by an ordering scan in this backend (see
+ * fts_reuse_distance in pg_fts_customscan.c) */
+double		fts_current_distance_value = 0.0;
+
 /*
  * Inlined TID sort for tidset_sort_uniq (every collect path funnels through it).
  * qsort + a function-pointer ItemPointerCompare was 75% of a ranked prefix
@@ -1555,6 +1559,9 @@ bm25_gettuple(IndexScanDesc scan, ScanDirection dir)
 		dist.value = so->ordered[so->ordpos].score;
 		dist.isnull = false;
 		index_store_float8_orderby_distances(scan, &typ, &dist, false);
+		/* the planner may have replaced the target-list copy of this same
+		 * <=> expression with fts_current_distance(); see pg_fts_customscan.c */
+		fts_current_distance_value = dist.value;
 	}
 	so->ordpos++;
 	return true;
@@ -3237,6 +3244,21 @@ wand_skip_blocks(WandCursor *c, uint64 target)
 				break;
 			}
 			nextp = (char *) MAXALIGN((char *) (bh + 1) + bh->bytelen + bh->posbytelen);
+			/*
+			 * The term's LAST block is never prove-skipped: posting chains of
+			 * consecutive terms share pages, so the header after this term's
+			 * last block belongs to the NEXT term and its first_docid says
+			 * nothing about this one.  Reading it as "our next block" skipped a
+			 * whole live block whenever the next term started at a lower docid
+			 * -- the final postings of the term were never scored.  Stop and
+			 * let the caller decode it (the same rule wand_load_block uses to
+			 * end the chain: nread + count reaching df).  See CHANGELOG 1.9.0.
+			 */
+			if (c->nread + (int) bh->count >= (int) c->df)
+			{
+				stopped = true;
+				break;
+			}
 			/* can we prove this whole block is < target? need the next block's
 			 * first_docid (on this page) to be <= target. */
 			if (nextp + sizeof(BM25BlockHdr) <= pend)
