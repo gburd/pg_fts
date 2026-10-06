@@ -162,6 +162,8 @@ bm25_index_idf(double N, double df)
  * least this many postings is scored exhaustively (fts_search_dense1) instead of
  * via WAND.  0 disables.  Registered in pg_fts_customscan.c. */
 int			pg_fts_dense_score_min_df = 32768;
+bool		pg_fts_lazy_phrase = true;
+static bool lazy_phrase_suppressed = false;	/* set during the collect-path redo */
 
 /*
  * Inlined TID sort for tidset_sort_uniq (every collect path funnels through it).
@@ -2974,6 +2976,21 @@ typedef struct WandCursor
 	 */
 	uint64		docid_lo;
 	uint64		docid_hi;
+
+	/*
+	 * Lazy phrase gate (1.9.1): a copy of the current block's positions
+	 * column (posbytelen bytes, taken with blkbuf).  posoff[i] is the start of
+	 * posting i's run in it (prefix sum of tf), built on demand the first time
+	 * a doc of this block reaches the gate; posdecoded says posoff is valid
+	 * for the CURRENT block.  want_pos is set only on the gated path.
+	 */
+	bool		want_pos;
+	unsigned char *posbuf;
+	uint32		posbytelen;
+	bool		posdecoded;
+	int		   *posoff;			/* BM25_BLOCK_SIZE + 1 entries, palloc'd only when
+								 * want_pos: WAND swaps whole cursors while sorting,
+								 * so the struct must stay small */
 }			WandCursor;
 
 static inline void wand_skip_own_tombstoned(WandCursor *c);
@@ -3015,6 +3032,13 @@ wand_load_block(WandCursor *c)
 		pfree(c->blkbuf);
 		c->blkbuf = NULL;
 	}
+	if (c->posbuf)
+	{
+		pfree(c->posbuf);
+		c->posbuf = NULL;
+	}
+	c->posbytelen = 0;
+	c->posdecoded = false;
 	if (c->curblk == InvalidBlockNumber || c->nread >= (int) c->df)
 	{
 		c->blkcount = 0;
@@ -3088,6 +3112,15 @@ wand_load_block(WandCursor *c)
 	/* copy the block's FOR payload so tf/dl bytes stay valid after we unlock */
 	c->blkbuf = (unsigned char *) palloc(bh->bytelen);
 	memcpy(c->blkbuf, stream, bh->bytelen);
+	/* lazy phrase gate: keep this block's positions column (decoded only if a
+	 * doc of this block reaches the gate).  posbytelen == 0 means the block
+	 * carries no positions; the gate then reports "unknown" (see phrase_gate) */
+	if (c->want_pos && bh->posbytelen > 0)
+	{
+		c->posbuf = (unsigned char *) palloc(bh->posbytelen);
+		memcpy(c->posbuf, stream + bh->bytelen, bh->posbytelen);
+		c->posbytelen = bh->posbytelen;
+	}
 
 	/* eagerly decode ONLY docids (gaps); record tf/dl column offsets for lazy
 	 * per-posting access -- pruned blocks never touch tf/dl */
@@ -3517,13 +3550,19 @@ fts_query_is_pure_boolean(FtsQuery q)
  * pass.  `q` is pure boolean, so the stack machine mirrors fts_doc_matches's
  * boolean cases (no phrase, no prefix/fuzzy/regex leaves).
  */
+typedef struct PhraseGate PhraseGate;
+
 typedef struct BoolGate
 {
-	FtsQuery	q;				/* pure-boolean query (NULL => no gate) */
+	FtsQuery	q;				/* pure-boolean query (NULL => no RPN gate) */
 	bool	   *present;			/* present[termidx], nterms entries */
 	bool	   *stack;			/* scratch RPN stack, nitems entries */
 	int			nterms;
+	PhraseGate *phrase;			/* lazy phrase gate (q == NULL then), or NULL */
 }			BoolGate;
+
+static bool phrase_gate_admits(PhraseGate *g, WandCursor *cursors, int nterms,
+							   uint64 pivot_docid);
 
 /*
  * Evaluate the pure-boolean query's RPN over the current present[] flags.
@@ -3575,7 +3614,11 @@ bmw_gate_admits(BoolGate *g, WandCursor *cursors, int nterms, uint64 pivot_docid
 {
 	int			i;
 
-	if (g == NULL || g->q == NULL)
+	if (g == NULL)
+		return true;
+	if (g->phrase != NULL)
+		return phrase_gate_admits(g->phrase, cursors, nterms, pivot_docid);
+	if (g->q == NULL)
 		return true;
 	for (i = 0; i < g->nterms; i++)
 		g->present[i] = false;
@@ -3583,6 +3626,177 @@ bmw_gate_admits(BoolGate *g, WandCursor *cursors, int nterms, uint64 pivot_docid
 		if (cursors[i].docid == pivot_docid)
 			g->present[cursors[i].termidx] = true;
 	return bool_gate_admits(g);
+}
+
+/*
+ * Lazy phrase gate (1.9.1).  For a ranked pure phrase chain over a positions=on
+ * index, WAND ranks the bag of words and this gate decides heap admission by
+ * checking adjacency for the ONE pivot doc, from the positions column of the
+ * block each phrase-term cursor is already sitting on -- instead of building
+ * the full phrase match set before ranking (bm25_collect_matches), which was
+ * ~60% of a ranked phrase query.  Same predicate as bm25_phrase_eval_seg (all
+ * terms present, then fts_phrase_step_pos chained over the step distances),
+ * so the admitted set -- and therefore the top-k -- is identical.
+ */
+struct PhraseGate
+{
+	int			npt;			/* phrase terms, in phrase order */
+	int			term[FTS_QUERY_MAX_PHRASE_TERMS];	/* fts_query_terms ordinal of each */
+	uint32		step[FTS_QUERY_MAX_PHRASE_TERMS];	/* distance joining term i to i+1 */
+	uint32	   *acc;			/* scratch, BM25_PHRASE_POSBUF each */
+	uint32	   *tmp;
+	uint32	   *right;
+	bool		unknown;		/* a block lacked positions: answer not knowable here */
+};
+
+/*
+ * Make c->posoff valid for the current block: posoff[i] = Sum(tf[0..i-1]), the
+ * start of posting i's run in the positions column.  Done once per block, and
+ * only for a block whose doc reaches the gate.  Returns false if the block has
+ * no positions or its column disagrees with the tf column (the same exact-
+ * length check bm25_decode_term applies); the caller then reports "unknown".
+ */
+static bool
+wand_block_pos_index(WandCursor *c)
+{
+	uint64		tfs[BM25_BLOCK_SIZE];
+	Size		sumtf = 0;
+	Size		need;
+	unsigned int pw;
+	int			i;
+
+	if (c->posdecoded)
+		return true;
+	if (c->posbuf == NULL || c->posbytelen == 0 || c->blkcount <= 0)
+		return false;
+	bm25_for_unpack(c->blkbuf + c->tfoff, c->blkcount, tfs);
+	for (i = 0; i < c->blkcount; i++)
+	{
+		c->posoff[i] = (int) sumtf;
+		if (tfs[i] > (uint64) INT_MAX || sumtf + (Size) tfs[i] > (Size) INT_MAX)
+			return false;		/* corrupt tf column: bounded before it can wrap */
+		sumtf += (Size) tfs[i];
+	}
+	c->posoff[c->blkcount] = (int) sumtf;
+	pw = c->posbuf[0];
+	need = (pw == 0) ? 1 : (Size) 1 + ((sumtf * pw + 7) / 8);
+	/* every value read below lies inside [1, need): bm25_for_get touches only
+	 * the bytes covering its bits for a width <= 64 */
+	if (pw > 64 || need > (Size) c->posbytelen)
+		return false;
+	c->posdecoded = true;
+	return true;
+}
+
+/* Decode the current posting's positions (its slice of the block's column,
+ * un-delta'd) into out[]; returns the count, or -1 if it exceeds cap. */
+static int
+wand_cur_positions(WandCursor *c, uint32 *out, int cap)
+{
+	int			lo = c->posoff[c->cur];
+	int			n = c->posoff[c->cur + 1] - lo;
+	uint32		run = 0;
+	int			t;
+
+	if (n > cap)
+		return -1;
+	for (t = 0; t < n; t++)
+	{
+		run += (uint32) bm25_for_get(c->posbuf, lo + t);	/* delta resets per posting */
+		out[t] = run;
+	}
+	return n;
+}
+
+/*
+ * Adjacency for one segment's cursors pc[0..npt-1], all sitting on the same
+ * docid.  Exactly bm25_phrase_eval_seg's per-doc test.  Sets g->unknown when
+ * a block lacks positions or a posting exceeds BM25_PHRASE_POSBUF (the cases
+ * that make the collect path fall back too).
+ */
+static bool
+phrase_gate_adjacent(PhraseGate *g, WandCursor **pc)
+{
+	int			t,
+				nacc;
+
+	for (t = 0; t < g->npt; t++)
+		if (!wand_block_pos_index(pc[t]))
+		{
+			g->unknown = true;
+			return false;
+		}
+	nacc = wand_cur_positions(pc[0], g->acc, BM25_PHRASE_POSBUF);
+	for (t = 1; t < g->npt && nacc > 0; t++)
+	{
+		int			nt = wand_cur_positions(pc[t], g->right, BM25_PHRASE_POSBUF);
+		int			nout = 0;
+
+		if (nt < 0)
+		{
+			nacc = -1;
+			break;
+		}
+		fts_phrase_step_pos(g->acc, nacc, g->right, nt, g->step[t - 1], g->tmp, &nout);
+		memcpy(g->acc, g->tmp, nout * sizeof(uint32));
+		nacc = nout;
+	}
+	if (nacc < 0)
+	{
+		g->unknown = true;		/* a posting beyond BM25_PHRASE_POSBUF: the collect
+								 * path bails to recheck there too */
+		return false;
+	}
+	return nacc > 0;
+}
+
+/*
+ * Admit pivot_docid iff, in some segment, every phrase term has a cursor on it
+ * and the positions are adjacent -- the union over segments that
+ * bm25_collect_matches builds.  (A live docid has postings in one segment
+ * only, so the segment match is defence in depth -- the phrase_gate test
+ * cannot tell it apart from matching any segment; looping over term 0's
+ * cursors keeps this exact without relying on that.)
+ * Once g->unknown is set the result is discarded and recomputed on the
+ * collect path, so admit nothing further.
+ */
+static bool
+phrase_gate_admits(PhraseGate *g, WandCursor *cursors, int nterms, uint64 pivot_docid)
+{
+	WandCursor *pc[FTS_QUERY_MAX_PHRASE_TERMS];
+	int			i0;
+
+	if (g->unknown)
+		return false;
+	for (i0 = 0; i0 < nterms; i0++)
+	{
+		int			t;
+		bool		all = true;
+
+		if (cursors[i0].termidx != g->term[0] || cursors[i0].docid != pivot_docid)
+			continue;
+		pc[0] = &cursors[i0];
+		for (t = 1; t < g->npt && all; t++)
+		{
+			int			i;
+
+			pc[t] = NULL;
+			for (i = 0; i < nterms; i++)
+				if (cursors[i].termidx == g->term[t] &&
+					cursors[i].segidx == pc[0]->segidx &&
+					cursors[i].docid == pivot_docid)
+				{
+					pc[t] = &cursors[i];
+					break;
+				}
+			all = (pc[t] != NULL);
+		}
+		if (all && phrase_gate_adjacent(g, pc))
+			return true;
+		if (g->unknown)
+			return false;
+	}
+	return false;
 }
 
 /*
@@ -3756,7 +3970,11 @@ fts_search_bmw(WandCursor *cursors, int nterms, int k, const DocidFilter *filter
 			 * threshold; the traversal and its block-skip math are unchanged
 			 * (the threshold may just stay lower longer, costing pruning only,
 			 * never correctness). */
-			if (docid_admitted(filter, pivot_docid) &&
+			/* a doc that cannot enter a full heap (score <= threshold: the
+			 * replace branch below needs score > threshold) never needs the
+			 * gate -- for the lazy phrase gate that skips a positions decode */
+			if ((nheap < k || score > threshold) &&
+				docid_admitted(filter, pivot_docid) &&
 				bmw_gate_admits(gate, cursors, nterms, pivot_docid))
 			{
 			if (nheap < k)
@@ -3813,6 +4031,13 @@ fts_search_bmw(WandCursor *cursors, int nterms, int k, const DocidFilter *filter
 	{
 		if (cursors[t].blkbuf)
 			pfree(cursors[t].blkbuf);
+		if (cursors[t].posbuf)
+			pfree(cursors[t].posbuf);
+		if (cursors[t].posoff)
+			pfree(cursors[t].posoff);
+		cursors[t].blkbuf = NULL;
+		cursors[t].posbuf = NULL;
+		cursors[t].posoff = NULL;
 		bm25_doclen_cursor_free(&cursors[t].doclenc);
 	}
 
@@ -3916,7 +4141,8 @@ fts_search_maxscore(WandCursor *cursors, int nterms, int k,
 			 * and never raises the threshold.  The essential/non-essential
 			 * traversal (incl. the non-essential seeks above) is unchanged --
 			 * only heap insertion is gated. */
-			if (docid_admitted(filter, cand) &&
+			if ((nheap < k || score > threshold) &&
+				docid_admitted(filter, cand) &&
 				bmw_gate_admits(gate, cursors, nterms, cand))
 			{
 			if (nheap < k)
@@ -3964,6 +4190,13 @@ fts_search_maxscore(WandCursor *cursors, int nterms, int k,
 	{
 		if (cursors[t].blkbuf)
 			pfree(cursors[t].blkbuf);
+		if (cursors[t].posbuf)
+			pfree(cursors[t].posbuf);
+		if (cursors[t].posoff)
+			pfree(cursors[t].posoff);
+		cursors[t].blkbuf = NULL;
+		cursors[t].posbuf = NULL;
+		cursors[t].posoff = NULL;
 		bm25_doclen_cursor_free(&cursors[t].doclenc);
 	}
 
@@ -4182,6 +4415,39 @@ bm25_query_maxhits(Relation index, FtsQuery q, double N)
  * pending docs would require per-doc scoring outside the WAND cursors; deferred
  * intentionally, since pending is transient and bounded.
  */
+/*
+ * Can the ranked scan use the lazy phrase gate for q?  The SAME conditions
+ * under which bm25_collect_matches takes its exact positional fast path: a
+ * positions=on index and a pure phrase chain (VAL/PHRASE only, plain terms,
+ * canonical left-deep).  Fills g's term ordinals (fts_query_terms numbering:
+ * the k-th VAL item) and step distances.
+ */
+static bool
+bm25_lazy_phrase_ok(Relation index, FtsQuery q, PhraseGate *g)
+{
+	int			itemidx[FTS_QUERY_MAX_PHRASE_TERMS];
+	int			t;
+
+	memset(g, 0, sizeof(*g));
+	if (!bm25_index_wants_positions(index) ||
+		!bm25_phrase_chain(q, itemidx, g->step, &g->npt))
+		return false;
+	for (t = 0; t < g->npt; t++)
+	{
+		int			vi = 0;
+		uint32		i;
+
+		/* item index -> ordinal among VAL items (= WandCursor.termidx) */
+		for (i = 0; i < (uint32) itemidx[t]; i++)
+			if (q->items[i].type == FTS_QI_VAL)
+				vi++;
+		if (q->items[itemidx[t]].flags & FTS_QF_WEIGHTED)
+			return false;		/* label filter needs the heap recheck */
+		g->term[t] = vi;
+	}
+	return true;
+}
+
 static int
 bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 						   uint64 docid_lo, uint64 docid_hi, ScoredTid **out)
@@ -4206,6 +4472,8 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 	uint64	   *filter_docids = NULL;
 	BoolGate	gate;
 	BoolGate   *gatep = NULL;
+	PhraseGate	phrase;
+	PhraseGate *pgate = NULL;
 	int			ncand;
 	int			t,
 				nactive = 0;
@@ -4249,6 +4517,20 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 	if (!fts_query_is_pure_or(q) && fts_query_is_pure_boolean(q))
 	{
 		/* lazy path: gate built after cursors so nterms is known */
+		gatep = &gate;
+	}
+	else if (pg_fts_lazy_phrase && !lazy_phrase_suppressed &&
+			 bm25_lazy_phrase_ok(index, q, &phrase))
+	{
+		/*
+		 * Pure phrase chain over a positions=on index: the LAZY phrase gate
+		 * (1.9.1).  Same predicate bm25_collect_matches' positional fast path
+		 * computes, evaluated per pivot from the cursors' own blocks instead
+		 * of materializing every match first.  If a block turns out to lack
+		 * positions the gate reports unknown and we redo the query below on
+		 * the collect path.
+		 */
+		pgate = &phrase;
 		gatep = &gate;
 	}
 	else if (!fts_query_is_pure_or(q))
@@ -4356,6 +4638,13 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 			cursors[nactive].df = df;
 			cursors[nactive].termidx = t;
 			cursors[nactive].blkbuf = NULL;
+			cursors[nactive].want_pos = (pgate != NULL);
+			cursors[nactive].posbuf = NULL;
+			cursors[nactive].posbytelen = 0;
+			cursors[nactive].posdecoded = false;
+			cursors[nactive].posoff = (pgate != NULL)
+				? (int *) palloc((BM25_BLOCK_SIZE + 1) * sizeof(int))
+				: NULL;
 			cursors[nactive].blkcount = 0;
 			cursors[nactive].cur = 0;
 			cursors[nactive].docid = 0;
@@ -4387,10 +4676,36 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 	/* build the lazy BoolGate now that nterms is known (pure-boolean path) */
 	if (gatep != NULL)
 	{
-		gate.q = q;
+		gate.q = (pgate != NULL) ? NULL : q;
 		gate.nterms = nterms;
 		gate.present = (bool *) palloc0(Max(nterms, 1) * sizeof(bool));	/* alloc-ok: nterms = query term count */
 		gate.stack = (bool *) palloc(Max(q->nitems, 1) * sizeof(bool));
+		gate.phrase = pgate;
+	}
+	if (pgate != NULL)
+	{
+		/* a phrase term absent from every segment: no doc can match (the
+		 * collect path returns its empty set here too) */
+		int			pt;
+
+		for (pt = 0; pt < pgate->npt; pt++)
+		{
+			int			i;
+
+			for (i = 0; i < nactive; i++)
+				if (cursors[i].termidx == pgate->term[pt])
+					break;
+			if (i == nactive)
+			{
+				bm25_tombstones_free(&tombs);
+				*out = NULL;
+				return 0;
+			}
+		}
+		pgate->acc = (uint32 *) palloc(BM25_PHRASE_POSBUF * sizeof(uint32));
+		pgate->tmp = (uint32 *) palloc(BM25_PHRASE_POSBUF * sizeof(uint32));
+		pgate->right = (uint32 *) palloc(BM25_PHRASE_POSBUF * sizeof(uint32));
+		pgate->unknown = false;
 	}
 
 	ncand = fts_search_wand(cursors, nactive, wantk, filterp, gatep, &cand);
@@ -4401,6 +4716,38 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 	{
 		pfree(gate.present);
 		pfree(gate.stack);
+	}
+	if (pgate != NULL)
+	{
+		bool		unknown = pgate->unknown;
+
+		pfree(pgate->acc);
+		pfree(pgate->tmp);
+		pfree(pgate->right);
+		if (unknown)
+		{
+			/*
+			 * Some block on the path had no positions column (the page-
+			 * overflow case bm25_lookup_term_pos reports as NOPOS), so the
+			 * gate could not decide every pivot.  Discard this result and
+			 * recompute on the exact collect path; it is the same answer the
+			 * pre-1.9.1 code gave for every phrase.
+			 */
+			if (cand)
+				pfree(cand);
+			pfree(cursors);
+			lazy_phrase_suppressed = true;
+			PG_TRY();
+			{
+				ncand = bm25_topk_candidates_range(index, q, wantk, docid_lo,
+												   docid_hi, &cand);
+			}
+			PG_FINALLY();
+			{
+				lazy_phrase_suppressed = false;
+			}
+			PG_END_TRY();
+		}
 	}
 
 	*out = cand;

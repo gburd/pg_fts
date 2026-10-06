@@ -687,6 +687,13 @@ _PG_init(void)
 							32768, 0, INT_MAX,
 							PGC_USERSET, 0, NULL, NULL, NULL);
 
+	DefineCustomBoolVariable("pg_fts.lazy_phrase",
+							 "Ranked phrase queries on a positions=on index check adjacency per candidate instead of building the full phrase match set first.",
+							 "Results are identical; off restores the pre-1.9.1 collect-then-rank path.",
+							 &pg_fts_lazy_phrase,
+							 true,
+							 PGC_USERSET, 0, NULL, NULL, NULL);
+
 	DefineCustomIntVariable("pg_fts.doclen_cache_mb",
 							"Per-backend memory budget (MB) for the resident slot-indexed document-length arrays used by ranked scans; 0 disables.",
 							"Each backend decodes an index's doclen sidecar once per segment-directory generation into a dense array (about 2.6 bytes per document) so scoring reads a document's length with two array reads. A segment that does not fit keeps the page-directory lookup.",
