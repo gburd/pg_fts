@@ -2468,10 +2468,12 @@ int			pg_fts_doclen_cache_mb = 64;
  * does not fit simply keeps the cursor path.  Everything ends up in ONE chunk
  * (rd_amcache's contract), never above MaxAllocSize.  No on-disk change.
  *
- * ponytail: the rebuild is a full sidecar decode (~tens of ms on 2.19M docs) paid
- * by the first ranked scan in each backend after ANY directory-generation bump
- * (flush/merge/vacuum).  Fine for read-mostly; under constant small flushes, an
- * incremental rebuild (reuse unchanged segments' arrays) is the upgrade path.
+ * Cost and limits: the build is a full sidecar decode (28 ms on 2.19M docs), paid
+ * by the first ranked scan in EACH backend after any directory-generation bump
+ * (flush/merge/vacuum), and every backend holds its own copy.  The copies are
+ * what makes rare-term throughput fall with the number of concurrent backends
+ * (CHANGELOG 1.9.1, Known issues; ROADMAP I6).  One shared copy per server
+ * removes both costs; the design and its constraints are in ROADMAP I6.
  */
 static BM25DoclenDirCache *
 bm25_doclendir_add_slots(Relation index, BM25DoclenDirCache *dc)
