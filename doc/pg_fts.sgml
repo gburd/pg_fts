@@ -854,7 +854,7 @@ SELECT * FROM messages
   <title>Ranked-query tuning parameters</title>
 
   <para>
-   Both settings change only how fast a ranked query runs, never which rows it
+   These settings change only how fast a ranked query runs, never which rows it
    returns or in what order.
   </para>
 
@@ -869,7 +869,10 @@ SELECT * FROM messages
       length is read with two array lookups instead of a page decode.  A
       segment that does not fit keeps the page-based lookup.  <literal>0</literal>
       disables it.  Note that every backend holds its own copy; with many
-      concurrent backends this adds up.
+      concurrent backends this adds up, and the copies competing for CPU cache
+      are why a rare-term ranked query's throughput falls as the number of
+      concurrent backends grows (1.9.1 measured 12.7k transactions per second at
+      16 clients and 8.8k at 64 on 2.19M documents).
      </para>
     </listitem>
    </varlistentry>
@@ -882,6 +885,21 @@ SELECT * FROM messages
       and number at least this many is scored exhaustively instead of with
       block-max WAND, which prunes almost nothing for very common terms.
       <literal>0</literal> disables it.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><varname>pg_fts.lazy_phrase</varname> (<type>boolean</type>, default on)</term>
+    <listitem>
+     <para>
+      A ranked phrase or <literal>NEAR</literal> query on an index built
+      <literal>WITH (positions = on)</literal> checks each candidate's word
+      positions as it is ranked, instead of first collecting every document
+      that contains the phrase.  For a top-10 over a phrase with hundreds of
+      thousands of matches this is several times faster.  If a stored block has
+      no positions (a very long document), the query quietly reruns the
+      collect-first way.  <literal>off</literal> always collects first.
      </para>
     </listitem>
    </varlistentry>

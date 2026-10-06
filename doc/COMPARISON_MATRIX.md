@@ -90,23 +90,26 @@ on the raw text.
 | phrase (tuned) | 229 ms | — | **22.9** | — |
 
 **Caution: the pg_fts column above used `fts_search()`; the competitors used `ORDER BY`
-forms** (see the retraction in CHANGELOG 1.8.6). And pg_textsearch has since moved.
-Head-to-head on 2026-09-30, both engines using `ORDER BY` forms (pg_fts 1.8.6 vs
-pg_textsearch v1.4.0, same hardware and corpus):
+forms** (see the retraction in CHANGELOG 1.8.6). pg_fts and pg_textsearch have both moved
+since. Current head-to-head, 2026-10-06, both engines using `ORDER BY` forms, one engine
+per host, same hardware and corpus (`bench/RESULTS_191_2026-10-06.md`):
 
-| Measure | pg_fts 1.8.6 | pg_textsearch 1.4.0 |
+| Measure | pg_fts 1.9.1 | pg_textsearch 1.4.0 |
 |---|---|---|
-| rare / mid k10 | 10.21 / 15.99 ms | **0.92 / 1.17** |
-| common k10 / k100 | 49.16 / 50.14 | **11.41 / 13.75** |
-| AND / OR2 / OR3 k10 | **9.03 / 10.69 / 15.40** | 37.69 / 36.94 / 31.79 |
-| prefix / phrase k10 | 18.38 / 239 (`positions=on`) | **13.41 / 41.8** |
-| exact `count(*)` | **2.50 ms** | 251 s (seqscan) |
-| saturated tps, rare / common / count | 1,050 / 205 / **2,645** | **8,130 / 640** / -- |
-| index size | **1,421 MB** | 1,887 MB |
+| rare / mid k10 | **0.68 / 0.78 ms** | 0.85 / 1.07 |
+| common k10 / k100 | **7.0 / 7.2** | 11.5 / 13.9 |
+| AND / OR2 / OR3 k10 | **1.47 / 1.48 / 2.76** | 41.1 / 26.4 / 32.1 |
+| prefix / phrase k10 | **5.82 / 34.8** (`positions=on`) | 10.46 / 43.0 |
+| exact `count(*)` | **0.18 ms** | 251 s (seqscan) |
+| tps at 16 clients, rare / common | **12,696 / 944** | 8,142 / 646 |
+| tps at 64 clients, rare / common | **8,757-8,931 / 936** | 8,202 / 663 |
+| index size | **1,421 MB** | 1,978 MB |
 
-**Read:** pg_fts wins size, `count(*)` and multi-term boolean ranked. pg_textsearch 1.4.0
-now leads on every single-term ranked query (4-14x) and on prefix and phrase. Both trail
-pg_search on common-term ranked.
+**Read:** pg_fts 1.9.1 leads pg_textsearch 1.4.0 on every band measured, including phrase
+(since 1.9.1) and single-term ranking (since 1.9.0). Its rare-term throughput falls with
+client count while pg_textsearch's is flat; the lead at 64 clients is ~7-9%. pg_search was
+last measured in September against pg_fts 1.6 and led common-term ranking ~17x; it has
+not been re-measured since.
 
 ## Operational surface
 
@@ -141,16 +144,16 @@ need a Rust toolchain, and pg_search additionally needs OpenBLAS and pgvector.
 
 - **pg_fts** — you want one index that answers ranked BM25 *and* boolean, exact
   counts, phrase, prefix, fuzzy and regex, with PostgreSQL-consistent stemming, the
-  smallest on-disk footprint, and no preload/Rust requirement. Accept slower
-  single-term ranked queries (pg_textsearch 1.4.0 and pg_search are both faster).
+  smallest on-disk footprint, and no preload/Rust requirement. pg_search was faster on
+  common-term ranking when last measured (September, pg_fts 1.6).
 - **pg_search** — you want the fastest ranked latency across the board and can
   accept a Tantivy analyzer that does not stem (so results differ from
   `to_tsvector`), a 1.9× larger index, and a Rust build.
 - **vchord** — you want fast ranking and nothing else; it has no boolean or count
   support, and the largest index here.
-- **pg_textsearch** — you want the fastest single-term BM25 ranking on top of
-  PostgreSQL's own analyzer (1.4.0 leads pg_fts 4-14x there). Boolean/phrase/prefix
-  work as a filter over the ranked scan, and there is no index-backed count.
+- **pg_textsearch** — BM25 ranking on top of PostgreSQL's own analyzer, with flat
+  throughput as clients increase. Boolean/phrase/prefix work as a filter over the
+  ranked scan, and there is no index-backed count.
 - **tsvector/GIN** — already in PostgreSQL, mature tooling, but no BM25 and no
   index-native top-k.
 

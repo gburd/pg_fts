@@ -158,8 +158,9 @@ Features
     > candidate document. Measured on 2.19M Wikipedia articles
     > (`bench/NOTE_PHRASE_PROFILE_2026-09-06.md`): ranked top-10 for
     > `"united states"` costs **8,385 ms** with the default and **229 ms** with
-    > `positions = on` (**36x**); an exact phrase `count(*)` goes **7,170 ms ->
-    > 132 ms** (**54x**). The cost is a larger index -- 1421 MB -> 2626 MB
+    > `positions = on` (**36x**; 1.6-era figures, and **34.8 ms** with
+    > `positions = on` as of 1.9.1); an exact phrase `count(*)` goes **7,170 ms ->
+    > 132 ms** (**54x**). The cost is a larger index -- 1,421 MB -> 2,626 MB
     > (1.85x) on that corpus. If you issue phrase or NEAR queries at scale,
     > enable it at CREATE INDEX time.
     >
@@ -237,25 +238,26 @@ of the last 5, every row parity-checked against regex ground truth).  This parag
 is regenerated from that file whenever it changes -- if they ever disagree, the
 summary is right and this is stale.
 
-  * **Where pg_fts wins.**  Against pg_textsearch 1.4.0 (1.9.0, 2026-10-01, identical
-    query forms): every ranked band -- rare **0.67 ms vs 0.84**, mid 0.79 vs 1.07,
-    common `year` (df 734,896) **7.19 vs 11.40**, top-100 7.37 vs 13.87 -- and
-    boolean ranked AND/OR **11-17x**, prefix 1.7x.  Under load at 16 clients: rare
-    12,412 vs 8,115 tps, common 968 vs 650.  Exact `count(*)` is index-native:
-    **0.19 ms** on a common term; pg_textsearch answers it only by sequential scan
-    (251 s) and VectorChord-bm25 cannot answer it; vs pg_search (September) 2.20 vs
-    13.63 ms.  Smallest index of the five engines measured (**1,421 MB** vs
-    1,887-2,902 MB).  The full query language -- phrase, NEAR, prefix, fuzzy, regex,
-    field zones -- through one operator.  Exact top-k (no early termination),
-    MVCC-correct results, crash/replication/corruption tested.
-  * **Where pg_fts loses.**  Ranked phrase: 138 ms vs pg_textsearch's 42.9 (3.2x;
-    `positions=on`), because pg_fts materializes the whole phrase match set before
-    ranking.  Rare-term throughput falls from 12.4k to 8.6k tps between 16 and 64
-    clients, while pg_textsearch stays flat at ~8.2k (cause not yet identified; see
-    the CHANGELOG known issues).  Against pg_search (Tantivy, September, 1.6-era
-    numbers, not re-measured) the common-term gap was ~17x single-client and has not
-    been re-measured since 1.9.0.  Build time (272 s + `fts_vacuum`) trails pg_search
-    (127 s) and VectorChord (56 s).
+  * **Where pg_fts wins.**  Against pg_textsearch 1.4.0 (1.9.1, 2026-10-06, identical
+    query forms, same-day control): every ranked band -- rare **0.68 ms vs 0.85**, mid
+    0.78 vs 1.07, common `year` (df 734,896) **7.0 vs 11.5**, top-100 7.2 vs 13.9 --
+    ranked phrase **34.8 vs 43.0** (`positions=on`), boolean ranked AND/OR
+    **12-28x**, prefix 1.8x.  Under load at 16 clients: rare 12,696 vs 8,142 tps,
+    common 944 vs 646.  Exact `count(*)` is index-native: **0.18 ms** on a common
+    term; pg_textsearch answers it only by sequential scan (251 s) and
+    VectorChord-bm25 cannot answer it; vs pg_search (September) 2.20 vs 13.63 ms.
+    Smallest index of the five engines measured (**1,421 MB** vs 1,887-2,902 MB;
+    pg_textsearch 1,978 MB on 2026-10-06).
+    The full query language -- phrase, NEAR, prefix, fuzzy, regex, field zones --
+    through one operator.  Exact top-k (no early termination), MVCC-correct results,
+    crash/replication/corruption tested.
+  * **Where pg_fts loses.**  Rare-term throughput falls from 12.7k to 8.8-8.9k tps
+    between 16 and 64 clients, while pg_textsearch stays flat at ~8.2k.  The cause is
+    measured (each backend keeps a private copy of the document-length array; see the
+    CHANGELOG known issues); the fix is planned.  Against pg_search (Tantivy,
+    September, 1.6-era numbers, not re-measured) the common-term gap was ~17x
+    single-client and has not been re-measured since 1.9.0.  Build time (263 s +
+    `fts_vacuum`) trails pg_search (127 s) and VectorChord (56 s).
   * **A caveat on pg_search's speed.**  Tantivy does not stem: for `year` it
     returns 495,580 matches where the correct stemmed count is 734,896.  Part of
     its advantage is a smaller unit of work.

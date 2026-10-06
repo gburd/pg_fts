@@ -1,4 +1,4 @@
-# pg_fts benchmark summary — methodology and results (as of v1.9.0, 2026-10-01)
+# pg_fts benchmark summary — methodology and results (as of v1.9.1, 2026-10-06)
 
 Consolidated view of the current measurements. Every number here is traceable to a
 run recorded under `bench/`; nothing is estimated. Where a figure was previously
@@ -56,7 +56,16 @@ alone.
 
 ## 2. Comparative latency
 
-### 2a'. Current: pg_fts 1.9.0 vs pg_textsearch 1.4.0 (2026-10-01, Debian 13)
+### 2a''. Current: pg_fts 1.9.1 vs pg_textsearch 1.4.0 (2026-10-06, Debian 13, same-day control)
+
+`bench/RESULTS_191_2026-10-06.md`. ms: rare **0.68** vs 0.85, mid **0.78** vs 1.07, common
+k10 **7.0** vs 11.5, common k100 **7.2** vs 13.9, count **0.18** vs seqscan, AND **1.47**
+vs 41.1, OR2 **1.48** vs 26.4, OR3 **2.76** vs 32.1, prefix **5.82** vs 10.5, phrase
+(`positions=on`) **34.8** vs 43.0. tps at 16 clients: rare **12,696** vs 8,142, common
+**944** vs 646. Rare-term tps falls to 8,757-8,931 at 64 clients (pg_textsearch 8,202):
+known issue, cause measured (ROADMAP I6). Index 1,421 MB vs 1,978 MB.
+
+### 2a'. Historical: pg_fts 1.9.0 vs pg_textsearch 1.4.0 (2026-10-01, Debian 13)
 
 `bench/RESULTS_190_2026-10-01.md`. ms: rare **0.67** vs 0.84, mid **0.79** vs 1.07, common
 k10 **7.19** vs 11.40, common k100 **7.37** vs 13.87, count **0.19** vs seqscan, AND **1.51**

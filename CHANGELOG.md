@@ -2,6 +2,54 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.9.1 - 2026-10-06
+
+Ranked phrase queries are 4x faster, and the rare-term throughput drop is explained.
+**No on-disk format change**; **no REINDEX required**; no SQL-visible change
+(`pg_fts--1.9.0--1.9.1.sql` is a comment).
+
+### Changed (performance; bench/RESULTS_191_2026-10-06.md)
+
+- **Lazy phrase gate** (ROADMAP I5). A ranked phrase or NEAR query on a `positions=on`
+  index no longer builds the whole phrase match set before ranking. WAND ranks the terms
+  and admits a candidate only after checking adjacency from the positions of that one
+  posting, read from the block the cursor already holds. Same predicate as the collect
+  path, so the results are identical (28/28 phrase/k cases on 2.19M rows; new test
+  `phrase_gate`). A block stored without positions makes the query fall back to the
+  collect path. `"united states"` top-10: 138 -> **34.8 ms** (pg_textsearch 1.4.0: 43.0).
+  New GUC `pg_fts.lazy_phrase` (default on; off = the 1.9.0 path).
+- Heap admission skips the boolean/phrase gate for a candidate whose score cannot enter
+  a full top-k heap. It cannot change which documents enter.
+- `fts_search_dense1` (single-term common-term scoring) is kept out of line. The phrase
+  gate added no code to it, but inlined it slowed from ~7.15 to ~7.6 ms through code
+  placement alone; out of line it is 7.0-7.15 ms on four hosts.
+- Vendored sparsemap 5.8.0 -> 5.8.1. `sm_validate` now rejects a sparse chunk whose
+  readers disagree (a data slot above the chunk's reduced capacity), so the tombstone
+  open guard turns such a corrupt blob into `ERRCODE_DATA_CORRUPTED` instead of
+  accepting it. pg_fts only reads blobs through `sm_contains`/`sm_next_member`, which
+  never disagreed with each other, so no query result changes. The upstream
+  `sm_add_many` use-after-free is in a function pg_fts does not call. `fuzz_smblob`
+  gained the property; it fails on 5.8.0. Wire format unchanged.
+
+### Fixed
+
+- **An incremental `make` could run stale code.** `pg_fts_am.c` `#include`s
+  `pg_fts_am_scan.c`, `pg_fts_lev.c` and `pg_fts_trgm_index.c`, but the Makefile did not
+  know, so editing one of them left the old `pg_fts_am.o` in place. Clean builds (CI,
+  nix, packages) were never affected. Found because a planted-bug test "passed" against
+  unmodified code.
+
+### Known issues
+
+- **Rare-term throughput still falls with client count: 12.7k tps at 16 clients, 8.8k-8.9k
+  at 64** (1.9.0: 12.4k / 8.6k). pg_textsearch is flat at 8.2k. The cause is now
+  measured (ROADMAP I6): each backend builds a private ~4.8 MB copy of the document-length
+  array, and 64 copies do not fit in L3. All of the extra per-transaction cost at 64
+  clients is in `bm25_doclen_cursor_lookup`, and `pg_fts.doclen_cache_mb = 0` is flat.
+  A diagnostic build with one shared copy was flat at 12.3k / 12.5k / 12.6k tps
+  (16 / 32 / 64). The fix (one copy per server in dynamic shared memory) is a design
+  change and is planned, not shipped: `bench/PLAN_I6_SHARED_DOCLEN_2026-10-06.md`.
+
 ## 1.9.0 - 2026-10-01
 
 Ranked-retrieval performance release, and two exactness fixes that affect every prior
