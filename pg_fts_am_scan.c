@@ -4230,7 +4230,15 @@ fts_search_maxscore(WandCursor *cursors, int nterms, int k,
  * the result is the same top-k, ties included.  It is the reference algorithm
  * WAND approximates.  Gated by pg_fts.dense_score_min_df (fts_search_wand).
  */
-static int
+/*
+ * Kept out of line deliberately.  Inlined into its one caller, this loop's
+ * speed moved with unrelated code elsewhere in that function: the 1.9.1 phrase
+ * gate adds nothing to it, yet a common-term top-10 went from 7.1-7.2 to
+ * 7.5-7.9 ms on two hosts.  Out of line it measured 7.0-7.1 ms in 8 of 10
+ * server starts and 7.6-7.9 in the other 2 (2026-10-06): a code-layout effect,
+ * not an algorithmic one, so treat small changes here as needing a re-measure.
+ */
+pg_noinline static int
 fts_search_dense1(WandCursor *c, int k, ScoredTid **out)
 {
 	ScoredTid  *heap = (ScoredTid *) palloc(Max(k, 1) * sizeof(ScoredTid));
