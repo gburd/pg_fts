@@ -687,6 +687,13 @@ _PG_init(void)
 							32768, 0, INT_MAX,
 							PGC_USERSET, 0, NULL, NULL, NULL);
 
+	DefineCustomBoolVariable("pg_fts.shared_doclen",
+							 "Keep one server-wide copy of each index segment's document-length array in shared memory, instead of one per backend.",
+							 "Ranked results are identical either way; with many concurrent backends the shared copy is what keeps throughput from falling. Off restores the 1.9 per-backend copies.",
+							 &pg_fts_shared_doclen,
+							 true,
+							 PGC_SUSET, 0, NULL, NULL, NULL);
+
 	DefineCustomBoolVariable("pg_fts.lazy_phrase",
 							 "Ranked phrase queries on a positions=on index check adjacency per candidate instead of building the full phrase match set first.",
 							 "Results are identical; off restores the pre-1.9.1 collect-then-rank path.",

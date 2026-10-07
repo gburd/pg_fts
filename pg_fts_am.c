@@ -2212,6 +2212,13 @@ typedef struct BM25DoclenResident
 	uint64		last;			/* highest docid in the resident block */
 	int			hint;			/* resume index: the scan probes ASCENDING docids, so the
 								 * next hit is usually at/just after the previous one */
+	/* per-scan private slot arrays, used only when shared_doclen is on but the
+	 * shared copy could not be had (palloc'd in the scan's context) */
+	bool		pslot_tried;
+	uint32	   *pslot_base;
+	uint8	   *pslot_byte;
+	BlockNumber pslot_minblk;
+	uint32		pslot_nblk;
 } BM25DoclenResident;
 
 typedef struct BM25DoclenCursor
@@ -2268,6 +2275,7 @@ typedef struct BM25DoclenDir
 typedef struct BM25DoclenDirCache
 {
 	uint32		generation;		/* metapage generation this cache was built at */
+	bool		private_slots;	/* built with per-backend slot arrays (shared off) */
 	int			nsegs;
 	int			ndocid;			/* total entries across all segs (docid[] len) */
 	BM25DoclenDir segs[BM25_MAX_SEGMENTS];
@@ -2384,7 +2392,8 @@ bm25_doclendir_cache(Relation index, const BM25MetaPageData *meta)
 	Size		sz;
 	MemoryContext old;
 
-	if (dc != NULL && dc->generation == meta->generation)
+	if (dc != NULL && dc->generation == meta->generation &&
+		dc->private_slots == !(pg_fts_shared_doclen && IsUnderPostmaster))
 		return dc;
 
 	/* stale or absent: drop the old single chunk, rebuild */
@@ -2415,6 +2424,7 @@ bm25_doclendir_cache(Relation index, const BM25MetaPageData *meta)
 	dc = (BM25DoclenDirCache *) palloc0(sz);
 	MemoryContextSwitchTo(old);
 	dc->generation = meta->generation;
+	dc->private_slots = !(pg_fts_shared_doclen && IsUnderPostmaster);
 	dc->ndocid = total;
 	dc->nsegs = 0;
 
@@ -2449,6 +2459,10 @@ bm25_doclendir_cache(Relation index, const BM25MetaPageData *meta)
  * registered in _PG_init (pg_fts_customscan.c). */
 int			pg_fts_doclen_cache_mb = 64;
 
+/* GUC (1.10.0): serve the slot arrays from one server-wide shared copy per
+ * segment (pg_fts_shdoclen.c).  Off = the 1.9 per-backend copies. */
+bool		pg_fts_shared_doclen = true;
+
 /*
  * C1: append a resident SLOT-indexed doclen array for each sidecar segment to
  * the directory chunk, and return the (re-allocated) chunk.
@@ -2475,6 +2489,76 @@ int			pg_fts_doclen_cache_mb = 64;
  * (CHANGELOG 1.9.1, Known issues; ROADMAP I6).  One shared copy per server
  * removes both costs; the design and its constraints are in ROADMAP I6.
  */
+/*
+ * Build ONE segment's slot arrays (the C1 layout) from its sidecar, in the
+ * current memory context.  Returns false for an empty sidecar or one whose
+ * arrays would exceed `budget` bytes.  Shared by the per-backend builder below
+ * and the shared-memory publisher (pg_fts_shdoclen.c), so both produce
+ * byte-identical arrays.
+ */
+static bool
+bm25_doclen_build_slots(Relation index, BlockNumber doclenstart, Size budget,
+						uint32 **base_out, uint8 **byte_out, BlockNumber *minblk_out,
+						uint32 *nblk_out, Size *nslot_out)
+{
+	BM25Doclens d;
+	BlockNumber minblk,
+				maxblk;
+	uint32		nblk,
+				b;
+	Size		nslot;
+	uint32	   *base;
+	uint8	   *byt;
+	int			j;
+
+	CHECK_FOR_INTERRUPTS();
+	bm25_doclens_load(index, doclenstart, &d);
+	if (d.n == 0)
+		return false;
+	minblk = (BlockNumber) (d.docids[0] / BM25_OFFSET_FACTOR);
+	maxblk = (BlockNumber) (d.docids[d.n - 1] / BM25_OFFSET_FACTOR);
+	nblk = maxblk - minblk + 1;
+	/* pass 1: max offset per heap block -> base[] prefix sums */
+	base = (uint32 *) FTS_ALLOC_MAYBE_HUGE((Size) (nblk + 1) * sizeof(uint32));
+	memset(base, 0, (Size) (nblk + 1) * sizeof(uint32));
+	for (j = 0; j < d.n; j++)
+	{
+		uint32		bi = (uint32) (d.docids[j] / BM25_OFFSET_FACTOR) - minblk;
+		uint32		off = (uint32) (d.docids[j] % BM25_OFFSET_FACTOR);
+
+		if (off > base[bi + 1])
+			base[bi + 1] = off;	/* temporarily: max offset of block bi */
+	}
+	for (b = 0; b < nblk; b++)
+		base[b + 1] += base[b];
+	nslot = base[nblk];
+	if (nslot > PG_UINT32_MAX ||
+		MAXALIGN((Size) (nblk + 1) * sizeof(uint32)) + MAXALIGN(nslot) > budget)
+	{
+		pfree(base);
+		bm25_doclens_free(&d);
+		return false;			/* over budget: this segment keeps the cursor path */
+	}
+	/* pass 2: scatter the bytes into their slots */
+	byt = (uint8 *) FTS_ALLOC_MAYBE_HUGE(Max(nslot, 1));
+	memset(byt, 0, Max(nslot, 1));
+	for (j = 0; j < d.n; j++)
+	{
+		uint32		bi = (uint32) (d.docids[j] / BM25_OFFSET_FACTOR) - minblk;
+		uint32		off = (uint32) (d.docids[j] % BM25_OFFSET_FACTOR);
+
+		if (off >= 1)
+			byt[base[bi] + off - 1] = d.bytes[j];
+	}
+	bm25_doclens_free(&d);
+	*base_out = base;
+	*byte_out = byt;
+	*minblk_out = minblk;
+	*nblk_out = nblk;
+	*nslot_out = nslot;
+	return true;
+}
+
 static BM25DoclenDirCache *
 bm25_doclendir_add_slots(Relation index, BM25DoclenDirCache *dc)
 {
@@ -2492,68 +2576,37 @@ bm25_doclendir_add_slots(Relation index, BM25DoclenDirCache *dc)
 
 	if (budget == 0 || dc->nsegs == 0)
 		return dc;
+	/*
+	 * With pg_fts.shared_doclen on, each segment's arrays come from the
+	 * server-wide copy (bm25_doclen_cursor_init -> shdl_get); building a
+	 * private copy here as well is exactly what made throughput fall with
+	 * the number of backends.  A segment the shared path cannot serve (no
+	 * slot, no DSM) is then built privately on demand by the cursor init.
+	 */
+	if (!dc->private_slots)
+		return dc;
 	tmp = AllocSetContextCreate(CurrentMemoryContext, "pg_fts doclen slots",
 								ALLOCSET_DEFAULT_SIZES);
 	old = MemoryContextSwitchTo(tmp);
 	for (i = 0; i < dc->nsegs; i++)
 	{
 		BM25DoclenDir *sd = &dc->segs[i];
-		BM25Doclens d;
-		BlockNumber minblk,
-					maxblk;
-		uint32		nblk,
-					b;
+		BlockNumber minblk;
+		uint32		nblk;
 		Size		segsz,
-					nslot;
-		uint32	   *base;
-		uint8	   *byt;
-		int			j;
+					nslot,
+					room;
 
 		bases[i] = NULL;
 		bytes[i] = NULL;
 		sd->slot_nblk = 0;
-		CHECK_FOR_INTERRUPTS();
-		bm25_doclens_load(index, sd->start, &d);
-		if (d.n == 0)
+		room = basesz + extra >= budget ? 0 : budget - basesz - extra;
+		if (room > MaxAllocSize - basesz - extra)
+			room = MaxAllocSize - basesz - extra;
+		if (!bm25_doclen_build_slots(index, sd->start, room, &bases[i], &bytes[i],
+									 &minblk, &nblk, &nslot))
 			continue;
-		minblk = (BlockNumber) (d.docids[0] / BM25_OFFSET_FACTOR);
-		maxblk = (BlockNumber) (d.docids[d.n - 1] / BM25_OFFSET_FACTOR);
-		nblk = maxblk - minblk + 1;
-		/* pass 1: max offset per heap block -> base[] prefix sums */
-		base = (uint32 *) FTS_ALLOC_MAYBE_HUGE((Size) (nblk + 1) * sizeof(uint32));
-		memset(base, 0, (Size) (nblk + 1) * sizeof(uint32));
-		for (j = 0; j < d.n; j++)
-		{
-			uint32		bi = (uint32) (d.docids[j] / BM25_OFFSET_FACTOR) - minblk;
-			uint32		off = (uint32) (d.docids[j] % BM25_OFFSET_FACTOR);
-
-			if (off > base[bi + 1])
-				base[bi + 1] = off;	/* temporarily: max offset of block bi */
-		}
-		for (b = 0; b < nblk; b++)
-			base[b + 1] += base[b];
-		nslot = base[nblk];
 		segsz = MAXALIGN((Size) (nblk + 1) * sizeof(uint32)) + MAXALIGN(nslot);
-		if (nslot > PG_UINT32_MAX || basesz + extra + segsz > budget ||
-			basesz + extra + segsz > MaxAllocSize)
-		{
-			bm25_doclens_free(&d);
-			continue;			/* over budget: this segment keeps the cursor path */
-		}
-		/* pass 2: scatter the bytes into their slots */
-		byt = (uint8 *) FTS_ALLOC_MAYBE_HUGE(Max(nslot, 1));
-		memset(byt, 0, Max(nslot, 1));
-		for (j = 0; j < d.n; j++)
-		{
-			uint32		bi = (uint32) (d.docids[j] / BM25_OFFSET_FACTOR) - minblk;
-			uint32		off = (uint32) (d.docids[j] % BM25_OFFSET_FACTOR);
-
-			if (off >= 1)
-				byt[base[bi] + off - 1] = d.bytes[j];
-		}
-		bm25_doclens_free(&d);
-		bases[i] = base;
-		bytes[i] = byt;
 		nbytes[i] = nslot;
 		sd->slot_minblk = minblk;
 		sd->slot_nblk = nblk;
@@ -2593,10 +2646,30 @@ bm25_doclendir_add_slots(Relation index, BM25DoclenDirCache *dc)
 	return out;
 }
 
+/* the shared-memory copies of the slot arrays (1.10.0) */
+#include "pg_fts_shdoclen.c"
+
+/* shdl_build_fn adapter: build one segment's arrays under the C1 budget */
+static bool
+bm25_doclen_build_slots_shared(Relation index, BlockNumber doclenstart,
+							   uint32 **base, uint8 **byte, BlockNumber *minblk,
+							   uint32 *nblk, Size *nslot)
+{
+	Size		budget = (Size) pg_fts_doclen_cache_mb * 1024 * 1024;
+
+	if (budget > MaxAllocSize)
+		budget = MaxAllocSize;
+	return budget > 0 &&
+		bm25_doclen_build_slots(index, doclenstart, budget, base, byte, minblk,
+								nblk, nslot);
+}
+
 static void
-bm25_doclen_cursor_init(BM25DoclenCursor *c, Relation index, BlockNumber start,
+bm25_doclen_cursor_init(BM25DoclenCursor *c, Relation index, const BM25SegMeta *seg,
 						BM25DoclenDirCache *dc, BM25DoclenResident *res)
 {
+	BlockNumber start = seg->doclenstart;
+
 	c->index = index;
 	c->start = start;
 	c->dir_docid = NULL;
@@ -2630,6 +2703,49 @@ bm25_doclen_cursor_init(BM25DoclenCursor *c, Relation index, BlockNumber start,
 				}
 				break;
 			}
+	}
+	/*
+	 * Shared copy (1.10.0).  Taken for every cursor of the segment: the
+	 * reference is per call, released with the scan's resource owner, so a
+	 * second cursor of the same segment just bumps the count.  If it cannot be
+	 * had, fall back to a private copy owned by this scan (res->pslot_*), built
+	 * once per scan and segment -- never worse than 1.9's per-backend copy,
+	 * which was built once per backend and generation.
+	 */
+	if (c->slot_nblk == 0 && pg_fts_doclen_cache_mb > 0)
+	{
+		const uint32 *sb;
+		const uint8 *sy;
+		BlockNumber smin;
+		uint32		snblk;
+
+		if (shdl_get(index, seg, bm25_doclen_build_slots_shared, &sb, &sy, &smin, &snblk))
+		{
+			c->slot_base = sb;
+			c->slot_byte = sy;
+			c->slot_minblk = smin;
+			c->slot_nblk = snblk;
+		}
+		else if (res != NULL && pg_fts_shared_doclen)
+		{
+			if (!res->pslot_tried)
+			{
+				Size		nslot;
+
+				res->pslot_tried = true;
+				if (!bm25_doclen_build_slots_shared(index, start, &res->pslot_base,
+													&res->pslot_byte, &res->pslot_minblk,
+													&res->pslot_nblk, &nslot))
+					res->pslot_nblk = 0;
+			}
+			if (res->pslot_nblk > 0)
+			{
+				c->slot_base = res->pslot_base;
+				c->slot_byte = res->pslot_byte;
+				c->slot_minblk = res->pslot_minblk;
+				c->slot_nblk = res->pslot_nblk;
+			}
+		}
 	}
 	if (c->dir_n > 0 && res != NULL)
 	{
@@ -4108,6 +4224,8 @@ bm25_free_segment(Relation index, const BM25SegMeta *seg)
 	BlockNumber blk = seg->dictstart;
 	BlockNumber postchain = InvalidBlockNumber;
 
+	shdl_retire_segment(index, seg);	/* its shared doclen copy (1.10.0) */
+
 	/* dictionary pages; capture the shared posting chain's first block */
 	while (blk != InvalidBlockNumber)
 	{
@@ -4548,6 +4666,9 @@ bm25_merge_all_parallel(Relation index, int request)
 
 	heaprelid = index->rd_index->indrelid;
 
+	(void) shdl_control();		/* attach the shared doclen table now: its
+								 * merged-away copies are retired below, inside
+								 * parallel mode, where it cannot be attached */
 	EnterParallelMode();
 	pcxt = CreateParallelContext("pg_fts", "bm25_parallel_merge_main", request);
 	estms = BUFFERALIGN(sizeof(BM25MergeShared));

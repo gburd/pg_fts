@@ -4668,7 +4668,7 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 			cursors[nactive].has_doclen_col =
 				(meta.segs[s].doclenstart == InvalidBlockNumber);
 			bm25_doclen_cursor_init(&cursors[nactive].doclenc, index,
-									meta.segs[s].doclenstart, doclendir,
+									&meta.segs[s], doclendir,
 									doclenres ? &doclenres[s] : NULL);
 			cursors[nactive].docid_lo = docid_lo;
 			cursors[nactive].docid_hi = docid_hi;

@@ -334,6 +334,21 @@ SELECT id FROM docs
    </varlistentry>
 
    <varlistentry>
+    <term><function>fts_shared_doclen_stats()</function></term>
+    <listitem>
+     <para>
+      One row per document-length array currently published in shared memory
+      (see <varname>pg_fts.shared_doclen</varname>): the database and index
+      relfilenode it belongs to, the segment's first sidecar block and document
+      count, <literal>state</literal> (<literal>ready</literal> or
+      <literal>building</literal>), <literal>refcnt</literal> (scans currently
+      reading it), <literal>retired</literal> (its segment has been merged away;
+      freed once no scan reads it) and its size in bytes.  For monitoring.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><function>fts_highlight(<replaceable>doc</replaceable> text, <replaceable>query</replaceable> ftsquery, ...)</function>, <function>fts_snippet(<replaceable>doc</replaceable> text, <replaceable>query</replaceable> ftsquery, ...)</function></term>
     <listitem>
      <para>
@@ -868,11 +883,29 @@ SELECT * FROM messages
       ranked query after the index's segments change.  With it a document's
       length is read with two array lookups instead of a page decode.  A
       segment that does not fit keeps the page-based lookup.  <literal>0</literal>
-      disables it.  Note that every backend holds its own copy; with many
-      concurrent backends this adds up, and the copies competing for CPU cache
-      are why a rare-term ranked query's throughput falls as the number of
-      concurrent backends grows (1.9.1 measured 12.7k transactions per second at
-      16 clients and 8.8k at 64 on 2.19M documents).
+      disables it.  The arrays are shared by all backends (see
+      <varname>pg_fts.shared_doclen</varname>), so this budget is per index
+      segment, not per backend.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><varname>pg_fts.shared_doclen</varname> (<type>boolean</type>, default on)</term>
+    <listitem>
+     <para>
+      Keep one copy per server of each index segment's document-length array, in
+      dynamic shared memory, instead of one per backend.  The first ranked query
+      to need a segment's array builds and publishes it; every other backend
+      maps the same pages.  The copy depends only on the segment, which is never
+      modified once written, so backends with different snapshots share it
+      safely; a query reading a segment that a concurrent merge has since
+      dropped keeps that segment's copy until it finishes.  Before this setting
+      existed every backend held its own copy, and with many concurrent backends
+      those copies competed for CPU cache: rare-term ranked throughput fell
+      by about a third between 16 and 64 clients.  If shared memory is
+      unavailable (for example <filename>/dev/shm</filename> is full) a query
+      silently uses a private copy instead.  Only superusers can change it.
      </para>
     </listitem>
    </varlistentry>
