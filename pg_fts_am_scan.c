@@ -406,6 +406,18 @@ bm25_dict_seek(Relation index, const BM25SegMeta *seg,
 	BlockNumber iblk = seg->dictindexstart;
 	BlockNumber best = seg->dictstart;
 
+	/*
+	 * The dictionary index is a chain of pages of sorted (first-term, blk)
+	 * entries, one entry per dictionary page.  Each index page's entries are
+	 * variable length, so a page is searched by first collecting its entry
+	 * offsets (one pass over the page, no comparisons), then binary searching
+	 * them.  The chain is walked page by page only while the term sorts after
+	 * the page's last entry, and the next page is prefetched while this one is
+	 * searched.  1.10.0 compared the term against every entry of every page up
+	 * to the target: ~31k memcmp per lookup on 2.19M Wikipedia (91 index
+	 * pages, 31k dictionary pages), twice per query term -- 21% of a common-term
+	 * top-10 once the posting walk itself became cheap (perf, 2026-10-07).
+	 */
 	while (iblk != InvalidBlockNumber)
 	{
 		Buffer		buf;
@@ -413,7 +425,11 @@ bm25_dict_seek(Relation index, const BM25SegMeta *seg,
 		char	   *ptr,
 				   *end;
 		BlockNumber next;
-		bool		overshot = false;
+		uint16		offs[BLCKSZ / MAXALIGN(offsetof(BM25DictIndexEntry, term) + 1) + 1];
+		int			n = 0,
+					lo,
+					hi,
+					cand = -1;
 
 		CHECK_FOR_INTERRUPTS();		/* between pages, no buffer lock held: safe to let a cancel unwind */
 		buf = ReadBuffer(index, iblk);
@@ -422,25 +438,45 @@ bm25_dict_seek(Relation index, const BM25SegMeta *seg,
 		ptr = (char *) PageGetContents(page);
 		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
-		while (ptr < end)
+		if (next != InvalidBlockNumber)
+			PrefetchBuffer(index, MAIN_FORKNUM, next);
+		while (ptr + offsetof(BM25DictIndexEntry, term) <= end &&
+			   n < (int) lengthof(offs))
 		{
 			BM25DictIndexEntry *ie = (BM25DictIndexEntry *) ptr;
+			Size		esz = MAXALIGN(offsetof(BM25DictIndexEntry, term) + ie->termlen);
+
+			if (ie->termlen > BLCKSZ || ptr + esz > end + MAXIMUM_ALIGNOF)
+				break;			/* recycled/corrupt page: stop (bounded, as before) */
+			offs[n++] = (uint16) (ptr - (char *) page);
+			ptr += esz;
+		}
+		/* largest entry with entry term <= target */
+		lo = 0;
+		hi = n - 1;
+		while (lo <= hi)
+		{
+			int			mid = (lo + hi) >> 1;
+			BM25DictIndexEntry *ie = (BM25DictIndexEntry *) ((char *) page + offs[mid]);
 			int			cmplen = Min((int) ie->termlen, termlen);
 			int			c = memcmp(ie->term, term, cmplen);
 
 			if (c == 0)
 				c = (int) ie->termlen - termlen;
 			if (c <= 0)
-				best = ie->blk;		/* entry term <= target: candidate page */
-			else
 			{
-				overshot = true;	/* entries are sorted; no need to go further */
-				break;
+				cand = mid;
+				lo = mid + 1;
 			}
-			ptr += MAXALIGN(offsetof(BM25DictIndexEntry, term) + ie->termlen);
+			else
+				hi = mid - 1;
 		}
+		if (cand >= 0)
+			best = ((BM25DictIndexEntry *) ((char *) page + offs[cand]))->blk;
 		UnlockReleaseBuffer(buf);
-		if (overshot)
+		/* the term sorts before this page's last entry: no later page can
+		 * hold a closer candidate (entries are sorted across the chain) */
+		if (n == 0 || cand < n - 1)
 			break;
 		iblk = next;
 	}
