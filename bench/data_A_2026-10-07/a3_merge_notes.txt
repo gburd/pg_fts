@@ -20,3 +20,14 @@
 # build_time.sh (full 2.19M, default settings):
 #   prev build 272.8 s + fts_vacuum 186.4 s; cur build 147.4 s + fts_vacuum 66.1 s
 #   same final size 1,489,600,512, nseg 1, count(year) 734,896 both.
+# second step (merge_prof2.sh after step 1): fts_merge of 7 segments 111.9 s; pg_qsort 34.8%
+#   (postings already in docid order), merge loop 26% (gallop in the source sidecar, pg_fts_am.c
+#   lookup lines), bm25_write_postings 19.5% (FOR pack).
+# Change: skip the qsort when the postings are already ordered; per-source C1 slot arrays
+#   (bm25_doclen_slots_from) for an O(1) doclen per posting.
+# Identity (merge_ident3.sh, merge_ident2.sh): live pages byte-identical vs the pre-change binary
+#   for positions off/on, doclen_sidecar=off and the tombstoned fts_vacuum merge.
+# 400k serial build (64MB mwm): positions off 124.7 -> 78.5 s, on 166.2 -> 118.7 s
+#   (the "prev" binary of this run is step 1).
+# full 2.19M (build_time.sh): build 121.6 s + fts_vacuum 39.7 s; size 1,489,600,512; count 734,896.
+#   vs approach-a before any merge change: 272.8 + 186.4 s.

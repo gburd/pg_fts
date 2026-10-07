@@ -1734,8 +1734,21 @@ bm25_write_postings(BM25PostWriter *pw, BuildTerm *bt,
 		sorted[i].poscnt = bt->positions ? bt->poscnt[i] : 0;
 		sorted[i].tid = bt->tids[i];
 	}
+	/*
+	 * A merge appends each source's postings in docid order, and parallel-build
+	 * sources cover disjoint heap ranges, so the input is usually sorted
+	 * already: check before sorting (pg_qsort swapping these 40-byte entries
+	 * was a third of a merge, 1.11.0).
+	 */
 	if (bt->nposts > 1)
-		qsort(sorted, bt->nposts, sizeof(BM25PostingSort), cmp_posting_docid);
+	{
+		bool		ordered = true;
+
+		for (i = 1; i < bt->nposts && ordered; i++)
+			ordered = (sorted[i - 1].docid <= sorted[i].docid);
+		if (!ordered)
+			qsort(sorted, bt->nposts, sizeof(BM25PostingSort), cmp_posting_docid);
+	}
 
 	i = 0;
 	while (i < bt->nposts)
@@ -2586,12 +2599,36 @@ bool		pg_fts_shared_doclen = true;
  * and the shared-memory publisher (pg_fts_shdoclen.c), so both produce
  * byte-identical arrays.
  */
+static bool bm25_doclen_slots_from(const BM25Doclens *dp, Size budget,
+								   uint32 **base_out, uint8 **byte_out,
+								   BlockNumber *minblk_out, uint32 *nblk_out,
+								   Size *nslot_out);
+
 static bool
 bm25_doclen_build_slots(Relation index, BlockNumber doclenstart, Size budget,
 						uint32 **base_out, uint8 **byte_out, BlockNumber *minblk_out,
 						uint32 *nblk_out, Size *nslot_out)
 {
 	BM25Doclens d;
+	bool		ok;
+
+	CHECK_FOR_INTERRUPTS();
+	bm25_doclens_load(index, doclenstart, &d);
+	ok = bm25_doclen_slots_from(&d, budget, base_out, byte_out, minblk_out,
+								nblk_out, nslot_out);
+	bm25_doclens_free(&d);
+	return ok;
+}
+
+/* The slot arrays for an already-decoded sidecar (also used by the merge,
+ * which holds each source's sidecar decoded anyway). */
+static bool
+bm25_doclen_slots_from(const BM25Doclens *dp, Size budget,
+					   uint32 **base_out, uint8 **byte_out,
+					   BlockNumber *minblk_out, uint32 *nblk_out,
+					   Size *nslot_out)
+{
+	const BM25Doclens d = *dp;
 	BlockNumber minblk,
 				maxblk;
 	uint32		nblk,
@@ -2601,8 +2638,6 @@ bm25_doclen_build_slots(Relation index, BlockNumber doclenstart, Size budget,
 	uint8	   *byt;
 	int			j;
 
-	CHECK_FOR_INTERRUPTS();
-	bm25_doclens_load(index, doclenstart, &d);
 	if (d.n == 0)
 		return false;
 	minblk = (BlockNumber) (d.docids[0] / BM25_OFFSET_FACTOR);
@@ -2626,7 +2661,6 @@ bm25_doclen_build_slots(Relation index, BlockNumber doclenstart, Size budget,
 		MAXALIGN((Size) (nblk + 1) * sizeof(uint32)) + MAXALIGN(nslot) > budget)
 	{
 		pfree(base);
-		bm25_doclens_free(&d);
 		return false;			/* over budget: this segment keeps the cursor path */
 	}
 	/* pass 2: scatter the bytes into their slots */
@@ -2640,7 +2674,6 @@ bm25_doclen_build_slots(Relation index, BlockNumber doclenstart, Size budget,
 		if (off >= 1)
 			byt[base[bi] + off - 1] = d.bytes[j];
 	}
-	bm25_doclens_free(&d);
 	*base_out = base;
 	*byte_out = byt;
 	*minblk_out = minblk;
@@ -3599,6 +3632,12 @@ typedef struct MergeSource
 	uint64		tombdense_n;		/* docid capacity of tombdense (bits) */
 	BM25Doclens doclens;			/* v4 source doclen sidecar (empty for v3) */
 	bool		has_doclen_col;		/* v3 source: doclen inline in postings */
+	/* the same lengths in the dense per-heap-block slot layout (C1), for an
+	 * O(1) lookup per posting; slot_base NULL => search doclens instead */
+	uint32	   *slot_base;
+	uint8	   *slot_byte;
+	BlockNumber slot_minblk;
+	uint32		slot_nblk;
 } MergeSource;
 
 /*
@@ -3773,6 +3812,16 @@ merge_source_open(Relation index, const BM25SegMeta *seg, MergeSource *src,
 	 * (doclenstart Invalid) keeps has_doclen_col=true and reads it inline. */
 	src->has_doclen_col = (seg->doclenstart == InvalidBlockNumber);
 	bm25_doclens_load(index, seg->doclenstart, &src->doclens);
+	{
+		Size		nslot;
+
+		src->slot_base = NULL;
+		src->slot_byte = NULL;
+		if (!bm25_doclen_slots_from(&src->doclens, MaxAllocSize, &src->slot_base,
+									&src->slot_byte, &src->slot_minblk,
+									&src->slot_nblk, &nslot))
+			src->slot_base = NULL;
+	}
 
 	src->tombdense = NULL;
 	src->tombdense_n = 0;
@@ -4087,7 +4136,25 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 				/* v4 source: post[k].doclen is 0 (no inline column); recover the
 				 * exact length from the source's sidecar so the merged segment
 				 * carries correct doclen (and re-quantizes it into its own sidecar). */
-				if (!s->has_doclen_col)
+				if (!s->has_doclen_col && s->slot_base != NULL)
+				{
+					/* the C1 slot lookup (bm25_doclen_cursor_lookup's fast path) */
+					uint64		dv = bm25_tid_to_docid(&post[k].tid);
+					uint64		bi = dv / BM25_OFFSET_FACTOR;
+					uint32		off = (uint32) (dv % BM25_OFFSET_FACTOR);
+
+					doclen = 0;
+					if (bi >= s->slot_minblk && bi - s->slot_minblk < s->slot_nblk && off >= 1)
+					{
+						uint32		idx;
+
+						bi -= s->slot_minblk;
+						idx = s->slot_base[bi] + off - 1;
+						if (idx < s->slot_base[bi + 1])
+							doclen = fts_byte_to_doclen(s->slot_byte[idx]);
+					}
+				}
+				else if (!s->has_doclen_col)
 					doclen = bm25_doclen_lookup_from(&s->doclens,
 													 bm25_tid_to_docid(&post[k].tid),
 													 &dlhint);
@@ -4181,7 +4248,13 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 	seg->livedocslen = 0;
 
 	for (i = 0; i < nsel; i++)
+	{
 		bm25_doclens_free(&srcv[i].doclens);
+		if (srcv[i].slot_base)
+			pfree(srcv[i].slot_base);
+		if (srcv[i].slot_byte)
+			pfree(srcv[i].slot_byte);
+	}
 
 	dict_spill_end(&spill);
 	MemoryContextSwitchTo(old);
