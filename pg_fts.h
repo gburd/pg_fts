@@ -240,6 +240,10 @@ extern int pg_fts_doclen_cache_mb;
 extern bool pg_fts_shared_doclen;
 extern int pg_fts_dense_score_min_df;
 extern bool pg_fts_bestfirst;
+
+/* pg_fts_am.c: resets the maintenance buffer-ring scope at transaction end */
+#include "access/xact.h"
+extern void bm25_maint_xact_reset(XactEvent event, void *arg);
 extern bool pg_fts_lazy_phrase;
 extern double fts_current_distance_value;	/* set by bm25_gettuple, read by fts_current_distance() */
 

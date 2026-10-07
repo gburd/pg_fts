@@ -758,6 +758,65 @@ bm25_docid_to_tid(uint64 docid, ItemPointer tid)
 #include "pg_fts_for.h"
 
 /*
+ * Buffer ring for maintenance I/O (1.11.0).  A merge or compaction streams a
+ * whole segment through shared_buffers, and a build writes the new index
+ * through it: measured on a 2.19M-document index with shared_buffers = 4GB, a
+ * CREATE INDEX of a second index left 0 of the 181,836 pages of an index that
+ * had been fully resident.  While bm25_maint_strategy is set, every page this
+ * file reads or extends goes through a BAS_BULKWRITE ring (16 MB, the ring
+ * COPY and CREATE TABLE AS use), so the hot set stays resident.  Set only for
+ * the duration of a maintenance-lock scope (bm25_maintenance_lock / _unlock)
+ * or of ambuild; scans (pg_fts_am_scan.c) never use it.  Nesting is counted:
+ * the build takes the maintenance lock inside its own scope.  Every begin is
+ * paired with an end in PG_FINALLY; a transaction abort also resets the depth
+ * (bm25_maint_xact_reset), so an error can never leave later reads ringed.
+ */
+static BufferAccessStrategy bm25_maint_strategy = NULL;
+static int	bm25_maint_depth = 0;
+
+static void
+bm25_maint_io_begin(void)
+{
+	if (bm25_maint_depth++ == 0 && bm25_maint_strategy == NULL)
+	{
+		/* TopMemoryContext: kept for the backend's life and reused, so an
+		 * abort that skips bm25_maint_io_end can never leave a dangling
+		 * pointer; the depth is reset at the next outermost begin */
+		MemoryContext old = MemoryContextSwitchTo(TopMemoryContext);
+
+		bm25_maint_strategy = GetAccessStrategy(BAS_BULKWRITE);
+		MemoryContextSwitchTo(old);
+	}
+}
+
+static void
+bm25_maint_io_end(void)
+{
+	if (bm25_maint_depth > 0)
+		bm25_maint_depth--;
+}
+
+/* Transaction end: no maintenance scope survives it (an ERROR skips the
+ * matching _end).  Registered in _PG_init. */
+void
+bm25_maint_xact_reset(XactEvent event, void *arg)
+{
+	(void) arg;
+	if (event == XACT_EVENT_ABORT || event == XACT_EVENT_PARALLEL_ABORT ||
+		event == XACT_EVENT_COMMIT || event == XACT_EVENT_PARALLEL_COMMIT ||
+		event == XACT_EVENT_PREPARE)
+		bm25_maint_depth = 0;
+}
+
+/* ReadBuffer through the maintenance ring when one is active. */
+static inline Buffer
+bm25_readbuf(Relation index, BlockNumber blk)
+{
+	return ReadBufferExtended(index, MAIN_FORKNUM, blk, RBM_NORMAL,
+							  bm25_maint_depth > 0 ? bm25_maint_strategy : NULL);
+}
+
+/*
  * Decode exactly one term's postings from the shared posting chain: start at
  * (firstblk, firstoff) and decode consecutive blocks -- following nextblk
  * across pages -- until `df` postings have been read.  A term's blocks are
@@ -833,7 +892,7 @@ bm25_decode_term(Relation index, BlockNumber firstblk, uint32 firstoff,
 		double		total = 0;
 		uint32		maxdf;
 		uint32		s;
-		Buffer		mb = ReadBuffer(index, BM25_METAPAGE_BLKNO);
+		Buffer		mb = bm25_readbuf(index, BM25_METAPAGE_BLKNO);
 
 		LockBuffer(mb, BUFFER_LOCK_SHARE);
 		bm25_meta_from_page(BufferGetPage(mb), &cmeta);
@@ -863,7 +922,7 @@ bm25_decode_term(Relation index, BlockNumber firstblk, uint32 firstoff,
 
 	while (blk != InvalidBlockNumber && n < (int) df)
 	{
-		Buffer		buf = ReadBuffer(index, blk);
+		Buffer		buf = bm25_readbuf(index, blk);
 		Page		page;
 		char	   *p,
 				   *pend;
@@ -1283,7 +1342,7 @@ bm25_new_buffer(Relation index)
 	{
 		BlockNumber blk = bm25_alloc.lowfree[bm25_alloc.lowfree_i++];
 
-		buffer = ReadBuffer(index, blk);
+		buffer = bm25_readbuf(index, blk);
 		if (ConditionalLockBuffer(buffer))
 		{
 			if (!bm25_page_recyclable(index, BufferGetPage(buffer)))
@@ -1310,7 +1369,7 @@ bm25_new_buffer(Relation index)
 
 		if (blk == InvalidBlockNumber)
 			break;				/* no free page; extend below */
-		buffer = ReadBuffer(index, blk);
+		buffer = bm25_readbuf(index, blk);
 		if (ConditionalLockBuffer(buffer))
 		{
 			if (!bm25_page_recyclable(index, BufferGetPage(buffer)))
@@ -1348,7 +1407,8 @@ bm25_new_buffer(Relation index)
 	 * serializes, which is how heap and every core index AM extend.
 	 */
 	LockRelationForExtension(index, ExclusiveLock);
-	buffer = ReadBuffer(index, P_NEW);
+	buffer = ReadBufferExtended(index, MAIN_FORKNUM, P_NEW, RBM_NORMAL,
+								bm25_maint_depth > 0 ? bm25_maint_strategy : NULL);
 	LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
 	UnlockRelationForExtension(index, ExclusiveLock);
 	return buffer;
@@ -2168,7 +2228,7 @@ bm25_doclens_load(Relation index, BlockNumber doclenstart, BM25Doclens *d)
 		 * walk).  Bounds inside the block loop already guard a torn page. */
 		if (blk >= nblocks || visited++ > nblocks)
 			break;
-		buf = ReadBuffer(index, blk);
+		buf = bm25_readbuf(index, blk);
 		LockBuffer(buf, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buf);
 		if (PageIsNew(page) ||
@@ -2464,7 +2524,7 @@ bm25_doclendir_scan_seg(Relation index, BlockNumber start,
 		CHECK_FOR_INTERRUPTS();
 		if (b >= nblocks || visited++ > nblocks)
 			break;
-		buf = ReadBuffer(index, b);
+		buf = bm25_readbuf(index, b);
 		LockBuffer(buf, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buf);
 		if (PageIsNew(page) || !(BM25PageGetOpaque(page)->flags & BM25_DOCLEN))
@@ -2512,7 +2572,7 @@ bm25_doclendir_count_seg(Relation index, BlockNumber start)
 		CHECK_FOR_INTERRUPTS();
 		if (b >= nblocks || visited++ > nblocks)
 			break;
-		buf = ReadBuffer(index, b);
+		buf = bm25_readbuf(index, b);
 		LockBuffer(buf, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buf);
 		if (PageIsNew(page) || !(BM25PageGetOpaque(page)->flags & BM25_DOCLEN))
@@ -2989,7 +3049,7 @@ bm25_doclen_cursor_load_page(BM25DoclenCursor *c, BlockNumber blkno, uint64 doci
 	if (blkno == InvalidBlockNumber || r->docid == NULL ||
 		blkno >= RelationGetNumberOfBlocks(c->index))
 		return;
-	buf = ReadBuffer(c->index, blkno);
+	buf = bm25_readbuf(c->index, blkno);
 	LockBuffer(buf, BUFFER_LOCK_SHARE);
 	page = BufferGetPage(buf);
 	if (PageIsNew(page) || !(BM25PageGetOpaque(page)->flags & BM25_DOCLEN))
@@ -3499,7 +3559,7 @@ bm25_write_segment(Relation index, BM25BuildState *bs, BM25SegMeta *seg)
 static bool
 bm25_meta_add_segment(Relation index, const BM25SegMeta *seg)
 {
-	Buffer		buf = ReadBuffer(index, BM25_METAPAGE_BLKNO);
+	Buffer		buf = bm25_readbuf(index, BM25_METAPAGE_BLKNO);
 	GenericXLogState *state;
 	Page		page;
 	BM25MetaPageData *m;
@@ -3718,7 +3778,7 @@ merge_source_load_page(MergeSource *src)
 		Size		used;
 
 		CHECK_FOR_INTERRUPTS();		/* between pages, no lock held across yields */
-		buffer = ReadBuffer(src->index, src->nextblk);
+		buffer = bm25_readbuf(src->index, src->nextblk);
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buffer);
 		ptr = (char *) PageGetContents(page);
@@ -4334,7 +4394,7 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 static void
 bm25_free_page(Relation index, BlockNumber blk)
 {
-	Buffer		buf = ReadBuffer(index, blk);
+	Buffer		buf = bm25_readbuf(index, blk);
 	GenericXLogState *state;
 	Page		page;
 	BM25PageOpaque op;
@@ -4457,7 +4517,7 @@ bm25_free_chain(Relation index, BlockNumber blk)
 {
 	while (blk != InvalidBlockNumber)
 	{
-		Buffer		buf = ReadBuffer(index, blk);
+		Buffer		buf = bm25_readbuf(index, blk);
 		BlockNumber next;
 
 		LockBuffer(buf, BUFFER_LOCK_SHARE);
@@ -4480,7 +4540,7 @@ bm25_free_segment(Relation index, const BM25SegMeta *seg)
 	/* dictionary pages; capture the shared posting chain's first block */
 	while (blk != InvalidBlockNumber)
 	{
-		Buffer		buf = ReadBuffer(index, blk);
+		Buffer		buf = bm25_readbuf(index, blk);
 		Page		page;
 		char	   *ptr,
 				   *end;
@@ -4512,7 +4572,7 @@ bm25_free_segment(Relation index, const BM25SegMeta *seg)
 	blk = seg->trgmstart;
 	while (blk != InvalidBlockNumber)
 	{
-		Buffer		buf = ReadBuffer(index, blk);
+		Buffer		buf = bm25_readbuf(index, blk);
 		Page		page;
 		char	   *ptr,
 				   *end;
@@ -4663,7 +4723,7 @@ bm25_merge_selected(Relation index, const uint32 *sel, uint32 nsel)
 	INSTR_TIME_SET_CURRENT(t0);
 
 	{
-		Buffer		mb = ReadBuffer(index, BM25_METAPAGE_BLKNO);
+		Buffer		mb = bm25_readbuf(index, BM25_METAPAGE_BLKNO);
 
 		LockBuffer(mb, BUFFER_LOCK_SHARE);
 		bm25_meta_from_page(BufferGetPage(mb), &meta);
@@ -4709,7 +4769,7 @@ bm25_merge_selected(Relation index, const uint32 *sel, uint32 nsel)
 	}
 
 	{
-		Buffer		mb = ReadBuffer(index, BM25_METAPAGE_BLKNO);
+		Buffer		mb = bm25_readbuf(index, BM25_METAPAGE_BLKNO);
 		GenericXLogState *state;
 		Page		mp;
 		BM25MetaPageData *m;
@@ -4878,7 +4938,9 @@ bm25_merge_one_group(Relation index, BM25MergeShared *ms, int g)
 		ms->outvalid[g] = false;	/* signals "source kept, no new seg" */
 		return;
 	}
+	bm25_maint_io_begin();		/* the worker's merge reads/writes through a ring */
 	bm25_merge_group_to_seg(index, &ms->src[lo], (uint32) (hi - lo), &out);
+	bm25_maint_io_end();
 	SpinLockAcquire(&ms->mutex);
 	ms->outseg[g] = out;
 	ms->outvalid[g] = true;
@@ -4906,7 +4968,7 @@ bm25_merge_all_parallel(Relation index, int request)
 	Oid			heaprelid;
 
 	{
-		Buffer		mb = ReadBuffer(index, BM25_METAPAGE_BLKNO);
+		Buffer		mb = bm25_readbuf(index, BM25_METAPAGE_BLKNO);
 
 		LockBuffer(mb, BUFFER_LOCK_SHARE);
 		bm25_meta_from_page(BufferGetPage(mb), &meta);
@@ -4983,7 +5045,7 @@ bm25_merge_all_parallel(Relation index, int request)
 	 * don't drop it.
 	 */
 	{
-		Buffer		mb = ReadBuffer(index, BM25_METAPAGE_BLKNO);
+		Buffer		mb = bm25_readbuf(index, BM25_METAPAGE_BLKNO);
 		GenericXLogState *state;
 		Page		mp;
 		BM25MetaPageData *m;
@@ -5088,7 +5150,7 @@ bm25_merge_all(Relation index, bool try_parallel)
 		uint32		i;
 
 		{
-			Buffer		mb = ReadBuffer(index, BM25_METAPAGE_BLKNO);
+			Buffer		mb = bm25_readbuf(index, BM25_METAPAGE_BLKNO);
 
 			LockBuffer(mb, BUFFER_LOCK_SHARE);
 			bm25_meta_from_page(BufferGetPage(mb), &meta);
@@ -5207,7 +5269,7 @@ bm25_build_finalize(Relation index)
 	nblocks = RelationGetNumberOfBlocks(index);
 	sizemb = ((uint64) nblocks * BLCKSZ) / (1024 * 1024);
 	{
-		Buffer		mb = ReadBuffer(index, BM25_METAPAGE_BLKNO);
+		Buffer		mb = bm25_readbuf(index, BM25_METAPAGE_BLKNO);
 
 		LockBuffer(mb, BUFFER_LOCK_SHARE);
 		bm25_meta_from_page(BufferGetPage(mb), &meta);
@@ -5288,7 +5350,7 @@ bm25_compact_to_one(Relation index, bool extend_only)
 			uint32		sel[BM25_MAX_SEGMENTS];
 			uint32		nsel = 0;
 			uint32		i;
-			Buffer		mb = ReadBuffer(index, BM25_METAPAGE_BLKNO);
+			Buffer		mb = bm25_readbuf(index, BM25_METAPAGE_BLKNO);
 
 			LockBuffer(mb, BUFFER_LOCK_SHARE);
 			bm25_meta_from_page(BufferGetPage(mb), &meta);
@@ -5310,7 +5372,7 @@ bm25_compact_to_one(Relation index, bool extend_only)
 			Buffer		mb;
 
 			CHECK_FOR_INTERRUPTS();	/* between merges (no lock/window held) */
-			mb = ReadBuffer(index, BM25_METAPAGE_BLKNO);
+			mb = bm25_readbuf(index, BM25_METAPAGE_BLKNO);
 			LockBuffer(mb, BUFFER_LOCK_SHARE);
 			bm25_meta_from_page(BufferGetPage(mb), &meta);
 			UnlockReleaseBuffer(mb);
@@ -5423,7 +5485,7 @@ bm25_have_recyclable_room(Relation index, BlockNumber live)
 		CHECK_FOR_INTERRUPTS();
 		if (GetRecordedFreeSpace(index, blk) < BLCKSZ / 2)
 			continue;			/* in use, or too full to reuse */
-		buf = ReadBuffer(index, blk);
+		buf = bm25_readbuf(index, blk);
 		LockBuffer(buf, BUFFER_LOCK_SHARE);
 		ok = bm25_page_recyclable(index, BufferGetPage(buf));
 		UnlockReleaseBuffer(buf);
@@ -5455,7 +5517,7 @@ bm25_index_is_compacted(Relation index)
 	/* (2) segment count: only a single live segment counts as coalesced */
 	{
 		BM25MetaPageData meta;
-		Buffer		mb = ReadBuffer(index, BM25_METAPAGE_BLKNO);
+		Buffer		mb = bm25_readbuf(index, BM25_METAPAGE_BLKNO);
 		uint32		i;
 
 		LockBuffer(mb, BUFFER_LOCK_SHARE);
@@ -5722,7 +5784,7 @@ bm25_merge_segments(Relation index)
 		uint32		i;
 
 		{
-			Buffer		mb = ReadBuffer(index, BM25_METAPAGE_BLKNO);
+			Buffer		mb = bm25_readbuf(index, BM25_METAPAGE_BLKNO);
 
 			LockBuffer(mb, BUFFER_LOCK_SHARE);
 			bm25_meta_from_page(BufferGetPage(mb), &meta);
@@ -5954,8 +6016,10 @@ bm25_parallel_build_main(dsm_segment *seg, shm_toc *toc)
 	bs.flush_budget = 0;
 	bs.nflushes = 0;
 	bm25_build_ht_init(&bs);
+	bm25_maint_io_begin();		/* this worker's segment writes through a ring */
 	reltuples = bm25_scan_and_build(heap, index, indexInfo, &bs, pscan);
 	bm25_build_flush_segment(index, &bs);	/* worker's residual -> a segment */
+	bm25_maint_io_end();
 	MemoryContextDelete(bs.ctx);
 
 	InstrEndParallelQuery(&bufferusage[ParallelWorkerNumber],
@@ -6130,6 +6194,14 @@ bm25_build(Relation heap, Relation index, IndexInfo *indexInfo)
 	/* metapage must be block 0 -- write it before workers or the scan touch it */
 	bm25_init_metapage(index);
 
+	/*
+	 * The leader's segment writes, collapse and pack go through the
+	 * maintenance ring (bm25_maint_io_begin); the heap scan already uses a
+	 * BULKREAD ring (table_index_build_scan).  Ended below; an error unwinds
+	 * through the transaction abort, which resets it (bm25_maint_xact_reset).
+	 */
+	bm25_maint_io_begin();
+
 	/* Try a parallel build if the planner requested workers. */
 	if (indexInfo->ii_ParallelWorkers > 0)
 		bm25leader = bm25_begin_parallel(heap, index, indexInfo->ii_Concurrent,
@@ -6206,6 +6278,7 @@ bm25_build(Relation heap, Relation index, IndexInfo *indexInfo)
 	 * is the sole writer -- truncating the free tail is safe.
 	 */
 	bm25_truncate_free_tail(index);
+	bm25_maint_io_end();
 
 	MemoryContextDelete(bs.ctx);
 
@@ -6246,7 +6319,7 @@ bm25_pending_segments_worth_merging(Relation index)
 	Buffer		buf;
 	BM25MetaPageData meta;
 
-	buf = ReadBuffer(index, BM25_METAPAGE_BLKNO);
+	buf = bm25_readbuf(index, BM25_METAPAGE_BLKNO);
 	LockBuffer(buf, BUFFER_LOCK_SHARE);
 	bm25_meta_from_page(BufferGetPage(buf), &meta);
 	UnlockReleaseBuffer(buf);
@@ -6420,7 +6493,7 @@ bm25_insert(Relation index, Datum *values, bool *isnull,
 
 	/* Lock the metapage for the whole append (serializes inserters; a
 	 * per-inserter fast path is a later optimization). */
-	metabuf = ReadBuffer(index, BM25_METAPAGE_BLKNO);
+	metabuf = bm25_readbuf(index, BM25_METAPAGE_BLKNO);
 	LockBuffer(metabuf, BUFFER_LOCK_EXCLUSIVE);
 	metapage = BufferGetPage(metabuf);
 	bm25_check_meta(metapage, index);
@@ -6430,7 +6503,7 @@ bm25_insert(Relation index, Datum *values, bool *isnull,
 	/* Try to append to the current tail page. */
 	if (tailblk != InvalidBlockNumber)
 	{
-		tailbuf = ReadBuffer(index, tailblk);
+		tailbuf = bm25_readbuf(index, tailblk);
 		LockBuffer(tailbuf, BUFFER_LOCK_EXCLUSIVE);
 		tailpage = BufferGetPage(tailbuf);
 		if (((PageHeader) tailpage)->pd_lower + need <=
@@ -6482,7 +6555,7 @@ bm25_insert(Relation index, Datum *values, bool *isnull,
 		/* link previous tail (if any) to the new page */
 		if (tailblk != InvalidBlockNumber)
 		{
-			Buffer		oldtail = ReadBuffer(index, tailblk);
+			Buffer		oldtail = bm25_readbuf(index, tailblk);
 			Page		op;
 
 			LockBuffer(oldtail, BUFFER_LOCK_EXCLUSIVE);
@@ -6578,6 +6651,7 @@ static inline void
 bm25_maintenance_lock(Relation index)
 {
 	LockPage(index, BM25_METAPAGE_BLKNO, ExclusiveLock);
+	bm25_maint_io_begin();		/* maintenance I/O through the ring */
 }
 
 /*
@@ -6603,12 +6677,16 @@ bm25_assert_merge_serialized(Relation index)
 static inline bool
 bm25_maintenance_lock_conditional(Relation index)
 {
-	return ConditionalLockPage(index, BM25_METAPAGE_BLKNO, ExclusiveLock);
+	if (!ConditionalLockPage(index, BM25_METAPAGE_BLKNO, ExclusiveLock))
+		return false;
+	bm25_maint_io_begin();
+	return true;
 }
 
 static inline void
 bm25_maintenance_unlock(Relation index)
 {
+	bm25_maint_io_end();
 	UnlockPage(index, BM25_METAPAGE_BLKNO, ExclusiveLock);
 }
 
@@ -6631,7 +6709,7 @@ bm25_flush_pending(Relation index)
 	BlockNumber blk;
 
 	{
-		Buffer		mb = ReadBuffer(index, BM25_METAPAGE_BLKNO);
+		Buffer		mb = bm25_readbuf(index, BM25_METAPAGE_BLKNO);
 
 		LockBuffer(mb, BUFFER_LOCK_SHARE);
 		bm25_meta_from_page(BufferGetPage(mb), &meta);
@@ -6666,7 +6744,7 @@ bm25_flush_pending(Relation index)
 	blk = meta.pendinghead;
 	while (blk != InvalidBlockNumber)
 	{
-		Buffer		buffer = ReadBuffer(index, blk);
+		Buffer		buffer = bm25_readbuf(index, blk);
 		Page		page;
 		char	   *ptr,
 				   *end;
@@ -6739,7 +6817,7 @@ bm25_flush_pending(Relation index)
 	 * the segment's contribution to avoid a double count.
 	 */
 	{
-		Buffer		mb = ReadBuffer(index, BM25_METAPAGE_BLKNO);
+		Buffer		mb = bm25_readbuf(index, BM25_METAPAGE_BLKNO);
 		GenericXLogState *state;
 		Page		mp;
 		BM25MetaPageData *m;
@@ -6762,7 +6840,7 @@ bm25_flush_pending(Relation index)
 	blk = meta.pendinghead;
 	while (blk != InvalidBlockNumber)
 	{
-		Buffer		buf = ReadBuffer(index, blk);
+		Buffer		buf = bm25_readbuf(index, blk);
 		BlockNumber next;
 
 		LockBuffer(buf, BUFFER_LOCK_SHARE);
@@ -6819,7 +6897,7 @@ bm25_segment_docids(Relation index, const BM25SegMeta *seg)
 	 */
 	while (blk != InvalidBlockNumber)
 	{
-		Buffer		buffer = ReadBuffer(index, blk);
+		Buffer		buffer = bm25_readbuf(index, blk);
 		Page		page;
 		char	   *ptr,
 				   *end;
@@ -6923,7 +7001,7 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	PG_TRY();
 	{
 	{
-		Buffer		mb = ReadBuffer(index, BM25_METAPAGE_BLKNO);
+		Buffer		mb = bm25_readbuf(index, BM25_METAPAGE_BLKNO);
 
 		LockBuffer(mb, BUFFER_LOCK_SHARE);
 		bm25_check_meta(BufferGetPage(mb), index);
@@ -7081,7 +7159,7 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 
 
 			{
-				Buffer		mb = ReadBuffer(index, BM25_METAPAGE_BLKNO);
+				Buffer		mb = bm25_readbuf(index, BM25_METAPAGE_BLKNO);
 				GenericXLogState *st;
 				Page		mp;
 				BM25MetaPageData *m;
@@ -7111,7 +7189,7 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	/* refresh corpus N so IDF/avgdl reflect the deletions */
 	if (tuples_removed > 0)
 	{
-		Buffer		mb = ReadBuffer(index, BM25_METAPAGE_BLKNO);
+		Buffer		mb = bm25_readbuf(index, BM25_METAPAGE_BLKNO);
 		GenericXLogState *st;
 		Page		mp;
 		BM25MetaPageData *m;

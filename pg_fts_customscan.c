@@ -661,6 +661,7 @@ int			pg_fts_test_pause_advisory_key = 0;
 void
 _PG_init(void)
 {
+	RegisterXactCallback(bm25_maint_xact_reset, NULL);
 	bm25_init_reloptions();
 	RegisterCustomScanMethods(&fts_count_scan_methods);
 
