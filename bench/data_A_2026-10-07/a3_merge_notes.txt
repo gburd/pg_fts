@@ -31,3 +31,12 @@
 #   (the "prev" binary of this run is step 1).
 # full 2.19M (build_time.sh): build 121.6 s + fts_vacuum 39.7 s; size 1,489,600,512; count 734,896.
 #   vs approach-a before any merge change: 272.8 + 186.4 s.
+# third step (merge_prof3.sh): fts_merge of 7 segments 86.5 s, pg_qsort still 45%: the
+#   "already ordered" check never fired.  runprobe.sh (temporary elog, server log): in the merge
+#   every large term arrives as exactly 7 ascending runs (one per source segment: the parallel
+#   heap scan interleaves chunks, so the segments' docid ranges overlap); a worker flush's terms
+#   arrive as ~1800 runs (interleaved heap chunks within one worker).
+# Change: count descents; <= 64 runs -> linear k-way merge of the runs; else qsort as before.
+# Identity: live pages byte-identical (positions off/on, v3, tombstoned) vs the step-2 binary.
+# build_time.sh x2 (prev = step 2): build 138.3 / 138.0 -> 110.4 / 110.5 s; fts_vacuum 46.3-46.8
+#   both (the step-2 39.7 s single run did not reproduce; 46 s is the figure).

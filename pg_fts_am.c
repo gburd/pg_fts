@@ -1571,6 +1571,53 @@ typedef struct BM25PostingSort
 	ItemPointerData tid;
 }			BM25PostingSort;
 
+/* the most ascending runs bm25_write_postings merges instead of sorting */
+#define BM25_MERGE_MAX_RUNS 64
+
+/*
+ * Merge the nruns ascending docid runs of v[0..n) into a new array (pfree'ing
+ * v).  A linear scan over the run heads picks the minimum: nruns is small
+ * (<= BM25_MERGE_MAX_RUNS) and it beats a heap at the usual 2-8.  Equal docids
+ * keep run order, as a stable sort would; qsort's order among equal docids is
+ * unspecified, and a term has one posting per document, so there are none.
+ */
+static BM25PostingSort *
+bm25_merge_runs(BM25PostingSort *v, int n, int nruns)
+{
+	int			head[BM25_MERGE_MAX_RUNS],
+				end[BM25_MERGE_MAX_RUNS];
+	int			r = 0,
+				i,
+				o;
+	BM25PostingSort *out;
+
+	out = (BM25PostingSort *) ((Size) n * sizeof(BM25PostingSort) > MaxAllocSize
+							   ? MemoryContextAllocHuge(CurrentMemoryContext,
+														(Size) n * sizeof(BM25PostingSort))
+							   : palloc((Size) n * sizeof(BM25PostingSort)));	/* alloc-ok: huge branch of the > MaxAllocSize ternary */
+	head[0] = 0;
+	for (i = 1; i < n; i++)
+		if (v[i - 1].docid > v[i].docid)
+		{
+			end[r] = i;
+			head[++r] = i;
+		}
+	end[r] = n;
+	Assert(r + 1 == nruns);
+	for (o = 0; o < n; o++)
+	{
+		int			best = -1;
+
+		for (i = 0; i < nruns; i++)
+			if (head[i] < end[i] &&
+				(best < 0 || v[head[i]].docid < v[head[best]].docid))
+				best = i;
+		out[o] = v[head[best]++];
+	}
+	pfree(v);
+	return out;
+}
+
 static int
 cmp_posting_docid(const void *a, const void *b)
 {
@@ -1735,19 +1782,23 @@ bm25_write_postings(BM25PostWriter *pw, BuildTerm *bt,
 		sorted[i].tid = bt->tids[i];
 	}
 	/*
-	 * A merge appends each source's postings in docid order, and parallel-build
-	 * sources cover disjoint heap ranges, so the input is usually sorted
-	 * already: check before sorting (pg_qsort swapping these 40-byte entries
-	 * was a third of a merge, 1.11.0).
+	 * A merge appends each source segment's postings in docid order, so the
+	 * input is a few ascending runs (one per source: 7 for a parallel build's
+	 * collapse), and a single-source flush is one run or, from a parallel
+	 * heap scan's interleaved chunks, many.  Merge a few runs; sort otherwise.
+	 * pg_qsort over these 40-byte entries was 45% of a merge (1.11.0).
 	 */
 	if (bt->nposts > 1)
 	{
-		bool		ordered = true;
+		int			nruns = 1;
 
-		for (i = 1; i < bt->nposts && ordered; i++)
-			ordered = (sorted[i - 1].docid <= sorted[i].docid);
-		if (!ordered)
+		for (i = 1; i < bt->nposts && nruns <= BM25_MERGE_MAX_RUNS; i++)
+			if (sorted[i - 1].docid > sorted[i].docid)
+				nruns++;
+		if (nruns > BM25_MERGE_MAX_RUNS)
 			qsort(sorted, bt->nposts, sizeof(BM25PostingSort), cmp_posting_docid);
+		else if (nruns > 1)
+			sorted = bm25_merge_runs(sorted, bt->nposts, nruns);
 	}
 
 	i = 0;
