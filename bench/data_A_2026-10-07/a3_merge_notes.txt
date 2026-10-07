@@ -52,3 +52,13 @@
 # layout.sh (FSM after a build): bands 0-4 of the file 100% free, band 5 85% free, 6-9 live:
 #   the collapse merge writes extend-only above its inputs, so the build leaves a 2.1 GB free
 #   front that only fts_vacuum's pack (a full rewrite) reclaims.
+# fifth step: pack inside a plain CREATE INDEX / REINDEX (AccessExclusiveLock held), the same
+#   bm25_vacuum_compact fts_vacuum runs, after the collapse.  CIC unchanged.
+# compact_ident.sh (400k serial, 64MB mwm): in-build pack vs build + fts_vacuum -> 387,375,104
+#   bytes both, every live page identical.
+# cic_check.sh: CIC valid, 1,890,869,248 bytes (unpacked, as before), fts_vacuum -> 387,375,104;
+#   live pages identical to the plain in-build pack except the metapage (index OID, generation).
+# build_time2.sh x2 (2.19M, default settings, prev = step 4):
+#   prev: build 78.3 / 78.9 s (3.59 GB) + fts_vacuum 26.3 / 25.9 s -> 1,489,600,512
+#   cur:  build 105.1 / 105.2 s -> 1,489,600,512 directly; fts_vacuum afterwards 0.0 s
+#   (vs approach-a before the merge work: 272.8 s build + 186.4 s fts_vacuum)

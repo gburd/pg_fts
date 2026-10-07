@@ -5163,6 +5163,8 @@ bm25_merge_all(Relation index, bool try_parallel)
  * (each bm25_merge_selected logs a DEBUG1 progress line) instead of a single
  * open-ended collapse.
  */
+static bool bm25_vacuum_compact(Relation index);
+
 static void
 bm25_build_finalize(Relation index)
 {
@@ -5221,6 +5223,19 @@ bm25_build_finalize(Relation index)
 				 RelationGetRelationName(index), nseg, (unsigned long) sizemb,
 				 pg_fts_build_collapse_max_mb);
 		bm25_merge_all(index, false);	/* serial: no parallel re-entry inside ambuild */
+
+		/*
+		 * The collapse writes the merged segment extend-only ABOVE its inputs,
+		 * so the freed inputs are a free region at the FRONT that the tail
+		 * truncation cannot reclaim: a fresh 2.19M-document index was 3.6 GB
+		 * until a manual fts_vacuum packed it to 1.5 GB.  A plain CREATE INDEX
+		 * or REINDEX holds AccessExclusiveLock (no scan can reach the index, so
+		 * the pack may reuse pages this transaction freed): run the same pack
+		 * fts_vacuum does (1.11.0).  CREATE INDEX CONCURRENTLY does not hold
+		 * that lock and keeps the old layout; run fts_vacuum after it.
+		 */
+		if (nseg > 1 && CheckRelationLockedByMe(index, AccessExclusiveLock, true))
+			(void) bm25_vacuum_compact(index);
 	}
 	else
 		elog(LOG, "pg_fts build: index \"%s\": leaving %d size-tiered segments (%lu MB > collapse cap %d MB); run fts_merge('%s') to collapse to one",

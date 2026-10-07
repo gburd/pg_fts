@@ -651,9 +651,13 @@ SELECT * FROM messages
    <emphasis>contiguous</emphasis> free tail, so pages freed underneath the final
    output survive until <function>fts_vacuum</function>'s compaction pass relocates
    live data toward the front of the file.  Live pages are ~98.8% full, so this is
-   not a packing inefficiency.  <emphasis role="bold">Run
-   <function>fts_vacuum</function> once after a large build, and do not judge the
-   index's size before you do.</emphasis>
+   not a packing inefficiency.  Since 1.11.0 a plain <command>CREATE INDEX</command>
+   or <command>REINDEX</command>, which holds the index exclusively, runs that
+   compaction itself at the end of the build, so the new index is already at its
+   packed size.  <emphasis role="bold">After <command>CREATE INDEX
+   CONCURRENTLY</command>, run <function>fts_vacuum</function> once, and do not judge
+   the index's size before you do</emphasis>: a concurrent build cannot reuse pages
+   it freed while other sessions may be reading.
   </para>
 
   <para>
