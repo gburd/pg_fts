@@ -1,0 +1,9 @@
+pg_fts-installcheck> # All 11 tests passed.
+pg_fts-installcheck> # All 2 tests passed.
+pg_fts-installcheck> # All 11 tests passed.
+pg_fts-installcheck> # All 2 tests passed.
+pg_fts-tap> Files=8, Tests=94, 181 wallclock secs ( 0.71 usr  0.03 sys +  6.37 cusr  3.50 csys = 10.61 CPU)
+pg_fts-tap> Result: PASS
+pg_fts-tap> Files=8, Tests=94, 181 wallclock secs ( 0.76 usr  0.04 sys +  6.27 cusr  3.43 csys = 10.50 CPU)
+pg_fts-tap> Result: PASS
+EXIT=0

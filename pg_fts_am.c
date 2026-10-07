@@ -820,10 +820,12 @@ bm25_maint_xact_reset(XactEvent event, void *arg)
  * continues on a recycled or interleaved page) is where read-ahead cannot help.
  */
 static inline void
-bm25_chain_prefetch(Relation index, BlockNumber blk, BlockNumber next,
-					BlockNumber nblocks)
+bm25_chain_prefetch(Relation index, BlockNumber blk, BlockNumber next)
 {
-	if (next != InvalidBlockNumber && next < nblocks && next != blk + 1)
+	/* the relation size is read only for a jump: an smgr size lookup per
+	 * page of every chain walk cost 9% of a count(*) (1.11.0 development) */
+	if (next != InvalidBlockNumber && next != blk + 1 &&
+		next < RelationGetNumberOfBlocks(index))
 		PrefetchBuffer(index, MAIN_FORKNUM, next);
 }
 
@@ -951,7 +953,7 @@ bm25_decode_term(Relation index, BlockNumber firstblk, uint32 firstoff,
 		page = BufferGetPage(buf);
 		pend = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
-		bm25_chain_prefetch(index, blk, next, RelationGetNumberOfBlocks(index));
+		bm25_chain_prefetch(index, blk, next);
 		p = (char *) page + off;
 		while (p + sizeof(BM25BlockHdr) <= pend && n < (int) df)
 		{
@@ -2262,7 +2264,7 @@ bm25_doclens_load(Relation index, BlockNumber doclenstart, BM25Doclens *d)
 		next = BM25PageGetOpaque(page)->nextblk;
 		/* a cold ranked query read all 643 sidecar pages of a 2.19M index one
 		 * synchronous read at a time (1.11.0) */
-		bm25_chain_prefetch(index, blk, next, nblocks);
+		bm25_chain_prefetch(index, blk, next);
 
 		while (ptr + sizeof(BM25DoclenBlockHdr) <= end)
 		{
@@ -3807,8 +3809,7 @@ merge_source_load_page(MergeSource *src)
 		ptr = (char *) PageGetContents(page);
 		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
-		bm25_chain_prefetch(src->index, src->nextblk, next,
-							RelationGetNumberOfBlocks(src->index));
+		bm25_chain_prefetch(src->index, src->nextblk, next);
 
 		/*
 		 * BOUNDS-GUARD pd_lower before walking, same contract as the posting and
@@ -6933,7 +6934,7 @@ bm25_segment_docids(Relation index, const BM25SegMeta *seg)
 		ptr = (char *) PageGetContents(page);
 		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
-		bm25_chain_prefetch(index, blk, next, RelationGetNumberOfBlocks(index));
+		bm25_chain_prefetch(index, blk, next);
 		while (ptr < end)
 		{
 			BM25DictEntry *de = (BM25DictEntry *) ptr;

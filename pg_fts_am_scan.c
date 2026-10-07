@@ -438,7 +438,7 @@ bm25_dict_seek(Relation index, const BM25SegMeta *seg,
 		ptr = (char *) PageGetContents(page);
 		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
-		bm25_chain_prefetch(index, iblk, next, RelationGetNumberOfBlocks(index));
+		bm25_chain_prefetch(index, iblk, next);
 		while (ptr + offsetof(BM25DictIndexEntry, term) <= end &&
 			   n < (int) lengthof(offs))
 		{
@@ -789,7 +789,7 @@ bm25_lookup_prefix(Relation index, const BM25SegMeta *seg,
 		ptr = (char *) PageGetContents(page);
 		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
-		bm25_chain_prefetch(index, blk, next, RelationGetNumberOfBlocks(index));
+		bm25_chain_prefetch(index, blk, next);
 
 		while (ptr < end)
 		{
@@ -1041,7 +1041,7 @@ bm25_fuzzy_terms(Relation index, const BM25SegMeta *seg,
 		ptr = (char *) PageGetContents(page);
 		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
-		bm25_chain_prefetch(index, blk, next, RelationGetNumberOfBlocks(index));
+		bm25_chain_prefetch(index, blk, next);
 
 		while (ptr < end)
 		{
@@ -1313,7 +1313,7 @@ bm25_universe_bounded(Relation index, BlockNumber dictstart, double ndocs,
 		ptr = (char *) PageGetContents(page);
 		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
-		bm25_chain_prefetch(index, blk, next, RelationGetNumberOfBlocks(index));
+		bm25_chain_prefetch(index, blk, next);
 
 		while (ptr < end)
 		{
@@ -2253,7 +2253,7 @@ bm25_collect_pending(Relation index, const BM25MetaPageData *meta,
 		ptr = (char *) PageGetContents(page);
 		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
-		bm25_chain_prefetch(index, blk, next, RelationGetNumberOfBlocks(index));
+		bm25_chain_prefetch(index, blk, next);
 
 		while (ptr < end)
 		{
@@ -2675,7 +2675,7 @@ bm25_lookup_dict(Relation index, const BM25SegMeta *seg,
 		ptr = (char *) PageGetContents(page);
 		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
-		bm25_chain_prefetch(index, blk, next, RelationGetNumberOfBlocks(index));
+		bm25_chain_prefetch(index, blk, next);
 
 		while (ptr < end)
 		{
@@ -2739,7 +2739,7 @@ bm25_lookup_df(Relation index, const BM25SegMeta *seg,
 		ptr = (char *) PageGetContents(page);
 		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
-		bm25_chain_prefetch(index, blk, next, RelationGetNumberOfBlocks(index));
+		bm25_chain_prefetch(index, blk, next);
 
 		while (ptr < end)
 		{
@@ -3203,8 +3203,7 @@ wand_load_block(WandCursor *c)
 		 * the cursor will keep reading, where the link may never be followed.
 		 */
 		if (c->curblk != BufferGetBlockNumber(buf) && c->nread + cnt < (int) c->df)
-			bm25_chain_prefetch(c->index, BufferGetBlockNumber(buf), c->curblk,
-								RelationGetNumberOfBlocks(c->index));
+			bm25_chain_prefetch(c->index, BufferGetBlockNumber(buf), c->curblk);
 	}
 	c->nread += cnt;
 	UnlockReleaseBuffer(buf);
@@ -4577,7 +4576,7 @@ bestfirst_collect(WandCursor *c, BestFirstBlock **out)
 		/* this walk reads every page of the term's chain: read ahead along
 		 * it (a one-page prefetch left a cold common-term top-10 36 ms in
 		 * this loop against 10 ms for the dense path's windowed read-ahead) */
-		bm25_chain_prefetch(c->index, blk, next, nrel);
+		bm25_chain_prefetch(c->index, blk, next);
 		p = (char *) page + off;
 		while (p + sizeof(BM25BlockHdr) <= pend && nread < (int) c->df)
 		{
