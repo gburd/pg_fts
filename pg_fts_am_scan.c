@@ -767,6 +767,7 @@ static void
 bm25_lookup_prefix(Relation index, const BM25SegMeta *seg,
 				   const char *prefix, int prefixlen, TidSet *out)
 {
+	BlockNumber pfhi = 0;		/* chain prefetch high-water (bm25_chain_prefetch) */
 	BlockNumber blk = bm25_dict_seek(index, seg, prefix, prefixlen);
 	int			cap = 32;
 	int			n = 0;
@@ -790,6 +791,7 @@ bm25_lookup_prefix(Relation index, const BM25SegMeta *seg,
 		ptr = (char *) PageGetContents(page);
 		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
+		bm25_chain_prefetch(index, blk, next, RelationGetNumberOfBlocks(index), &pfhi);
 
 		while (ptr < end)
 		{
@@ -995,6 +997,7 @@ static bool
 bm25_fuzzy_terms(Relation index, const BM25SegMeta *seg,
 				 const char *term, int termlen, int k, TidSet *out)
 {
+	BlockNumber pfhi = 0;		/* chain prefetch high-water (bm25_chain_prefetch) */
 	FtsLevAut	aut;
 	BlockNumber blk;
 	ItemPointerData *tids;
@@ -1041,6 +1044,7 @@ bm25_fuzzy_terms(Relation index, const BM25SegMeta *seg,
 		ptr = (char *) PageGetContents(page);
 		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
+		bm25_chain_prefetch(index, blk, next, RelationGetNumberOfBlocks(index), &pfhi);
 
 		while (ptr < end)
 		{
@@ -1275,6 +1279,7 @@ static TidSet
 bm25_universe_bounded(Relation index, BlockNumber dictstart, double ndocs,
 					  bool has_doclen_col)
 {
+	BlockNumber pfhi = 0;		/* chain prefetch high-water (bm25_chain_prefetch) */
 	TidSet		u;
 	BlockNumber blk = dictstart;
 	int			cap = 64;
@@ -1312,6 +1317,7 @@ bm25_universe_bounded(Relation index, BlockNumber dictstart, double ndocs,
 		ptr = (char *) PageGetContents(page);
 		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
+		bm25_chain_prefetch(index, blk, next, RelationGetNumberOfBlocks(index), &pfhi);
 
 		while (ptr < end)
 		{
@@ -2232,6 +2238,7 @@ static void
 bm25_collect_pending(Relation index, const BM25MetaPageData *meta,
 					 FtsQuery query, TidSet *out)
 {
+	BlockNumber pfhi = 0;		/* chain prefetch high-water (bm25_chain_prefetch) */
 	BlockNumber blk = meta->pendinghead;
 
 	while (blk != InvalidBlockNumber)
@@ -2251,6 +2258,7 @@ bm25_collect_pending(Relation index, const BM25MetaPageData *meta,
 		ptr = (char *) PageGetContents(page);
 		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
+		bm25_chain_prefetch(index, blk, next, RelationGetNumberOfBlocks(index), &pfhi);
 
 		while (ptr < end)
 		{
@@ -2651,6 +2659,7 @@ bm25_lookup_dict(Relation index, const BM25SegMeta *seg,
 				 uint32 *df, uint32 *max_tf, BlockNumber *firstposting,
 				 uint32 *firstoffset)
 {
+	BlockNumber pfhi = 0;		/* chain prefetch high-water (bm25_chain_prefetch) */
 	BlockNumber blk = bm25_dict_seek(index, seg, term, termlen);
 	bool		onlyone = (seg->dictindexstart != InvalidBlockNumber);
 
@@ -2672,6 +2681,7 @@ bm25_lookup_dict(Relation index, const BM25SegMeta *seg,
 		ptr = (char *) PageGetContents(page);
 		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
+		bm25_chain_prefetch(index, blk, next, RelationGetNumberOfBlocks(index), &pfhi);
 
 		while (ptr < end)
 		{
@@ -2713,6 +2723,7 @@ static uint32
 bm25_lookup_df(Relation index, const BM25SegMeta *seg,
 			   const char *term, int termlen)
 {
+	BlockNumber pfhi = 0;		/* chain prefetch high-water (bm25_chain_prefetch) */
 	BlockNumber blk = bm25_dict_seek(index, seg, term, termlen);
 	bool		onlyone = (seg->dictindexstart != InvalidBlockNumber);
 
@@ -2735,6 +2746,7 @@ bm25_lookup_df(Relation index, const BM25SegMeta *seg,
 		ptr = (char *) PageGetContents(page);
 		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
+		bm25_chain_prefetch(index, blk, next, RelationGetNumberOfBlocks(index), &pfhi);
 
 		while (ptr < end)
 		{
@@ -3191,6 +3203,15 @@ wand_load_block(WandCursor *c)
 			c->curblk = BM25PageGetOpaque(page)->nextblk;
 			c->curoff = MAXALIGN(SizeOfPageHeaderData);
 		}
+		/*
+		 * The current page's last block was just taken: the cursor's next read
+		 * is the next page of the chain, known now (1.11.0).  Not issued on a
+		 * page the cursor will keep reading, where the chain link may never be
+		 * followed (the scan can stop or skip past it).
+		 */
+		if (c->curblk != BufferGetBlockNumber(buf) &&
+			c->curblk != InvalidBlockNumber && c->nread + cnt < (int) c->df)
+			PrefetchBuffer(c->index, MAIN_FORKNUM, c->curblk);
 	}
 	c->nread += cnt;
 	UnlockReleaseBuffer(buf);
@@ -3855,6 +3876,43 @@ phrase_gate_admits(PhraseGate *g, WandCursor *cursors, int nterms, uint64 pivot_
  * threshold math -- filtered docs simply never reach the heap (and so never
  * raise the threshold).
  */
+/*
+ * A document's score is the sum of its terms' contributions IN QUERY-TERM
+ * ORDER, on every path (1.11.0).  Floating-point addition is not associative:
+ * BMW summed in cursor order, which its selection sort leaves arbitrary among
+ * equal docids, so a 3-term score could differ in the last bit between two
+ * traversals of the same query (the lazy phrase gate and the collect path
+ * disagreed on 46 of 199 scores).  acc[] holds one slot per query term
+ * (contributions are > 0: idf > 0 and tf >= 1); this adds the touched slots in
+ * term order and clears them.
+ */
+static inline double
+sum_term_order(double *acc, int nq)
+{
+	double		s = 0.0;
+	int			t;
+
+	for (t = 0; t < nq; t++)
+		if (acc[t] != 0.0)
+		{
+			s += acc[t];
+			acc[t] = 0.0;
+		}
+	return s;
+}
+
+/* one past the largest query-term ordinal among the cursors */
+static int
+cursors_nq(const WandCursor *cursors, int nterms)
+{
+	int			nq = 0,
+				i;
+
+	for (i = 0; i < nterms; i++)
+		nq = Max(nq, cursors[i].termidx + 1);
+	return nq;
+}
+
 static int
 fts_search_bmw(WandCursor *cursors, int nterms, int k, const DocidFilter *filter,
 			   BoolGate *gate, ScoredTid **out)
@@ -3863,6 +3921,8 @@ fts_search_bmw(WandCursor *cursors, int nterms, int k, const DocidFilter *filter
 	int			nheap = 0;
 	double		threshold = 0.0;
 	int			t;
+	int			nq = cursors_nq(cursors, nterms);
+	double	   *acc = (double *) palloc0(Max(nq, 1) * sizeof(double));	/* alloc-ok: nq = query term count */
 
 	heap = (ScoredTid *) palloc(Max(k, 1) * sizeof(ScoredTid));
 
@@ -4036,10 +4096,10 @@ fts_search_bmw(WandCursor *cursors, int nterms, int k, const DocidFilter *filter
 
 			bm25_docid_to_tid(pivot_docid, &tid);
 
-			score = 0.0;
 			for (i = 0; i < nterms; i++)
 				if (cursors[i].docid == pivot_docid)
-					score += wand_contrib_cur(&cursors[i]);
+					acc[cursors[i].termidx] += wand_contrib_cur(&cursors[i]);
+			score = sum_term_order(acc, nq);
 
 			/* push into the top-k min-heap -- but only if the docid is admitted
 			 * by the boolean match-set gate.  Two equivalent gates:
@@ -4123,6 +4183,7 @@ fts_search_bmw(WandCursor *cursors, int nterms, int k, const DocidFilter *filter
 		bm25_doclen_cursor_free(&cursors[t].doclenc);
 	}
 
+	pfree(acc);
 	qsort(heap, nheap, sizeof(ScoredTid), cmp_scored_desc);
 	*out = heap;
 	return nheap;
@@ -4153,6 +4214,8 @@ fts_search_maxscore(WandCursor *cursors, int nterms, int k,
 				i,
 				j;
 	int			first_essential;	/* cursors[first_essential..) are essential */
+	int			nq = cursors_nq(cursors, nterms);
+	double	   *acc = (double *) palloc0(Max(nq, 1) * sizeof(double));	/* alloc-ok: nq = query term count */
 
 	heap = (ScoredTid *) palloc(Max(k, 1) * sizeof(ScoredTid));
 	suffix = (double *) palloc((nterms + 1) * sizeof(double));	/* alloc-ok: nterms = query term count */
@@ -4211,24 +4274,33 @@ fts_search_maxscore(WandCursor *cursors, int nterms, int k,
 		if (cand == UINT64_MAX)
 			break;				/* essential cursors exhausted */
 
-		/* score cand: essential contributions + upper bound of non-essentials */
+		/* score cand: essential contributions + upper bound of non-essentials;
+		 * the exact score is summed in query-term order (sum_term_order) */
 		score = 0.0;
 		for (i = first_essential; i < nterms; i++)
 			if (cursors[i].docid == cand)
-				score += wand_contrib_cur(&cursors[i]);
+			{
+				double		c = wand_contrib_cur(&cursors[i]);
+
+				score += c;
+				acc[cursors[i].termidx] += c;
+			}
 
 		/* early-exit check: essential score + every non-essential term's max
 		 * (prefix sum over [0, first_essential)) <= threshold => cand cannot
 		 * make the top-k, skip the non-essential lookups */
-		if (!(nheap >= k && score + suffix[first_essential] <= threshold))
+		if (nheap >= k && score + suffix[first_essential] <= threshold)
+			(void) sum_term_order(acc, nq);	/* clears acc */
+		else
 		{
 			/* add exact non-essential contributions by seeking to cand */
 			for (i = 0; i < first_essential; i++)
 			{
 				wand_seek(&cursors[i], cand);
 				if (cursors[i].docid == cand)
-					score += wand_contrib_cur(&cursors[i]);
+					acc[cursors[i].termidx] += wand_contrib_cur(&cursors[i]);
 			}
+			score = sum_term_order(acc, nq);
 
 			/* gate heap admission by the boolean match-set (DocidFilter for
 			 * non-pure-boolean, or the lazy BoolGate over term-presence at cand
@@ -4295,6 +4367,7 @@ fts_search_maxscore(WandCursor *cursors, int nterms, int k,
 		bm25_doclen_cursor_free(&cursors[t].doclenc);
 	}
 
+	pfree(acc);
 	qsort(heap, nheap, sizeof(ScoredTid), cmp_scored_desc);
 	*out = heap;
 	return nheap;
@@ -5527,6 +5600,8 @@ bm25_topk_visible(Relation index, FtsQuery q, int k, bool as_distance,
 	int			i;
 	int			wantk = Max(k * 4, 64);
 	int			wantk_cap;
+	int			pfwin,
+				pfnext;
 	Snapshot	snap = GetActiveSnapshot();
 	Relation	heap;
 	IndexFetchTableData *fetch;
@@ -5588,12 +5663,30 @@ bm25_topk_visible(Relation index, FtsQuery q, int k, bool as_distance,
 #else
 		fetch = table_index_fetch_begin(heap);
 #endif
+		/*
+		 * Prefetch the candidates' heap blocks a window ahead of the
+		 * visibility check (1.11.0): the fetches are in score order, so their
+		 * heap blocks are scattered, and a cold heap read per row was the whole
+		 * cost of a cold ranked query.  The window is the heap tablespace's
+		 * effective_io_concurrency; PrefetchBuffer is a no-op for a resident
+		 * block and for a build without posix_fadvise.
+		 */
+		pfwin = get_tablespace_io_concurrency(heap->rd_rel->reltablespace);
+		pfnext = 0;
 		for (i = 0; i < ncand && nvis < k; i++)
 		{
 			ItemPointerData tid = cand[i].tid;
 			bool		call_again = false;
 			bool		all_dead = false;
-			TupleTableSlot *slot = table_slot_create(heap, NULL);
+			TupleTableSlot *slot;
+
+			while (pfnext < ncand && pfnext <= i + pfwin)
+			{
+				PrefetchBuffer(heap, MAIN_FORKNUM,
+							   ItemPointerGetBlockNumber(&cand[pfnext].tid));
+				pfnext++;
+			}
+			slot = table_slot_create(heap, NULL);
 
 			if (table_index_fetch_tuple(fetch, &tid, snap, slot,
 										&call_again, &all_dead))

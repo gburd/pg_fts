@@ -65,6 +65,7 @@
 #include "optimizer/cost.h"
 #include "optimizer/optimizer.h"
 #include "pgstat.h"
+#include "utils/spccache.h"	/* get_tablespace_io_concurrency (heap prefetch) */
 #include "storage/bufmgr.h"
 #include "storage/buffile.h"
 #include "portability/instr_time.h"
@@ -808,6 +809,41 @@ bm25_maint_xact_reset(XactEvent event, void *arg)
 		bm25_maint_depth = 0;
 }
 
+/*
+ * Prefetch along a page chain whose next link is `next` (1.11.0).  The next
+ * link is always prefetched.  A writer appends a chain's pages in order, so
+ * when this link is contiguous (next == blk + 1) the following blocks are
+ * likely the next links too: prefetch up to the index tablespace's
+ * effective_io_concurrency blocks past it.  *pfhi (start at 0: block 0 is the
+ * metapage, never on a chain) is the highest block already prefetched, so no
+ * block is prefetched twice.  A wrong guess costs one read of a block that
+ * would have been read later anyway, or not at all; never a wrong result.
+ */
+static inline void
+bm25_chain_prefetch(Relation index, BlockNumber blk, BlockNumber next,
+					BlockNumber nblocks, BlockNumber *pfhi)
+{
+	BlockNumber b,
+				lim;
+	int			window;
+
+	if (next == InvalidBlockNumber || next >= nblocks)
+		return;
+	if (next > *pfhi)
+	{
+		PrefetchBuffer(index, MAIN_FORKNUM, next);
+		*pfhi = next;
+	}
+	if (next != blk + 1)
+		return;
+	window = get_tablespace_io_concurrency(index->rd_rel->reltablespace);
+	lim = (next + (BlockNumber) window < nblocks) ? next + (BlockNumber) window : nblocks - 1;
+	for (b = *pfhi + 1; b <= lim; b++)
+		PrefetchBuffer(index, MAIN_FORKNUM, b);
+	if (lim > *pfhi)
+		*pfhi = lim;
+}
+
 /* ReadBuffer through the maintenance ring when one is active. */
 static inline Buffer
 bm25_readbuf(Relation index, BlockNumber blk)
@@ -847,6 +883,7 @@ bm25_decode_term(Relation index, BlockNumber firstblk, uint32 firstoff,
 				 bool want_positions, uint32 **posarena, bool docids_only,
 				 bool has_doclen_col)
 {
+	BlockNumber pfhi = 0;		/* chain prefetch high-water (bm25_chain_prefetch) */
 	BM25Posting *posts;
 	uint32	   *bmax = NULL;
 	uint32	   *parena = NULL;
@@ -932,6 +969,7 @@ bm25_decode_term(Relation index, BlockNumber firstblk, uint32 firstoff,
 		page = BufferGetPage(buf);
 		pend = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
+		bm25_chain_prefetch(index, blk, next, RelationGetNumberOfBlocks(index), &pfhi);
 		p = (char *) page + off;
 		while (p + sizeof(BM25BlockHdr) <= pend && n < (int) df)
 		{
@@ -2199,6 +2237,7 @@ bm25_doclens_load(Relation index, BlockNumber doclenstart, BM25Doclens *d)
 	int			cap = 0;
 	BlockNumber nblocks;
 	uint32		visited = 0;
+	BlockNumber pfhi = 0;
 
 	d->docids = NULL;
 	d->bytes = NULL;
@@ -2240,6 +2279,9 @@ bm25_doclens_load(Relation index, BlockNumber doclenstart, BM25Doclens *d)
 		ptr = (char *) page + MAXALIGN(SizeOfPageHeaderData);
 		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
+		/* a cold ranked query read all 643 sidecar pages of a 2.19M index one
+		 * synchronous read at a time (1.11.0) */
+		bm25_chain_prefetch(index, blk, next, nblocks, &pfhi);
 
 		while (ptr + sizeof(BM25DoclenBlockHdr) <= end)
 		{
@@ -3749,6 +3791,7 @@ typedef struct MergeSource
 	uint8	   *slot_byte;
 	BlockNumber slot_minblk;
 	uint32		slot_nblk;
+	BlockNumber pfhi;				/* dict-chain prefetch high-water (bm25_chain_prefetch) */
 } MergeSource;
 
 /*
@@ -3784,6 +3827,8 @@ merge_source_load_page(MergeSource *src)
 		ptr = (char *) PageGetContents(page);
 		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
+		bm25_chain_prefetch(src->index, src->nextblk, next,
+							RelationGetNumberOfBlocks(src->index), &src->pfhi);
 
 		/*
 		 * BOUNDS-GUARD pd_lower before walking, same contract as the posting and
@@ -3907,6 +3952,7 @@ merge_source_open(Relation index, const BM25SegMeta *seg, MergeSource *src,
 
 	src->index = index;
 	src->ctx = ctx;
+	src->pfhi = 0;
 	src->nextblk = seg->dictstart;
 	src->page = NULL;
 	src->pagebytes = NULL;
@@ -6866,6 +6912,7 @@ bm25_flush_pending(Relation index)
 static sm_t *
 bm25_segment_docids(Relation index, const BM25SegMeta *seg)
 {
+	BlockNumber pfhi = 0;		/* chain prefetch high-water (bm25_chain_prefetch) */
 	sm_t	   *seen = sm_create(256);
 	sm_t *volatile seen_v;
 	BlockNumber blk = seg->dictstart;
@@ -6908,6 +6955,7 @@ bm25_segment_docids(Relation index, const BM25SegMeta *seg)
 		ptr = (char *) PageGetContents(page);
 		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
+		bm25_chain_prefetch(index, blk, next, RelationGetNumberOfBlocks(index), &pfhi);
 		while (ptr < end)
 		{
 			BM25DictEntry *de = (BM25DictEntry *) ptr;
