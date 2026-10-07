@@ -412,8 +412,8 @@ bm25_dict_seek(Relation index, const BM25SegMeta *seg,
 	 * variable length, so a page is searched by first collecting its entry
 	 * offsets (one pass over the page, no comparisons), then binary searching
 	 * them.  The chain is walked page by page only while the term sorts after
-	 * the page's last entry, and the next page is prefetched while this one is
-	 * searched.  1.10.0 compared the term against every entry of every page up
+	 * the page's last entry (the next page is prefetched only where the chain
+	 * jumps, see bm25_chain_prefetch).  1.10.0 compared the term against every entry of every page up
 	 * to the target: ~31k memcmp per lookup on 2.19M Wikipedia (91 index
 	 * pages, 31k dictionary pages), twice per query term -- 21% of a common-term
 	 * top-10 once the posting walk itself became cheap (perf, 2026-10-07).
@@ -438,8 +438,7 @@ bm25_dict_seek(Relation index, const BM25SegMeta *seg,
 		ptr = (char *) PageGetContents(page);
 		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
-		if (next != InvalidBlockNumber)
-			PrefetchBuffer(index, MAIN_FORKNUM, next);
+		bm25_chain_prefetch(index, iblk, next, RelationGetNumberOfBlocks(index));
 		while (ptr + offsetof(BM25DictIndexEntry, term) <= end &&
 			   n < (int) lengthof(offs))
 		{
@@ -767,7 +766,6 @@ static void
 bm25_lookup_prefix(Relation index, const BM25SegMeta *seg,
 				   const char *prefix, int prefixlen, TidSet *out)
 {
-	BlockNumber pfhi = 0;		/* chain prefetch high-water (bm25_chain_prefetch) */
 	BlockNumber blk = bm25_dict_seek(index, seg, prefix, prefixlen);
 	int			cap = 32;
 	int			n = 0;
@@ -791,7 +789,7 @@ bm25_lookup_prefix(Relation index, const BM25SegMeta *seg,
 		ptr = (char *) PageGetContents(page);
 		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
-		bm25_chain_prefetch(index, blk, next, RelationGetNumberOfBlocks(index), &pfhi);
+		bm25_chain_prefetch(index, blk, next, RelationGetNumberOfBlocks(index));
 
 		while (ptr < end)
 		{
@@ -997,7 +995,6 @@ static bool
 bm25_fuzzy_terms(Relation index, const BM25SegMeta *seg,
 				 const char *term, int termlen, int k, TidSet *out)
 {
-	BlockNumber pfhi = 0;		/* chain prefetch high-water (bm25_chain_prefetch) */
 	FtsLevAut	aut;
 	BlockNumber blk;
 	ItemPointerData *tids;
@@ -1044,7 +1041,7 @@ bm25_fuzzy_terms(Relation index, const BM25SegMeta *seg,
 		ptr = (char *) PageGetContents(page);
 		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
-		bm25_chain_prefetch(index, blk, next, RelationGetNumberOfBlocks(index), &pfhi);
+		bm25_chain_prefetch(index, blk, next, RelationGetNumberOfBlocks(index));
 
 		while (ptr < end)
 		{
@@ -1279,7 +1276,6 @@ static TidSet
 bm25_universe_bounded(Relation index, BlockNumber dictstart, double ndocs,
 					  bool has_doclen_col)
 {
-	BlockNumber pfhi = 0;		/* chain prefetch high-water (bm25_chain_prefetch) */
 	TidSet		u;
 	BlockNumber blk = dictstart;
 	int			cap = 64;
@@ -1317,7 +1313,7 @@ bm25_universe_bounded(Relation index, BlockNumber dictstart, double ndocs,
 		ptr = (char *) PageGetContents(page);
 		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
-		bm25_chain_prefetch(index, blk, next, RelationGetNumberOfBlocks(index), &pfhi);
+		bm25_chain_prefetch(index, blk, next, RelationGetNumberOfBlocks(index));
 
 		while (ptr < end)
 		{
@@ -2238,7 +2234,6 @@ static void
 bm25_collect_pending(Relation index, const BM25MetaPageData *meta,
 					 FtsQuery query, TidSet *out)
 {
-	BlockNumber pfhi = 0;		/* chain prefetch high-water (bm25_chain_prefetch) */
 	BlockNumber blk = meta->pendinghead;
 
 	while (blk != InvalidBlockNumber)
@@ -2258,7 +2253,7 @@ bm25_collect_pending(Relation index, const BM25MetaPageData *meta,
 		ptr = (char *) PageGetContents(page);
 		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
-		bm25_chain_prefetch(index, blk, next, RelationGetNumberOfBlocks(index), &pfhi);
+		bm25_chain_prefetch(index, blk, next, RelationGetNumberOfBlocks(index));
 
 		while (ptr < end)
 		{
@@ -2659,7 +2654,6 @@ bm25_lookup_dict(Relation index, const BM25SegMeta *seg,
 				 uint32 *df, uint32 *max_tf, BlockNumber *firstposting,
 				 uint32 *firstoffset)
 {
-	BlockNumber pfhi = 0;		/* chain prefetch high-water (bm25_chain_prefetch) */
 	BlockNumber blk = bm25_dict_seek(index, seg, term, termlen);
 	bool		onlyone = (seg->dictindexstart != InvalidBlockNumber);
 
@@ -2681,7 +2675,7 @@ bm25_lookup_dict(Relation index, const BM25SegMeta *seg,
 		ptr = (char *) PageGetContents(page);
 		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
-		bm25_chain_prefetch(index, blk, next, RelationGetNumberOfBlocks(index), &pfhi);
+		bm25_chain_prefetch(index, blk, next, RelationGetNumberOfBlocks(index));
 
 		while (ptr < end)
 		{
@@ -2723,7 +2717,6 @@ static uint32
 bm25_lookup_df(Relation index, const BM25SegMeta *seg,
 			   const char *term, int termlen)
 {
-	BlockNumber pfhi = 0;		/* chain prefetch high-water (bm25_chain_prefetch) */
 	BlockNumber blk = bm25_dict_seek(index, seg, term, termlen);
 	bool		onlyone = (seg->dictindexstart != InvalidBlockNumber);
 
@@ -2746,7 +2739,7 @@ bm25_lookup_df(Relation index, const BM25SegMeta *seg,
 		ptr = (char *) PageGetContents(page);
 		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
-		bm25_chain_prefetch(index, blk, next, RelationGetNumberOfBlocks(index), &pfhi);
+		bm25_chain_prefetch(index, blk, next, RelationGetNumberOfBlocks(index));
 
 		while (ptr < end)
 		{
@@ -3205,13 +3198,13 @@ wand_load_block(WandCursor *c)
 		}
 		/*
 		 * The current page's last block was just taken: the cursor's next read
-		 * is the next page of the chain, known now (1.11.0).  Not issued on a
-		 * page the cursor will keep reading, where the chain link may never be
-		 * followed (the scan can stop or skip past it).
+		 * is the next page of the chain, known now (1.11.0); prefetched only
+		 * when the chain jumps (bm25_chain_prefetch).  Not issued on a page
+		 * the cursor will keep reading, where the link may never be followed.
 		 */
-		if (c->curblk != BufferGetBlockNumber(buf) &&
-			c->curblk != InvalidBlockNumber && c->nread + cnt < (int) c->df)
-			PrefetchBuffer(c->index, MAIN_FORKNUM, c->curblk);
+		if (c->curblk != BufferGetBlockNumber(buf) && c->nread + cnt < (int) c->df)
+			bm25_chain_prefetch(c->index, BufferGetBlockNumber(buf), c->curblk,
+								RelationGetNumberOfBlocks(c->index));
 	}
 	c->nread += cnt;
 	UnlockReleaseBuffer(buf);
@@ -4581,9 +4574,10 @@ bestfirst_collect(WandCursor *c, BestFirstBlock **out)
 		page = BufferGetPage(buf);
 		pend = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
-		/* prefetch the next page of the chain while we parse this one */
-		if (next != InvalidBlockNumber && next < nrel)
-			PrefetchBuffer(c->index, MAIN_FORKNUM, next);
+		/* this walk reads every page of the term's chain: read ahead along
+		 * it (a one-page prefetch left a cold common-term top-10 36 ms in
+		 * this loop against 10 ms for the dense path's windowed read-ahead) */
+		bm25_chain_prefetch(c->index, blk, next, nrel);
 		p = (char *) page + off;
 		while (p + sizeof(BM25BlockHdr) <= pend && nread < (int) c->df)
 		{
