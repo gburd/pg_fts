@@ -71,10 +71,11 @@ all); pg_search is the only competitor with comparable breadth.
 | WAL-logged / crash-safe | **Yes** (all writes via GenericXLog) | *n/t* | *n/t* | *n/t* |
 | Physical-replication safe (failover tested) | **Yes** (`t/002`) | *n/t* | *n/t* | *n/t* |
 
-**Read:** the stemming row is the important one. pg_search's speed advantage is
-partly a different (smaller) unit of work — it does not stem, so `year` matches
-495,580 documents where the correct English answer is 734,896, confirmed by regex
-on the raw text.
+**Read:** stemming depends on configuration. pg_search's default tokenizer does not stem:
+in the September measurement `year` matched 495,580 documents where the English answer is
+734,896 (regex on the raw text), so part of its speed then came from a smaller unit of
+work. With `stemmer=english` (0.26.0, 2026-10-07) it matches 735,955, within 0.3% of the
+regex, and the current comparison below uses that configuration.
 
 ## Performance (2.19M Wikipedia articles, identical single column)
 
@@ -91,25 +92,27 @@ on the raw text.
 
 **Caution: the pg_fts column above used `fts_search()`; the competitors used `ORDER BY`
 forms** (see the retraction in CHANGELOG 1.8.6). pg_fts and pg_textsearch have both moved
-since. Current head-to-head, 2026-10-06, both engines using `ORDER BY` forms, one engine
-per host, same hardware and corpus (`bench/RESULTS_191_2026-10-06.md`):
+since. Current head-to-head, 2026-10-07: all four engines at their latest release, one AWS
+r7gd.4xlarge (Graviton3) per engine, Debian 13 arm64, PostgreSQL 17.10, each engine's
+documented English index and query form (`bench/RESULTS_110_2026-10-07.md`):
 
-| Measure | pg_fts 1.9.1 | pg_textsearch 1.4.0 |
-|---|---|---|
-| rare / mid k10 | **0.68 / 0.78 ms** | 0.85 / 1.07 |
-| common k10 / k100 | **7.0 / 7.2** | 11.5 / 13.9 |
-| AND / OR2 / OR3 k10 | **1.47 / 1.48 / 2.76** | 41.1 / 26.4 / 32.1 |
-| prefix / phrase k10 | **5.82 / 34.8** (`positions=on`) | 10.46 / 43.0 |
-| exact `count(*)` | **0.18 ms** | 251 s (seqscan) |
-| tps at 16 clients, rare / common | **12,696 / 944** | 8,142 / 646 |
-| tps at 64 clients, rare / common | **8,757-8,931 / 936** | 8,202 / 663 |
-| index size | **1,421 MB** | 1,978 MB |
+| Measure | pg_fts 1.10.0 | pg_textsearch 1.5.1 | pg_search 0.26.0 | VectorChord-bm25 0.3.0 |
+|---|---|---|---|---|
+| rare / mid top-10 | 1.16 / **1.05 ms** | **1.00** / 1.22 | 2.35 / 2.02 | 20.4 / 36.9 |
+| common top-10 / top-100 | 8.50 / 8.77 | 10.71 / 13.06 | **2.44 / 5.31** | 82.8 / 86.2 |
+| AND / OR top-10 | **2.16 / 2.10** | >300 s (seq scan) | 3.12 / 3.22 | n/a / 12.45 |
+| phrase top-10 | 36.85 (`positions=on`) | >300 s (seq scan) | **11.26** | n/a |
+| exact `count(*)` | **0.21 ms** | n/a | 9.88 | n/a |
+| tps, rare top-10, 16 / 64 clients | **17,051 / 16,841** | 14,131 / 12,397 | 5,373 / 6,227 | 346 / 671 |
+| tps, common top-10, 16 / 64 clients | 1,907 / 1,863 | 1,218 / 1,256 | **4,783 / 5,487** | 65 / 128 |
+| index size | **1,421 MiB** | 1,887 MiB | 3,396 MiB | 42,434 MiB |
+| build | 298 s + 200 s `fts_vacuum` | 269 s | **71 s** | 277 s (+ 4,048 s tokenize/model) |
 
-**Read:** pg_fts 1.9.1 leads pg_textsearch 1.4.0 on every band measured, including phrase
-(since 1.9.1) and single-term ranking (since 1.9.0). Its rare-term throughput falls with
-client count while pg_textsearch's is flat; the lead at 64 clients is ~7-9%. pg_search was
-last measured in September against pg_fts 1.6 and led common-term ranking ~17x; it has
-not been re-measured since.
+**Read:** pg_fts leads rare/mid-term ranking under load, every boolean query, exact
+counts and index size. pg_search leads common-term ranking (3.5x single-client) and
+phrase (3.3x), and builds 4x faster. pg_textsearch is close to pg_fts on single-term
+ranking but its boolean and phrase forms scan the table. VectorChord's results reflect
+the tokenizer setup it documents for English, which built a 41 GB index here.
 
 ## Operational surface
 
@@ -144,13 +147,15 @@ need a Rust toolchain, and pg_search additionally needs OpenBLAS and pgvector.
 
 - **pg_fts** — you want one index that answers ranked BM25 *and* boolean, exact
   counts, phrase, prefix, fuzzy and regex, with PostgreSQL-consistent stemming, the
-  smallest on-disk footprint, and no preload/Rust requirement. pg_search was faster on
-  common-term ranking when last measured (September, pg_fts 1.6).
-- **pg_search** — you want the fastest ranked latency across the board and can
-  accept a Tantivy analyzer that does not stem (so results differ from
-  `to_tsvector`), a 1.9× larger index, and a Rust build.
-- **vchord** — you want fast ranking and nothing else; it has no boolean or count
-  support, and the largest index here.
+  smallest on-disk footprint, and no preload/Rust requirement. pg_search is faster on
+  common-term ranking (3.5x) and phrase (3.3x).
+- **pg_search** — you want the fastest common-term ranking and phrase queries and the
+  fastest build, and can accept Tantivy's analyzer (configure `stemmer=english`;
+  tokenization still differs slightly from `to_tsvector`), a 2.4× larger index,
+  lower single-term throughput under load, and a Rust build (it also requires pgvector).
+- **vchord** — ranking only (no boolean AND, phrase or count support); measured here
+  with its documented English tokenizer setup, which produced a 41 GB index and the
+  slowest queries of the four on this corpus.
 - **pg_textsearch** — BM25 ranking on top of PostgreSQL's own analyzer, with flat
   throughput as clients increase. Boolean/phrase/prefix work as a filter over the
   ranked scan, and there is no index-backed count.

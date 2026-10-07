@@ -2,6 +2,62 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.10.0 - 2026-10-07
+
+Rare-term ranked throughput no longer falls as concurrent backends increase (ROADMAP I6).
+**No on-disk format change**; **no REINDEX required**. One new SQL function
+(`pg_fts--1.9.1--1.10.0.sql`).
+
+### Changed (performance; bench/RESULTS_110_2026-10-07.md)
+
+- **One shared copy of each segment's document-length array per server.** 1.9 decoded
+  it into every backend (~4.8 MB per backend at 2.19M documents), and the copies
+  competed for the CPU's last-level cache. The first ranked scan to need a segment's
+  array now publishes it in dynamic shared memory and every other backend maps the same
+  pages. Same host and binary, Graviton3, shared vs per-backend: rare-term tps at 64
+  clients 16,654 vs 13,283 (+25%), mid-term +21-25% at every client count, common-term
+  +1-3%; rare-term throughput is now flat from 16 to 64 clients. Results identical on
+  21/21 ranked (query, k) cases across the shared, per-backend and page-cursor paths.
+  - The copy is keyed by the segment's identity (database, index relfilenode, first
+    sidecar block, document count, total length), not by "latest for this index":
+    a segment's sidecar is written once and never modified, and MVCC never consults it,
+    so backends with different snapshots share it safely. A scan holds a reference on
+    each copy it reads until its resource owner is released; a segment a merge drops is
+    retired and freed when its last reader finishes. Nothing here can fail a query or a
+    merge: no free slot, DSM slot exhaustion, `/dev/shm` full (tested), or a cancel
+    during the build all fall back to a private copy.
+  - New GUC `pg_fts.shared_doclen` (default on, superuser; off = the 1.9 behaviour),
+    new function `fts_shared_doclen_stats()` for monitoring.
+  - The one-off build of a segment's array (28 ms at 2.19M documents) is now paid once
+    per server per segment instead of once per backend per segment-directory change.
+
+### Tests
+
+- `shared_doclen` regression test (shared == per-backend == cursor scores for every
+  document; references released after statements, errors, open cursors; REINDEX).
+- `t/011_shared_doclen.pl` (multi-session): a scan that outlives a merge, 12 sessions
+  racing to publish, a session terminated while holding a copy, and 90 concurrent ranked
+  reads during insert/delete/merge churn, each compared to the cursor path in one
+  snapshot. Planted mutants: never releasing references fails 4 cases; shifting the
+  published bytes fails the regression test. Keying without document count and total
+  length is NOT caught: the page recycle gate keeps a freed sidecar block from heading
+  a new segment while any scan could hold the old copy (measured), so those two key
+  fields are defence in depth, and the code says so.
+
+### Fixed
+
+- Retirement of a shared copy also runs from a parallel merge's leader, which frees its
+  inputs inside parallel mode (found by `t/011`: before the fix, copies of segments
+  dropped by `fts_merge` piled up until evicted).
+
+### Retracted
+
+- **"Tantivy does not stem: for `year` it returns 495,580 matches"** (README, 1.6 through
+  1.9.1). True of the pg_search configuration measured in September, not of pg_search:
+  0.26.0 with `stemmer=english` returns 735,955 (regex ground truth 733,960; pg_fts
+  734,896). The README no longer says it; pg_search's common-term lead is now compared
+  with a stemmed index.
+
 ## 1.9.1 - 2026-10-06
 
 Ranked phrase queries are 4x faster, and the rare-term throughput drop is explained.
