@@ -1,0 +1,22 @@
+# A3 first step: where the build's time goes (2.19M docs, aarch64 adev2, 8 workers, mwm 8GB)
+# build_prof.sh (prev = approach-a before this change): 7 worker flushes (~35 s of heap scan +
+#   analysis), then "merging 7 of 7 segments ... in 237.4 s" (serial collapse), then fts_vacuum 195 s.
+# merge_prof.sh (perf, leader in the collapse): hash_search_with_hash_value 42%,
+#   bm25_merge_segments_streaming 17.6% (self), pg_qsort 14.8%, bm25_write_postings 8.7%.
+#   The merge is CPU-bound, not I/O-bound.
+# merge_count.sh (uprobes, fts_merge of the 7-segment index): add_posting 362,451,721 calls,
+#   doclen_collector_add 362,451,721, hash_search_with_hash_value 755,428,606 = 2 per posting:
+#   the term hash (re-hashing the SAME term for every posting) and the docid->doclen hash
+#   (one insert per posting for a per-document fact).  Also a full binary search of the source
+#   sidecar per posting (bm25_doclen_lookup).
+# Change: per-term BuildTerm resolved once (bt_append_posting); merged sidecar collected once per
+#   document from the v4 sources' sidecars (minus tombstones), per posting only for v3 sources;
+#   forward galloping lookup in the source sidecar.
+# Identity (merge_ident.sh, merge_diff2.py, merge_ident2.sh): 400k-doc serial build, 64MB mwm
+#   (several flushes then the collapse merge): every LIVE page byte-identical prev vs cur for
+#   positions=off, positions=on, doclen_sidecar=off (v3 path), and a 10%-deleted index merged by
+#   fts_vacuum (tombstone path).  Freed pages differ (free-time XID, leftover input bytes).
+#   400k build: 177.9 -> 108.0 s (positions off), 220.9 -> 151.8 s (on).
+# build_time.sh (full 2.19M, default settings):
+#   prev build 272.8 s + fts_vacuum 186.4 s; cur build 147.4 s + fts_vacuum 66.1 s
+#   same final size 1,489,600,512, nseg 1, count(year) 734,896 both.

@@ -311,6 +311,9 @@ make_termkey(TermKey *k, const char *term, int len)
 		k->key[n] = '\1';
 }
 
+static void bt_append_posting(BM25BuildState *bs, BuildTerm *bt, ItemPointer tid,
+							  uint32 tf, uint32 doclen, const uint32 *pos, int npos);
+
 static void
 add_posting(BM25BuildState *bs, const char *term, int len,
 			ItemPointer tid, uint32 tf, uint32 doclen,
@@ -385,7 +388,17 @@ add_posting(BM25BuildState *bs, const char *term, int len,
 		entry->termidx = bs->nterms;
 		bs->nterms++;
 	}
+	bt_append_posting(bs, bt, tid, tf, doclen, pos, npos);
+}
 
+/* Append one posting to an already-resolved BuildTerm (the body of
+ * add_posting after the term lookup).  The merge calls it directly: all the
+ * postings it gathers for one output term go to the same BuildTerm, so
+ * hashing the term once per posting was 21% of a merge (1.11.0). */
+static void
+bt_append_posting(BM25BuildState *bs, BuildTerm *bt, ItemPointer tid,
+				  uint32 tf, uint32 doclen, const uint32 *pos, int npos)
+{
 	if (bt->nposts >= bt->maxposts)
 	{
 		bt->maxposts *= 2;
@@ -2203,6 +2216,46 @@ bm25_doclen_lookup(const BM25Doclens *d, uint64 docid)
 	}
 	return 0;
 }
+/* bm25_doclen_lookup for an ascending run of docids: gallop forward from
+ * *hint (reset to 0 at the start of each run).  A merge looks up every
+ * posting of every term, in docid order within a term; a full binary search
+ * per posting was most of the merge loop's own time (1.11.0). */
+static inline uint32
+bm25_doclen_lookup_from(const BM25Doclens *d, uint64 docid, int *hint)
+{
+	int			lo = *hint,
+				hi,
+				step = 1;
+
+	if (lo >= d->n || d->docids[lo] > docid)
+		lo = 0;
+	hi = lo;
+	while (hi < d->n && d->docids[hi] < docid)
+	{
+		lo = hi + 1;
+		hi += step;
+		step <<= 1;
+	}
+	if (hi >= d->n)
+		hi = d->n - 1;
+	while (lo <= hi)
+	{
+		int			mid = (lo + hi) >> 1;
+
+		if (d->docids[mid] < docid)
+			lo = mid + 1;
+		else if (d->docids[mid] > docid)
+			hi = mid - 1;
+		else
+		{
+			*hint = mid;
+			return fts_byte_to_doclen(d->bytes[mid]);
+		}
+	}
+	*hint = lo;
+	return 0;
+}
+
 /* ---- cursored doclen sidecar lookup (scan path) ----------------------------
  *
  * The doclen sidecar (v4) stores one quantized length byte per doc on a
@@ -3906,6 +3959,31 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 	pw.no_doclen_col = bs->want_sidecar;	/* v4 output: doclen -> sidecar; off = inline */
 	doclen_collector_init(&mergedc, CurrentMemoryContext, 65536);
 
+	/*
+	 * The merged sidecar is the union of the v4 sources' sidecars minus their
+	 * tombstoned docids: a sidecar holds exactly the documents with a posting
+	 * in its segment, and a merge drops exactly the tombstoned ones.  Collect
+	 * it once per document here; a v3 source (inline doclen, no sidecar) still
+	 * feeds it per posting below.  Per posting it was 21% of a merge (1.11.0).
+	 */
+	for (i = 0; i < nsel; i++)
+	{
+		MergeSource *s = &srcv[i];
+		int			k;
+
+		if (s->has_doclen_col)
+			continue;
+		for (k = 0; k < s->doclens.n; k++)
+		{
+			uint64		dv = s->doclens.docids[k];
+
+			if (s->hastomb && dv < s->tombdense_n &&
+				(s->tombdense[dv >> 3] & (uint8) (1u << (dv & 7))) != 0)
+				continue;
+			doclen_collector_add(&mergedc, dv, fts_byte_to_doclen(s->doclens.bytes[k]));
+		}
+	}
+
 	for (;;)
 	{
 		const char *smterm = NULL;
@@ -3973,7 +4051,8 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 			BM25Posting *post;
 			uint32	   *posarena = NULL;
 			int			np,
-						k;
+						k,
+						dlhint;
 
 			if (!s->valid)
 				continue;
@@ -3984,6 +4063,7 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 			np = bm25_decode_term(index, mt->firstposting, mt->firstoffset,
 								  mt->df, &post, NULL, bs->want_positions,
 								  &posarena, false, s->has_doclen_col);
+			dlhint = 0;			/* this term's postings ascend: resume forward */
 			for (k = 0; k < np; k++)
 			{
 				uint32		doclen = post[k].doclen;
@@ -4008,16 +4088,26 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 				 * exact length from the source's sidecar so the merged segment
 				 * carries correct doclen (and re-quantizes it into its own sidecar). */
 				if (!s->has_doclen_col)
-					doclen = bm25_doclen_lookup(&s->doclens,
-											   bm25_tid_to_docid(&post[k].tid));
-				/* feed the merged segment's doclen sidecar (idempotent per docid) --
-				 * WITHOUT this the merged sidecar is empty, doclenstart comes back
-				 * Invalid, and the merged 2-column postings are then mis-read as
-				 * inline (garbage doclen, WAND pruning defeated). */
-				doclen_collector_add(&mergedc, bm25_tid_to_docid(&post[k].tid), doclen);
-				add_posting(&tbs, mt->term, mt->termlen,
-							&post[k].tid, post[k].tf, doclen,
-							post[k].pos, post[k].pos ? (int) post[k].tf : 0);
+					doclen = bm25_doclen_lookup_from(&s->doclens,
+													 bm25_tid_to_docid(&post[k].tid),
+													 &dlhint);
+				else
+				{
+					/* v3 source: feed the merged sidecar per posting (a v4
+					 * source's documents were collected once above).  WITHOUT
+					 * this the merged sidecar misses these documents and their
+					 * postings are mis-read (garbage doclen). */
+					doclen_collector_add(&mergedc, bm25_tid_to_docid(&post[k].tid), doclen);
+				}
+				/* every posting gathered here is for smterm: resolve its
+				 * BuildTerm once, then append */
+				if (tbs.nterms == 0)
+					add_posting(&tbs, mt->term, mt->termlen,
+								&post[k].tid, post[k].tf, doclen,
+								post[k].pos, post[k].pos ? (int) post[k].tf : 0);
+				else
+					bt_append_posting(&tbs, &tbs.terms[0], &post[k].tid, post[k].tf, doclen,
+									  post[k].pos, post[k].pos ? (int) post[k].tf : 0);
 			}
 			pfree(post);
 			if (posarena)
