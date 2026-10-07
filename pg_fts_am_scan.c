@@ -3975,10 +3975,49 @@ fts_search_bmw(WandCursor *cursors, int nterms, int k, const DocidFilter *filter
 				if (block_isolated)
 					wand_skip_block(&cursors[lei]);
 				else
+				{
+					/*
+					 * Block-max WAND skip (1.11.0).  blocksum bounds every
+					 * document in [pivot, d) where d is the smallest of
+					 *   - one past the last docid of any at-or-before cursor's
+					 *     current block (beyond it that cursor's bound changes),
+					 *   - the docid of the first cursor AFTER the pivot (from
+					 *     there that term can add its contribution).
+					 * No document below d can beat the threshold, so every
+					 * at-or-before cursor may jump to d.  The 1.10.0 code
+					 * advanced only to pivot+1, which on a two-common-term OR
+					 * was ~240k seeks to score ~94k postings.  With the
+					 * effective-length block bounds this branch is the common
+					 * one, so the jump is what makes them pay off.
+					 */
+					uint64		skipto = UINT64_MAX;
+
+					for (i = 0; i < nterms; i++)
+					{
+						if (cursors[i].docid == UINT64_MAX)
+							continue;
+						if (cursors[i].docid <= pivot_docid)
+						{
+							if (cursors[i].blkcount > 0)
+							{
+								uint64		last = cursors[i].docids[cursors[i].blkcount - 1];
+
+								if (last + 1 < skipto)
+									skipto = last + 1;
+							}
+							else if (pivot_docid + 1 < skipto)
+								skipto = pivot_docid + 1;
+						}
+						else if (cursors[i].docid < skipto)
+							skipto = cursors[i].docid;
+					}
+					if (skipto <= pivot_docid)
+						skipto = pivot_docid + 1;	/* always make progress */
 					for (i = 0; i < nterms; i++)
 						if (cursors[i].docid != UINT64_MAX &&
 							cursors[i].docid <= pivot_docid)
-							wand_seek(&cursors[i], pivot_docid + 1);
+							wand_seek(&cursors[i], skipto);
+				}
 				continue;
 			}
 		}
@@ -4101,7 +4140,8 @@ fts_search_maxscore(WandCursor *cursors, int nterms, int k,
 	ScoredTid  *heap;
 	int			nheap = 0;
 	double		threshold = 0.0;
-	double	   *suffix;			/* suffix[i] = sum of max_contrib[i..nterms) */
+	double	   *suffix;			/* suffix[i] = sum of max_contrib over [0, i) (a
+								 * prefix sum; name kept for the diff) */
 	int			t,
 				i,
 				j;
@@ -4123,9 +4163,18 @@ fts_search_maxscore(WandCursor *cursors, int nterms, int k,
 				cursors[i] = cursors[j];
 				cursors[j] = tmp;
 			}
-	suffix[nterms] = 0.0;
-	for (i = nterms - 1; i >= 0; i--)
-		suffix[i] = suffix[i + 1] + cursors[i].max_contrib;
+	/*
+	 * prefix[i] = sum of max_contrib over cursors [0, i): the most the first i
+	 * (lowest-impact) terms can add to any document.  1.10.0 used a SUFFIX sum
+	 * here and declared term i non-essential when the terms AFTER it could not
+	 * reach the threshold -- the wrong side: it then iterated candidates only
+	 * from the high-impact terms and missed documents whose score came mostly
+	 * from the "non-essential" ones.  Found by an exhaustive-reference check
+	 * (bench/data_A_2026-10-07): a 4-term OR returned none of the true top-10.
+	 */
+	suffix[0] = 0.0;
+	for (i = 0; i < nterms; i++)
+		suffix[i + 1] = suffix[i] + cursors[i].max_contrib;
 
 	first_essential = 0;
 
@@ -4141,6 +4190,8 @@ fts_search_maxscore(WandCursor *cursors, int nterms, int k,
 		 * non-essential */
 		if (nheap >= k)
 		{
+			/* terms [0, first_essential] together cannot beat the threshold:
+			 * a document containing only those terms cannot enter the top-k */
 			while (first_essential < nterms &&
 				   suffix[first_essential + 1] <= threshold)
 				first_essential++;
@@ -4159,8 +4210,9 @@ fts_search_maxscore(WandCursor *cursors, int nterms, int k,
 			if (cursors[i].docid == cand)
 				score += wand_contrib_cur(&cursors[i]);
 
-		/* early-exit check: essential score + all non-essential max <= threshold
-		 * => cand cannot make the top-k, skip the non-essential lookups */
+		/* early-exit check: essential score + every non-essential term's max
+		 * (prefix sum over [0, first_essential)) <= threshold => cand cannot
+		 * make the top-k, skip the non-essential lookups */
 		if (!(nheap >= k && score + suffix[first_essential] <= threshold))
 		{
 			/* add exact non-essential contributions by seeking to cand */
