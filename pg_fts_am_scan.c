@@ -3521,7 +3521,11 @@ fts_query_is_pure_or(FtsQuery q)
 
 		if (it->type == FTS_QI_VAL)
 		{
-			if (it->flags & (FTS_QF_PREFIX | FTS_QF_FUZZY | FTS_QF_REGEX))
+			/* a term:LABEL leaf matches only in its zones, which the index
+			 * cannot see (labels live in the heap ftsdoc): not pure (1.11.0;
+			 * before, ranked term:A returned documents without an A zone) */
+			if (it->flags & (FTS_QF_PREFIX | FTS_QF_FUZZY | FTS_QF_REGEX |
+							 FTS_QF_WEIGHTED))
 				return false;
 		}
 		else					/* operator */
@@ -3560,7 +3564,10 @@ fts_query_is_pure_boolean(FtsQuery q)
 
 		if (it->type == FTS_QI_VAL)
 		{
-			if (it->flags & (FTS_QF_PREFIX | FTS_QF_FUZZY | FTS_QF_REGEX))
+			/* term:LABEL: presence in the index is not a match (see
+			 * fts_query_is_pure_or) */
+			if (it->flags & (FTS_QF_PREFIX | FTS_QF_FUZZY | FTS_QF_REGEX |
+							 FTS_QF_WEIGHTED))
 				return false;
 		}
 		else					/* operator */
@@ -4436,6 +4443,9 @@ typedef struct BestFirstBlock
 {
 	BlockNumber blk;
 	uint32		off;			/* byte offset of the block header on blk */
+	uint32		nbefore;		/* the term's postings in earlier blocks */
+	uint32		grp;			/* conjunctive path: segment group of the block */
+	uint64		first;			/* first docid of the block */
 	float8		bound;
 } BestFirstBlock;
 
@@ -4524,7 +4534,13 @@ bestfirst_collect(WandCursor *c, BestFirstBlock **out)
 							  : fts_byte_to_doclen(fts_doclen_to_byte(bh->min_doclen)));
 			v[n].blk = blk;
 			v[n].off = (uint32) (p - (char *) page);
-			v[n].bound = c->idf * mtf * (1.2 + 1.0) /
+			v[n].nbefore = (uint32) nread;
+			v[n].grp = 0;
+			v[n].first = ((uint64) bh->first_docid_hi << 32) | bh->first_docid_lo;
+			/* the scoring expression of wand_contrib_cur, at (max tf, min
+			 * length): the same operations in the same order, so the bound is
+			 * never an ulp below a score it covers */
+			v[n].bound = c->idf_k1p1 * mtf /
 				(mtf + c->k1_1mb + c->k1b_inv_avgdl * mindl);
 			n++;
 			nread += (int) bh->count;
@@ -4663,13 +4679,381 @@ fts_search_bestfirst1(WandCursor *c, int k, ScoredTid **out)
 	return nheap;
 }
 
-/* GUC (1.11.0): single-term ranked queries use the best-first block order. */
+/* Admit (tid, score) into the k-entry top-k heap; same rule as bestfirst1. */
+static inline void
+topk_admit(ScoredTid *heap, int *nheap, int k, int *minpos, double *threshold,
+		   uint64 docid, double score)
+{
+	ScoredTid	st;
+	int			j;
+
+	bm25_docid_to_tid(docid, &st.tid);
+	st.score = score;
+	if (*nheap < k)
+	{
+		heap[(*nheap)++] = st;
+		if (*nheap < k)
+			return;
+	}
+	else if (scored_worse(&heap[*minpos], &st))
+		heap[*minpos] = st;
+	else
+		return;
+	*minpos = 0;
+	for (j = 1; j < *nheap; j++)
+		if (scored_worse(&heap[j], &heap[*minpos]))
+			*minpos = j;
+	*threshold = heap[*minpos].score;
+}
+
+/* Position c on the block of hdr[0..n) covering docid lo (or the first block
+ * after it), rewinding to the block start so later seeks see every posting. */
+static void
+conj_position(WandCursor *c, const BestFirstBlock *hdr, int n, uint64 lo)
+{
+	sm_cursor_t ini = SM_CURSOR_INIT;
+
+	c->tombcursor = ini;		/* tombstone lookups resume forward only */
+	if (c->blkcount > 0 && c->docids[0] <= lo && lo <= c->docids[c->blkcount - 1])
+	{
+		c->cur = 0;				/* already decoded: rewind within the block */
+		c->docid = c->docids[0];
+		return;
+	}
+	{
+		int			a = 0,
+					b = n - 1,
+					j = 0;
+
+		while (a <= b)
+		{
+			int			m = (a + b) / 2;
+
+			if (hdr[m].first <= lo)
+			{
+				j = m;
+				a = m + 1;
+			}
+			else
+				b = m - 1;
+		}
+		c->curblk = hdr[j].blk;
+		c->curoff = hdr[j].off;
+		c->nread = (int) hdr[j].nbefore;
+		wand_load_block(c);
+	}
+}
+
+/*
+ * fts_search_and_bestfirst (1.11.0): exact top-k for a CONJUNCTIVE query -- a
+ * pure AND of plain terms, or a pure phrase chain whose admission the phrase
+ * gate decides.  Every match contains every term, and all of a document's
+ * postings live in its own segment, so within a segment the blocks of the
+ * rarest term (the driver) enumerate every candidate.  A driver block's bound
+ * is its own block bound plus, for each other term, the largest bound among
+ * that term's blocks overlapping the driver block's docid range [first, next
+ * block's first): no document in the range can score more.  The driver blocks
+ * of every segment go in one max-heap, visited best-first; the scan stops when
+ * the best remaining bound is below the k-th score (strict, as in
+ * fts_search_bestfirst1).  In a visited block each driver docid is looked up in
+ * the other terms with wand_seek, after each other cursor is positioned on the
+ * block covering the range start.  Scores are summed in term order, so a
+ * document's score does not depend on visit order.  Returns -1 (caller uses the
+ * docid-order paths) if a chain looks inconsistent.  The disjunctive BMW walk
+ * this replaces for AND/phrase ranks the bag of words and visits nearly every
+ * block of both terms of `united & states`.
+ *
+ * Kept out of line deliberately (pg_noinline): same code-layout reason as
+ * fts_search_dense1 (1.9.1).
+ */
+pg_noinline static int
+fts_search_and_bestfirst(WandCursor *cursors, int ncur, int k, BoolGate *gate,
+						 ScoredTid **out)
+{
+	int			nq = gate->nterms;	/* query term ordinals (incl. absent terms) */
+	BestFirstBlock **hdr;
+	int		   *nhdr;
+	int		   *grpstart;		/* group g = cursors grpidx[grpstart[g] ..) */
+	int		   *grpidx;
+	int		   *drv;			/* driver cursor of each group */
+	int			ngrp = 0,
+				ngi = 0,
+				nv = 0,
+				i;
+	uint32		maxseg = 0;
+	BestFirstBlock *v;
+	ScoredTid  *heap;
+	int			nheap = 0,
+				minpos = 0;
+	double		threshold = -1.0;
+	bool		bad = false;
+
+	for (i = 0; i < ncur; i++)
+		maxseg = Max(maxseg, cursors[i].segidx);
+	hdr = (BestFirstBlock **) palloc0(ncur * sizeof(BestFirstBlock *));
+	nhdr = (int *) palloc0(ncur * sizeof(int));
+	grpstart = (int *) palloc((ncur + 1) * sizeof(int));
+	grpidx = (int *) palloc(Max(ncur, 1) * sizeof(int));
+	drv = (int *) palloc(Max(ncur, 1) * sizeof(int));
+
+	/* one group per segment holding a cursor for EVERY query term; cursors were
+	 * built term-major, so a segment's cursors come out in term order */
+	{
+		uint32		s;
+
+		for (s = 0; s <= maxseg && !bad; s++)
+		{
+			int			g0 = ngi,
+						t = 0;
+
+			for (i = 0; i < ncur; i++)
+				if (cursors[i].segidx == s)
+				{
+					if (cursors[i].termidx != t)
+						break;	/* a term missing here: no match in s */
+					grpidx[ngi++] = i;
+					t++;
+				}
+			if (t != nq || (i < ncur && cursors[i].segidx == s))
+			{
+				ngi = g0;
+				continue;
+			}
+			grpstart[ngrp] = g0;
+			drv[ngrp] = grpidx[g0];
+			for (i = g0; i < ngi; i++)
+			{
+				int			c = grpidx[i];
+
+				if (cursors[c].df < cursors[drv[ngrp]].df)
+					drv[ngrp] = c;
+				nhdr[c] = bestfirst_collect(&cursors[c], &hdr[c]);
+				if (nhdr[c] < 0)
+					bad = true;
+			}
+			if (!bad)
+				nv += nhdr[drv[ngrp]];
+			ngrp++;
+		}
+		grpstart[ngrp] = ngi;
+	}
+	if (bad)
+	{
+		for (i = 0; i < ncur; i++)
+			if (hdr[i] != NULL && nhdr[i] >= 0)
+				pfree(hdr[i]);
+		pfree(hdr);
+		pfree(nhdr);
+		pfree(grpstart);
+		pfree(grpidx);
+		pfree(drv);
+		return -1;
+	}
+
+	/*
+	 * Driver-block bounds: per term, the largest bound among its blocks
+	 * overlapping the driver block's range (the driver's own block for the
+	 * driver), summed in term order -- the order the score below is summed in,
+	 * so the bound is never an ulp below a score it covers.  A term with no
+	 * overlapping block leaves nothing to match: the block is dead (-1).
+	 */
+	v = (BestFirstBlock *) palloc(Max(nv, 1) * sizeof(BestFirstBlock));	/* alloc-ok: one entry per 128 postings of the rarest term */
+	nv = 0;
+	{
+		int			g;
+
+		for (g = 0; g < ngrp; g++)
+		{
+			int			dc = drv[g];
+			BestFirstBlock *dh = hdr[dc];
+			int			nd = nhdr[dc],
+						b0 = nv,
+						gi;
+
+			for (i = 0; i < nd; i++)
+			{
+				v[nv] = dh[i];
+				v[nv].grp = (uint32) g;
+				v[nv].bound = 0.0;
+				nv++;
+			}
+			for (gi = grpstart[g]; gi < grpstart[g + 1]; gi++)
+			{
+				int			oc = grpidx[gi],
+							j = 0;
+				BestFirstBlock *oh = hdr[oc];
+				int			no = nhdr[oc];
+
+				for (i = 0; i < nd; i++)
+				{
+					uint64		lo = dh[i].first,
+								hi = (i + 1 < nd) ? dh[i + 1].first : UINT64_MAX;
+					double		mb = -1.0;
+					int			jj;
+
+					if (v[b0 + i].bound < 0.0)
+						continue;	/* already dead */
+					if (oc == dc)
+						mb = dh[i].bound;
+					else
+					{
+						/* block jj covers [oh[jj].first, oh[jj + 1].first) */
+						while (j + 1 < no && oh[j + 1].first <= lo)
+							j++;
+						for (jj = j; jj < no && oh[jj].first < hi; jj++)
+							mb = Max(mb, oh[jj].bound);
+					}
+					v[b0 + i].bound = (mb < 0.0) ? -1.0 : v[b0 + i].bound + mb;
+				}
+			}
+		}
+	}
+	for (i = nv / 2 - 1; i >= 0; i--)
+		bestfirst_siftdown(v, nv, i);
+	heap = (ScoredTid *) palloc(Max(k, 1) * sizeof(ScoredTid));
+
+	while (nv > 0)
+	{
+		BestFirstBlock top = v[0];
+		int			g = (int) top.grp,
+					dc = drv[g],
+					gi;
+		WandCursor *c = &cursors[dc];
+
+		if (top.bound < 0.0 || (nheap == k && top.bound < threshold))
+			break;
+		v[0] = v[--nv];
+		bestfirst_siftdown(v, nv, 0);
+		CHECK_FOR_INTERRUPTS();
+		if (nv > 0 && v[0].blk != top.blk)
+			PrefetchBuffer(c->index, MAIN_FORKNUM, v[0].blk);
+		c->curblk = top.blk;
+		c->curoff = top.off;
+		c->nread = (int) top.nbefore;
+		wand_load_block(c);
+		if (c->blkcount == 0)
+			break;				/* concurrent recycle: the generation re-check restarts */
+		{
+			sm_cursor_t ini = SM_CURSOR_INIT;
+
+			c->tombcursor = ini;
+		}
+		for (gi = grpstart[g]; gi < grpstart[g + 1]; gi++)
+			if (grpidx[gi] != dc)
+				conj_position(&cursors[grpidx[gi]], hdr[grpidx[gi]], nhdr[grpidx[gi]],
+							  c->docids[0]);
+		for (i = 0; i < c->blkcount; i++)
+		{
+			uint64		d = c->docids[i];
+			double		score = 0.0;
+			bool		all = true;
+
+			if (d < c->docid_lo || d >= c->docid_hi)
+				continue;
+			c->cur = i;
+			c->docid = d;
+			if (wand_cur_own_tombstoned(c))
+				continue;
+			for (gi = grpstart[g]; gi < grpstart[g + 1] && all; gi++)
+			{
+				WandCursor *o = &cursors[grpidx[gi]];
+
+				if (o != c)
+				{
+					wand_seek(o, d);
+					all = (o->docid == d);
+				}
+			}
+			if (!all)
+				continue;
+			for (gi = grpstart[g]; gi < grpstart[g + 1]; gi++)
+				score += wand_contrib_cur(&cursors[grpidx[gi]]);
+			if (nheap == k && score < threshold)
+				continue;
+			/* a pure AND is satisfied by presence; a phrase also needs
+			 * adjacency, checked on THIS segment's cursors only (the group is
+			 * in term order, so term t's cursor is grpidx[grpstart[g] + t]) */
+			if (gate->phrase != NULL)
+			{
+				PhraseGate *pg = gate->phrase;
+				WandCursor *pc[FTS_QUERY_MAX_PHRASE_TERMS];
+				int			pt;
+
+				for (pt = 0; pt < pg->npt; pt++)
+					pc[pt] = &cursors[grpidx[grpstart[g] + pg->term[pt]]];
+				if (!phrase_gate_adjacent(pg, pc))
+				{
+					if (pg->unknown)
+						break;	/* the caller discards this and recomputes */
+					continue;
+				}
+			}
+			topk_admit(heap, &nheap, k, &minpos, &threshold, d, score);
+		}
+		if (gate->phrase != NULL && gate->phrase->unknown)
+			break;
+	}
+
+	for (i = 0; i < ncur; i++)
+	{
+		if (hdr[i] != NULL)
+			pfree(hdr[i]);
+		if (cursors[i].blkbuf)
+			pfree(cursors[i].blkbuf);
+		if (cursors[i].posbuf)
+			pfree(cursors[i].posbuf);
+		if (cursors[i].posoff)
+			pfree(cursors[i].posoff);
+		cursors[i].blkbuf = NULL;
+		cursors[i].posbuf = NULL;
+		cursors[i].posoff = NULL;
+		bm25_doclen_cursor_free(&cursors[i].doclenc);
+	}
+	pfree(hdr);
+	pfree(nhdr);
+	pfree(grpstart);
+	pfree(grpidx);
+	pfree(drv);
+	pfree(v);
+	qsort(heap, nheap, sizeof(ScoredTid), cmp_scored_desc);
+	*out = heap;
+	return nheap;
+}
+
+/* GUC (1.11.0): single-term and conjunctive (AND, phrase) ranked queries visit
+ * blocks best-first. */
 bool		pg_fts_bestfirst = true;
+
+/* Every document the gate admits contains every query term: a phrase chain,
+ * or a pure-boolean query whose operators are all AND. */
+static bool
+bool_gate_conjunctive(const BoolGate *g)
+{
+	uint32		i;
+
+	if (g == NULL)
+		return false;
+	if (g->phrase != NULL)
+		return true;
+	if (g->q == NULL)
+		return false;
+	for (i = 0; i < g->q->nitems; i++)
+		if (g->q->items[i].type != FTS_QI_VAL && g->q->items[i].op != FTS_OP_AND)
+			return false;
+	return true;
+}
 
 static int
 fts_search_wand(WandCursor *cursors, int nterms, int k,
 				const DocidFilter *filter, BoolGate *gate, ScoredTid **out)
 {
+	if (filter == NULL && pg_fts_bestfirst && bool_gate_conjunctive(gate))
+	{
+		int			n = fts_search_and_bestfirst(cursors, nterms, k, gate, out);
+
+		if (n >= 0)
+			return n;
+	}
 	if (nterms == 1 && filter == NULL && gate == NULL && pg_fts_bestfirst)
 	{
 		int			n = fts_search_bestfirst1(&cursors[0], k, out);
