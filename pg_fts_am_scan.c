@@ -4319,10 +4319,277 @@ fts_search_dense1(WandCursor *c, int k, ScoredTid **out)
 	return nheap;
 }
 
+/*
+ * Best-first single-term top-k (1.11.0).
+ *
+ * With the effective-length block bound (bm25_write_postings) the per-block
+ * score bound is tight: on 2.19M Wikipedia, a top-10 over `year` (735k
+ * postings) needs only the 32 highest-bound blocks.  A docid-ordered walk
+ * cannot use that -- its threshold starts at zero and rises slowly -- so:
+ *
+ *   pass 1  read every block HEADER of the term (24 bytes each, ~46 per page;
+ *           the payload is not decoded) and record (page, offset, bound);
+ *   pass 2  visit blocks in DESCENDING bound order, decode and score each one,
+ *           and stop at the first block whose bound cannot beat the current
+ *           k-th score.
+ *
+ * Exact: every unvisited block's bound is <= the k-th score already found, so
+ * no unvisited posting can enter the heap (the heap evicts by scored_worse,
+ * score then TID, the order every ranked path uses; a posting EQUAL to the
+ * k-th score could still displace it by TID, so the stop test is strict).
+ * Scoring arithmetic, tombstone skipping and the doclen lookup are the same
+ * as fts_search_dense1, which stays as the reference this is tested against.
+ *
+ * Kept out of line deliberately (pg_noinline), for the same code-layout
+ * reason as fts_search_dense1: inlined into bm25_topk_candidates_range, a hot
+ * loop's speed moved with unrelated code in that function (1.9.1).
+ */
+typedef struct BestFirstBlock
+{
+	BlockNumber blk;
+	uint32		off;			/* byte offset of the block header on blk */
+	float8		bound;
+} BestFirstBlock;
+
+/*
+ * Binary max-heap on bound.  A full sort of the block list was 39% of a
+ * common-term top-10 (perf), and only the first few dozen blocks are ever
+ * visited: heapify is O(n) and each pop O(log n), so the order costs only what
+ * is consumed.
+ */
+static void
+bestfirst_siftdown(BestFirstBlock *v, int n, int i)
+{
+	for (;;)
+	{
+		int			l = 2 * i + 1,
+					r = l + 1,
+					m = i;
+		BestFirstBlock t;
+
+		if (l < n && v[l].bound > v[m].bound)
+			m = l;
+		if (r < n && v[r].bound > v[m].bound)
+			m = r;
+		if (m == i)
+			return;
+		t = v[i];
+		v[i] = v[m];
+		v[m] = t;
+		i = m;
+	}
+}
+
+/* Collect every block header of c's term.  Returns the count, or -1 if the
+ * chain looks inconsistent (the caller then uses the docid-order path). */
+static int
+bestfirst_collect(WandCursor *c, BestFirstBlock **out)
+{
+	BlockNumber blk = c->firstblk;
+	uint32		off = c->firstoff;
+	int			nblocks = (int) ((c->df + BM25_BLOCK_SIZE - 1) / BM25_BLOCK_SIZE);
+	int			n = 0;
+	int			nread = 0;
+	BlockNumber nrel = RelationGetNumberOfBlocks(c->index);
+	BestFirstBlock *v;
+
+	v = (BestFirstBlock *) palloc(Max(nblocks, 1) * sizeof(BestFirstBlock));	/* alloc-ok: one entry per 128 postings of ONE term */
+	while (blk != InvalidBlockNumber && nread < (int) c->df)
+	{
+		Buffer		buf;
+		Page		page;
+		char	   *p,
+				   *pend;
+		BlockNumber next;
+
+		CHECK_FOR_INTERRUPTS();
+		if (blk >= nrel)
+			break;
+		buf = ReadBuffer(c->index, blk);
+		LockBuffer(buf, BUFFER_LOCK_SHARE);
+		page = BufferGetPage(buf);
+		pend = bm25_page_data_end(page);
+		next = BM25PageGetOpaque(page)->nextblk;
+		/* prefetch the next page of the chain while we parse this one */
+		if (next != InvalidBlockNumber && next < nrel)
+			PrefetchBuffer(c->index, MAIN_FORKNUM, next);
+		p = (char *) page + off;
+		while (p + sizeof(BM25BlockHdr) <= pend && nread < (int) c->df)
+		{
+			BM25BlockHdr *bh = (BM25BlockHdr *) p;
+			const char *stream = (const char *) (bh + 1);
+			double		mtf = (double) bh->max_tf;
+			double		mindl;
+
+			if (bh->count == 0)
+				break;			/* empty tail of the page */
+			if (bh->count > (uint32) BM25_BLOCK_SIZE ||
+				stream + (Size) bh->bytelen + (Size) bh->posbytelen > pend ||
+				n >= nblocks)
+			{
+				UnlockReleaseBuffer(buf);
+				pfree(v);
+				return -1;		/* torn or recycled page: let the caller fall back */
+			}
+			mindl = (double) (c->has_doclen_col
+							  ? bh->min_doclen
+							  : fts_byte_to_doclen(fts_doclen_to_byte(bh->min_doclen)));
+			v[n].blk = blk;
+			v[n].off = (uint32) (p - (char *) page);
+			v[n].bound = c->idf * mtf * (1.2 + 1.0) /
+				(mtf + c->k1_1mb + c->k1b_inv_avgdl * mindl);
+			n++;
+			nread += (int) bh->count;
+			p = (char *) MAXALIGN(stream + bh->bytelen + bh->posbytelen);
+		}
+		UnlockReleaseBuffer(buf);
+		blk = next;
+		off = MAXALIGN(SizeOfPageHeaderData);
+	}
+	if (nread != (int) c->df)
+	{
+		pfree(v);
+		return -1;				/* chain shorter/longer than df: fall back */
+	}
+	*out = v;
+	return n;
+}
+
+pg_noinline static int
+fts_search_bestfirst1(WandCursor *c, int k, ScoredTid **out)
+{
+	BestFirstBlock *v;
+	int			nb,
+				bi;
+	ScoredTid  *heap;
+	int			nheap = 0;
+	int			minpos = 0;
+	double		threshold = -1.0;
+	uint64		tfs[BM25_BLOCK_SIZE];
+
+	nb = bestfirst_collect(c, &v);
+	if (nb < 0)
+		return -1;
+	for (bi = nb / 2 - 1; bi >= 0; bi--)
+		bestfirst_siftdown(v, nb, bi);
+	heap = (ScoredTid *) palloc(Max(k, 1) * sizeof(ScoredTid));
+
+	while (nb > 0)
+	{
+		int			i;
+		BestFirstBlock top = v[0];
+
+		/* every remaining block is bounded by top.bound: once that cannot beat
+		 * the k-th score, nothing left can enter (strict, see above) */
+		if (nheap == k && top.bound < threshold)
+			break;
+		v[0] = v[--nb];
+		bestfirst_siftdown(v, nb, 0);
+		CHECK_FOR_INTERRUPTS();
+		/* prefetch the next block in visit order if it is on another page */
+		if (nb > 0 && v[0].blk != top.blk)
+			PrefetchBuffer(c->index, MAIN_FORKNUM, v[0].blk);
+		/* position the cursor on this block and decode it (wand_load_block
+		 * reads the block at curblk/curoff and copies its payload) */
+		c->curblk = top.blk;
+		c->curoff = top.off;
+		c->nread = 0;
+		wand_load_block(c);
+		if (c->blkcount == 0)
+		{
+			/* the block vanished (concurrent recycle): the caller's
+			 * generation re-check restarts the scan; return what we have */
+			break;
+		}
+		/* tombstone lookups resume forward only: reset per block (blocks are
+		 * visited out of docid order) */
+		{
+			sm_cursor_t ini = SM_CURSOR_INIT;
+
+			c->tombcursor = ini;
+		}
+		bm25_for_unpack(c->blkbuf + c->tfoff, c->blkcount, tfs);
+		for (i = 0; i < c->blkcount; i++)
+		{
+			uint64		docid = c->docids[i];
+			double		tf,
+						dl,
+						score;
+			ScoredTid	st;
+
+			if (docid < c->docid_lo || docid >= c->docid_hi)
+				continue;
+			if (c->tombs != NULL && c->tombs->hasany)
+			{
+				c->cur = i;
+				c->docid = docid;
+				if (wand_cur_own_tombstoned(c))
+					continue;
+			}
+			tf = (double) tfs[i];
+			dl = c->has_doclen_col
+				? (double) bm25_for_get(c->blkbuf + c->dloff, i)
+				: (double) bm25_doclen_cursor_lookup(&c->doclenc, docid);
+			score = c->idf_k1p1 * tf / (tf + c->k1_1mb + c->k1b_inv_avgdl * dl);
+			if (nheap == k && score < threshold)
+				continue;
+			bm25_docid_to_tid(docid, &st.tid);
+			st.score = score;
+			if (nheap < k)
+			{
+				heap[nheap++] = st;
+				if (nheap == k)
+				{
+					int			j;
+
+					minpos = 0;
+					for (j = 1; j < nheap; j++)
+						if (scored_worse(&heap[j], &heap[minpos]))
+							minpos = j;
+					threshold = heap[minpos].score;
+				}
+			}
+			else if (scored_worse(&heap[minpos], &st))
+			{
+				int			j;
+
+				heap[minpos] = st;
+				minpos = 0;
+				for (j = 1; j < nheap; j++)
+					if (scored_worse(&heap[j], &heap[minpos]))
+						minpos = j;
+				threshold = heap[minpos].score;
+			}
+		}
+	}
+	if (c->blkbuf)
+		pfree(c->blkbuf);
+	c->blkbuf = NULL;
+	if (c->posbuf)
+		pfree(c->posbuf);
+	c->posbuf = NULL;
+	bm25_doclen_cursor_free(&c->doclenc);
+	pfree(v);
+	qsort(heap, nheap, sizeof(ScoredTid), cmp_scored_desc);
+	*out = heap;
+	return nheap;
+}
+
+/* GUC (1.11.0): single-term ranked queries use the best-first block order. */
+bool		pg_fts_bestfirst = true;
+
 static int
 fts_search_wand(WandCursor *cursors, int nterms, int k,
 				const DocidFilter *filter, BoolGate *gate, ScoredTid **out)
 {
+	if (nterms == 1 && filter == NULL && gate == NULL && pg_fts_bestfirst)
+	{
+		int			n = fts_search_bestfirst1(&cursors[0], k, out);
+
+		if (n >= 0)
+			return n;
+		/* inconsistent chain: fall through to the docid-order paths */
+	}
 	if (nterms == 1 && filter == NULL && gate == NULL &&
 		pg_fts_dense_score_min_df > 0 &&
 		cursors[0].df >= (uint32) pg_fts_dense_score_min_df)

@@ -1734,6 +1734,7 @@ bm25_write_postings(BM25PostWriter *pw, BuildTerm *bt,
 		int			sclen = 0;
 		uint32		blk_max_tf = 0;
 		uint32		blk_min_dl = UINT32_MAX;
+		double		blk_min_ratio = -1.0;	/* min over postings of dl/tf (see below) */
 		uint64		blk_first_docid = sorted[i].docid;
 		uint64		prev_docid = sorted[i].docid;
 		int			bcount = 0;
@@ -1759,6 +1760,18 @@ bm25_write_postings(BM25PostWriter *pw, BuildTerm *bt,
 				term_max_tf = sorted[i].tf;
 			if (sorted[i].doclen < blk_min_dl)
 				blk_min_dl = sorted[i].doclen;
+			if (sorted[i].tf > 0)
+			{
+				/* the length the SCORER uses: quantized when the doclen lives in
+				 * the sidecar (v4), exact when it is inline (v3) */
+				uint32		sdl = pw->no_doclen_col
+					? fts_byte_to_doclen(fts_doclen_to_byte(sorted[i].doclen))
+					: sorted[i].doclen;
+				double		r = (double) sdl / (double) sorted[i].tf;
+
+				if (blk_min_ratio < 0.0 || r < blk_min_ratio)
+					blk_min_ratio = r;
+			}
 			prev_docid = sorted[i].docid;
 			bcount++;
 			i++;
@@ -1884,7 +1897,31 @@ bm25_write_postings(BM25PostWriter *pw, BuildTerm *bt,
 		bh = (BM25BlockHdr *) dst;
 		bh->count = (uint32) bcount;
 		bh->max_tf = blk_max_tf;
-		bh->min_doclen = (blk_min_dl == UINT32_MAX ? 0 : blk_min_dl);
+		/*
+		 * Block bound (1.11.0).  Readers bound a block by the BM25 weight of
+		 * (max_tf, min_doclen).  Storing the block's smallest length made that
+		 * pair a document that rarely exists -- the max tf and the min length
+		 * come from different postings -- so for a common term almost no block
+		 * could be skipped.  Store instead the EFFECTIVE minimum length
+		 *     x = floor(max_tf * min_i(dl_i / tf_i)).
+		 * The weight w(tf, dl) = (k1+1) / (1 + (k1(1-b) + k1 b dl/avgdl) / tf)
+		 * rises with tf and falls with dl/tf, so (max_tf, x) dominates every
+		 * posting in the block, for EVERY avgdl and every idf: still a sound
+		 * upper bound, and tight (on 2.19M Wikipedia it makes 99.6% of `year`'s
+		 * blocks skippable at k=10, vs 43%).  Readers are unchanged; the reader
+		 * re-quantizes the field before use, which only lowers it (still sound).
+		 * x may exceed the block's smallest length (that posting may have a
+		 * small tf); it is clamped to the field's range.  Segments written
+		 * before this keep their looser bound until a merge rewrites them.
+		 */
+		if (blk_min_ratio >= 0.0 && blk_max_tf > 0)
+		{
+			double		x = floor((double) blk_max_tf * blk_min_ratio);
+
+			bh->min_doclen = x >= (double) PG_UINT32_MAX ? PG_UINT32_MAX : (uint32) x;
+		}
+		else
+			bh->min_doclen = (blk_min_dl == UINT32_MAX ? 0 : blk_min_dl);
 		bh->first_docid_hi = (uint32) (blk_first_docid >> 32);
 		bh->first_docid_lo = (uint32) (blk_first_docid & 0xFFFFFFFF);
 		bh->bytelen = (uint32) sclen;

@@ -680,6 +680,13 @@ _PG_init(void)
 							4096, 0, INT_MAX,
 							PGC_USERSET, GUC_UNIT_MB, NULL, NULL, NULL);
 
+	DefineCustomBoolVariable("pg_fts.bestfirst",
+							 "Single-term ranked queries visit posting blocks in descending score-bound order and stop as soon as no remaining block can enter the top-k.",
+							 "Results are identical; off uses the docid-order paths (block-max WAND, or exhaustive scoring above pg_fts.dense_score_min_df).",
+							 &pg_fts_bestfirst,
+							 true,
+							 PGC_USERSET, 0, NULL, NULL, NULL);
+
 	DefineCustomIntVariable("pg_fts.dense_score_min_df",
 							"Single-term ranked queries on a term with at least this many postings (in one segment) are scored exhaustively instead of with block-max WAND; 0 disables.",
 							"WAND prunes almost nothing for a very common term, so scoring every posting in a tight loop is faster; results are identical.",
