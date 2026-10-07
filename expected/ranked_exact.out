@@ -1,0 +1,154 @@
+-- ranked_exact: every ranked traversal must return the same top-k.
+--
+-- References: single-term queries are checked against exhaustive scoring
+-- (fts_search_dense1 via pg_fts.dense_score_min_df = 1), which scores every
+-- posting; multi-term queries are checked against the same query evaluated as
+-- an exhaustive sum of single-term score lists (the dense reference per term,
+-- summed in SQL), which is how BM25 combines terms.  The heap-side fts_bm25 is
+-- not a reference here: it uses each document's exact length, while the index
+-- scores with the length quantization its on-disk format stores.
+--
+-- 1.11.0 fixed MaxScore (four or more terms), which could return none of the
+-- true top-k: the corpus below makes a 4-term OR's best documents score mostly
+-- on the LOW-impact terms, the shape the old essential/non-essential split
+-- missed.  Also covered: best-first single-term top-k (1.11.0) and the
+-- block-max WAND skip.
+SET client_min_messages = warning;
+SET enable_seqscan = off;
+SET enable_bitmapscan = off;
+CREATE TABLE rx (id int PRIMARY KEY, d ftsdoc);
+INSERT INTO rx SELECT g, to_ftsdoc('simple',
+  CASE WHEN g <= 60 THEN repeat('a ', 20 + g % 7) || repeat('b ', 15 + g % 5)
+       WHEN g <= 120 THEN 'c d ' || repeat('x ', g % 9)
+       ELSE (CASE WHEN g % 2 = 0 THEN 'a ' ELSE '' END) ||
+            (CASE WHEN g % 3 = 0 THEN 'b ' ELSE '' END) ||
+            (CASE WHEN g % 97 = 0 THEN 'c ' ELSE '' END) ||
+            (CASE WHEN g % 89 = 0 THEN 'd ' ELSE '' END) ||
+            repeat('f' || (g % 11) || ' ', 1 + g % 13) END)
+FROM generate_series(1, 6000) g;
+-- plus the 1.10.0 MaxScore failure shape.  The old split ended the scan as soon
+-- as the top-k threshold exceeded the sum of every term's maximum contribution
+-- except the lowest one's.  Long background documents (y x 300) push avgdl up,
+-- so short early documents holding p q r s nine times each score close to the
+-- maximum and lift the threshold past that sum; later documents with tf 20
+-- score higher still and are the true top-k, which the old code never reached.
+-- 250 of each: the ranked scan over-fetches 4k candidates, so the shape must
+-- survive k = 50 -> 200.
+INSERT INTO rx SELECT 10000 + g, to_ftsdoc('simple', repeat('p q r s ', 9))
+FROM generate_series(1, 250) g;
+INSERT INTO rx SELECT 11000 + g, to_ftsdoc('simple',
+  (CASE WHEN g % 2 = 0 THEN 'p ' ELSE '' END) || (CASE WHEN g % 3 = 0 THEN 'q ' ELSE '' END) ||
+  (CASE WHEN g % 2 = 1 THEN 'r ' ELSE '' END) || (CASE WHEN g % 3 = 1 THEN 's ' ELSE '' END) ||
+  repeat('y ', 300))
+FROM generate_series(1, 3000) g;
+INSERT INTO rx SELECT 20000 + g, to_ftsdoc('simple', repeat('p q r s ', 20))
+FROM generate_series(1, 250) g;
+CREATE INDEX rx_fts ON rx USING fts (d);
+VACUUM ANALYZE rx;
+-- single-term scores of every matching row, exhaustively (dense path)
+CREATE FUNCTION rx_term(t text) RETURNS TABLE (tid tid, s float8) LANGUAGE plpgsql AS $$
+BEGIN
+  SET LOCAL pg_fts.bestfirst = off;
+  SET LOCAL pg_fts.dense_score_min_df = 1;
+  RETURN QUERY SELECT f.ctid, f.score FROM fts_search('rx_fts', to_ftsquery('simple', t), 100000) f;
+END $$;
+-- reference top-k for an OR of terms: sum of per-term exhaustive scores,
+-- ties by TID (the order every ranked path uses)
+CREATE FUNCTION rx_ref(terms text[], k int) RETURNS TABLE (n bigint, tid tid, s float8) LANGUAGE sql AS $$
+  SELECT row_number() OVER (ORDER BY s DESC, tid), tid, s
+  FROM (SELECT tid, sum(s) s FROM unnest(terms) t, LATERAL rx_term(t)
+        GROUP BY tid ORDER BY sum(s) DESC, tid LIMIT k) x $$;
+CREATE FUNCTION rx_idx(qs text, k int) RETURNS TABLE (n bigint, tid tid) LANGUAGE sql AS $$
+  SELECT row_number() OVER (), ctid
+  FROM (SELECT ctid FROM rx WHERE d @@@ to_ftsquery('simple', qs)
+        ORDER BY d <=> to_ftsquery('simple', qs) LIMIT k) x $$;
+-- the index's k rows must match the reference rank by rank: the same TID, or
+-- a TID whose reference score equals the reference score at that rank within
+-- 1e-9 (an equal-score reorder: float sums depend on addition order)
+CREATE FUNCTION rx_same(terms text[]) RETURNS boolean LANGUAGE plpgsql AS $$
+DECLARE k int; nbad int; nidx int; nref int;
+BEGIN
+  FOREACH k IN ARRAY ARRAY[1, 3, 10, 50] LOOP
+    CREATE TEMP TABLE all_s AS
+      SELECT tid, sum(s) s FROM unnest(terms) t, LATERAL rx_term(t) GROUP BY tid;
+    SELECT count(*) INTO nidx FROM rx_idx(array_to_string(terms, ' | '), k);
+    SELECT count(*) INTO nref FROM rx_ref(terms, k);
+    SELECT count(*) INTO nbad
+    FROM rx_idx(array_to_string(terms, ' | '), k) i
+    JOIN rx_ref(terms, k) r USING (n)
+    LEFT JOIN all_s a ON a.tid = i.tid
+    WHERE i.tid <> r.tid AND (a.s IS NULL OR abs(a.s - r.s) > 1e-9);
+    DROP TABLE all_s;
+    IF nidx = 0 OR nidx <> nref OR nbad > 0 THEN
+      RETURN false;
+    END IF;
+  END LOOP;
+  RETURN true;
+END $$;
+SELECT array_to_string(terms, ' | ') AS q, rx_same(terms) AS exact
+FROM (VALUES (ARRAY['a']), (ARRAY['c']), (ARRAY['f3']), (ARRAY['a','c']), (ARRAY['a','b']),
+             (ARRAY['c','d']), (ARRAY['a','b','c']), (ARRAY['a','b','c','d']),
+             (ARRAY['f1','f2','f3','f4','f5']), (ARRAY['a','b','c','d','f1','f2']),
+             (ARRAY['p','q','r','s']), (ARRAY['p','q','r']), (ARRAY['p','q','r','s','a'])) v(terms)
+ORDER BY 1;
+            q            | exact 
+-------------------------+-------
+ a                       | t
+ a | b                   | t
+ a | b | c               | t
+ a | b | c | d           | t
+ a | b | c | d | f1 | f2 | t
+ a | c                   | t
+ c                       | t
+ c | d                   | t
+ f1 | f2 | f3 | f4 | f5  | t
+ f3                      | t
+ p | q | r               | t
+ p | q | r | s           | t
+ p | q | r | s | a       | t
+(13 rows)
+
+-- single term through each route: best-first, docid-order WAND, dense
+SELECT rx_same(ARRAY['a']) AS a_bestfirst_eq_dense;
+ a_bestfirst_eq_dense 
+----------------------
+ t
+(1 row)
+
+SET pg_fts.bestfirst = off;
+SET pg_fts.dense_score_min_df = 0;
+SELECT rx_same(ARRAY['a']) AS a_wand_eq_dense;
+ a_wand_eq_dense 
+-----------------
+ t
+(1 row)
+
+RESET pg_fts.dense_score_min_df;
+RESET pg_fts.bestfirst;
+-- after deletes (tombstones) and a second segment
+DELETE FROM rx WHERE id % 7 = 0;
+VACUUM rx;
+INSERT INTO rx SELECT g, to_ftsdoc('simple', 'c ' || repeat('a ', g % 30)) FROM generate_series(6001, 6600) g;
+VACUUM rx;
+SELECT fts_index_nsegments('rx_fts') AS nsegments;
+ nsegments 
+-----------
+         2
+(1 row)
+
+SELECT array_to_string(terms, ' | ') AS q, rx_same(terms) AS exact_after_churn
+FROM (VALUES (ARRAY['a']), (ARRAY['c']), (ARRAY['a','c']), (ARRAY['a','b','c','d'])) v(terms)
+ORDER BY 1;
+       q       | exact_after_churn 
+---------------+-------------------
+ a             | t
+ a | b | c | d | t
+ a | c         | t
+ c             | t
+(4 rows)
+
+DROP FUNCTION rx_same(text[]);
+DROP FUNCTION rx_idx(text, int);
+DROP FUNCTION rx_ref(text[], int);
+DROP FUNCTION rx_term(text);
+DROP TABLE rx;
