@@ -7027,6 +7027,18 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	bm25_maintenance_lock(index);
 	PG_TRY();
 	{
+	/*
+	 * Fold the pending list into a segment FIRST (1.11.0).  Pending documents
+	 * are in no segment, so the loop below never offered them to the dead-TID
+	 * callback: a document inserted and deleted between two VACUUMs kept its
+	 * index entry while the heap freed its slot, and the cleanup-time flush
+	 * then wrote it into a segment pointing at a free heap slot.  count(*)
+	 * overcounted, a bitmap scan returned whatever row later reused the slot,
+	 * and an index scan failed reading a truncated heap block -- in every
+	 * release.  Flushed here, they are ordinary segment postings that this
+	 * pass tombstones.  Same flush vacuumcleanup runs, under the same lock.
+	 */
+	(void) bm25_flush_pending(index);
 	{
 		Buffer		mb = bm25_readbuf(index, BM25_METAPAGE_BLKNO);
 

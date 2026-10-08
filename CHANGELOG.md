@@ -4,13 +4,26 @@ All notable changes to pg_fts are documented here.
 
 ## 1.11.0 - 2026-10-08
 
-Ranked queries visit blocks best-first; builds no longer need `fts_vacuum`; two wrong
-ranked results fixed.  **No on-disk format change**; **no REINDEX required**; no new SQL
-objects (`pg_fts--1.10.0--1.11.0.sql` is a no-op).  New GUC `pg_fts.bestfirst` (default
-on; off = the 1.10.0 traversals, identical results).  Measured in `bench/RESULTS_A_2026-10-07.md` (protocol written before the run).
+Ranked queries visit blocks best-first; builds no longer need `fts_vacuum`; three
+wrong-result bugs fixed, one of them in VACUUM (a deleted pending row stayed in the index).
+**No on-disk format change**; **no REINDEX required** to upgrade (a REINDEX does clear
+entries the VACUUM bug already left).  No new SQL objects (`pg_fts--1.10.0--1.11.0.sql` is a
+no-op).  New GUC `pg_fts.bestfirst` (default on; off = the 1.10.0 traversals, identical
+results).  Measured in `bench/RESULTS_A_2026-10-07.md` (protocol written before the run).
 
 ### Fixed (wrong results)
 
+- **A row inserted and then deleted before the next VACUUM stayed in the index**
+  (every release).  Newly inserted rows sit in the pending list until a VACUUM folds
+  them into a segment; VACUUM's dead-row pass looked only at segments, so it never
+  removed a deleted pending row, and the cleanup that followed wrote that row into a
+  segment pointing at the freed heap slot.  Afterwards `count(*)` counted it, a
+  bitmap scan returned whatever row later reused the slot (wrong rows that do not
+  contain the term), and an index scan could fail with "could not read blocks".
+  Reproduced on 1.10.0: 2,300 counted and 100 wrong rows returned against 2,200
+  true matches.  VACUUM now folds the pending list into a segment before the dead-row
+  pass.  An index that already holds such entries is corrected by `REINDEX`; new
+  test `pending_delete`.
 - **Ranked queries of four or more terms could return the wrong top-k** (every release
   with MaxScore, i.e. since 0.1.0).  The essential/non-essential split summed the
   maximum contributions of the terms AFTER a term instead of the low-impact terms up to
@@ -70,6 +83,8 @@ on; off = the 1.10.0 traversals, identical results).  Measured in `bench/RESULTS
 
 ### Tests
 
+- `pending_delete` regression test: pending rows deleted before a VACUUM, slots reused
+  by non-matching rows; count, bitmap and ranked results checked (fails on 1.10.0).
 - `ranked_exact` regression test: every ranked path (best-first, block-max WAND,
   MaxScore, conjunctive, phrase) against an exhaustive per-term reference, after deletes
   and with two segments; every mutant tried (MaxScore split, overlap bound, stop test,
