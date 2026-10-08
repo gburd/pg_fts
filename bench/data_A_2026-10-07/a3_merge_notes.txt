@@ -62,3 +62,9 @@
 #   prev: build 78.3 / 78.9 s (3.59 GB) + fts_vacuum 26.3 / 25.9 s -> 1,489,600,512
 #   cur:  build 105.1 / 105.2 s -> 1,489,600,512 directly; fts_vacuum afterwards 0.0 s
 #   (vs approach-a before the merge work: 272.8 s build + 186.4 s fts_vacuum)
+# fifth step, phase timing (adev2, log_min_messages=debug1, CREATE INDEX docs_fts_b on the stored
+#   column, default settings, in-build pack binary): server log lines --
+#   "collapsing 7 segments to one (2003 MB <= collapse cap 4096 MB)"
+#   "merging 7 of 7 segments (2188038 live docs) into one" ... "wrote merged segment ... in 42.2 s"
+#   "merging 1 of 1 segments (2188038 live docs) into one" ... "wrote merged segment ... in 23.7 s"
+#   (the second is bm25_vacuum_compact's pack; the build totalled 105-107 s in build_time2.sh)

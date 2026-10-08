@@ -2,6 +2,78 @@
 
 All notable changes to pg_fts are documented here.
 
+## Unreleased (development branch after 1.10.0)
+
+Ranked queries visit blocks best-first; builds no longer need `fts_vacuum`; two wrong
+ranked results fixed.  **No on-disk format change**; **no REINDEX required**; no new SQL
+objects.  Measured in `bench/RESULTS_A_2026-10-07.md` (protocol written before the run).
+
+### Fixed (wrong results)
+
+- **Ranked queries of four or more terms could return the wrong top-k** (every release
+  with MaxScore, i.e. since 0.1.0).  The essential/non-essential split summed the
+  maximum contributions of the terms AFTER a term instead of the low-impact terms up to
+  it, so candidates were drawn only from the high-impact terms and documents scoring
+  mostly on the others were never seen.  `film | music | album | band` on 2.19M
+  Wikipedia articles returned none of the true top-10.  Found by an exhaustive reference
+  check (`bench/data_A_2026-10-07/mt_oracle.py`); regression test `ranked_exact`.
+- **Ranked `term:LABEL` queries returned documents without that label** (since 1.4.0).
+  The ranked path treated a weight-restricted term as plain presence; `@@@` and counts
+  were correct.  It now takes the heap-recheck path, like fuzzy and regex.
+- **Scores are summed in query-term order on every ranked path.**  The block-max WAND
+  loop summed in cursor order, which is arbitrary among equal docids, so a three-term
+  score could differ in the last bit between two traversals of the same query.
+
+### Changed (performance)
+
+- **Single-term top-k is best-first.**  The term's block headers are read, ordered by
+  block bound, and visited until the best remaining bound is below the k-th score.  The
+  block bound is now exact for the effective length the scorer uses (the existing
+  `min_doclen` header field stores `floor(max_tf * min(len/tf))`; readers are unchanged,
+  old segments keep the looser bound until a merge rewrites them).  Common-term `year`
+  top-10 8.48 -> 0.81 ms, top-100 8.77 -> 1.30 ms.
+- **AND and phrase top-k walk the rarest term's blocks best-first** and look the other
+  terms up, with a bound per block from the overlapping blocks of every term; phrases
+  check adjacency on the candidate.  `united & states` 23.9 -> 2.7 ms, `"united states"`
+  25.0 -> 3.6 ms.
+- **Dictionary seek** binary-searches each index page.
+- **Builds and merges.**  The merge resolves each output term once instead of hashing it
+  per posting, collects the merged length sidecar once per document instead of once per
+  posting, merges the per-source posting runs instead of sorting, and reads source lengths
+  in O(1); FOR packing works a byte at a time.  Every live page is byte-identical to the
+  previous merge output (checked for positions off/on, inline lengths, and a tombstoned
+  merge).  A plain `CREATE INDEX`/`REINDEX` now compacts at the end, so the new index is
+  at its packed size: an expression index on 2.19M articles builds in 257 s at 1,369 MiB,
+  where 1.10.0 took 412 s to a 3.43 GB index plus 198 s of `fts_vacuum`.
+  `CREATE INDEX CONCURRENTLY` keeps the old behaviour; run `fts_vacuum` after it.
+- **Maintenance I/O goes through a buffer ring** (BULKWRITE), so a merge or `fts_vacuum`
+  leaves the hot set resident: with `shared_buffers = 4GB`, an `fts_merge` of a 2.19M
+  index left 99.9% of a warmed second index resident, against 0% before.  A build still
+  evicts through core PostgreSQL's TOAST detoast of the indexed column, which pg_fts
+  cannot route through a ring.
+- **Prefetch** of the ranked candidates' heap blocks before the visibility check, and of
+  the next page wherever a page chain jumps.  Cold-cache top-10 on local NVMe: rare
+  49 -> 45 ms, common 58 -> 49 ms, `united & states` 90 -> 64 ms.
+
+### Retracted
+
+- "pg_search is ~17x / 3.5x faster on common-term ranking, and that gap is architectural
+  (scalar postings vs bitmap + SIMD), not a tuning matter" (AGENTS.md, README, 1.10.0
+  results).  The gap was the traversal: with best-first block order and exact block
+  bounds, pg_fts's common-term top-10 is 0.81 ms against pg_search's 2.63 on the same
+  hardware.
+- The 1.10.0 build time "298 s + 200 s `fts_vacuum`" was a build on a pre-filled stored
+  column; the 995 s fill was not counted, while the other engines analysed text inside
+  their build.  The expression-index figure (412 s + 198 s for 1.10.0) is the comparable
+  one.
+
+### Tests
+
+- `ranked_exact` regression test: every ranked path (best-first, block-max WAND,
+  MaxScore, conjunctive, phrase) against an exhaustive per-term reference, after deletes
+  and with two segments; every mutant tried (MaxScore split, overlap bound, stop test,
+  cursor rewind, phrase adjacency, `term:LABEL`) fails it.
+
 ## 1.10.0 - 2026-10-07
 
 Rare-term ranked throughput no longer falls as concurrent backends increase (ROADMAP I6).
