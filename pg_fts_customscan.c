@@ -682,7 +682,7 @@ _PG_init(void)
 							PGC_USERSET, GUC_UNIT_MB, NULL, NULL, NULL);
 
 	DefineCustomBoolVariable("pg_fts.bestfirst",
-							 "Single-term ranked queries visit posting blocks in descending score-bound order and stop as soon as no remaining block can enter the top-k.",
+							 "Single-term, AND and phrase ranked queries visit posting blocks in descending score-bound order and stop as soon as no remaining block can enter the top-k.",
 							 "Results are identical; off uses the docid-order paths (block-max WAND, or exhaustive scoring above pg_fts.dense_score_min_df).",
 							 &pg_fts_bestfirst,
 							 true,

@@ -94,11 +94,10 @@ regex, and the current comparison below uses that configuration.
 forms** (see the retraction in CHANGELOG 1.8.6). pg_fts and pg_textsearch have both moved
 since. Current head-to-head, 2026-10-07/08: all four engines at their latest release, one
 AWS r7gd.4xlarge (Graviton3) per engine, Debian 13 arm64, PostgreSQL 17.10, each engine's
-documented English index and query form.  pg_fts is the **unreleased development branch**
-after 1.10.0, with 1.10.0 re-measured on the same host and index
+documented English index and query form.  pg_fts is **1.11.0**, with 1.10.0 re-measured on the same host and index
 (`bench/RESULTS_A_2026-10-07.md`; 1.10.0's own run: `bench/RESULTS_110_2026-10-07.md`):
 
-| Measure | pg_fts dev | pg_fts 1.10.0 | pg_textsearch 1.5.1 | pg_search 0.26.0 | VectorChord-bm25 0.3.0 |
+| Measure | pg_fts 1.11.0 | pg_fts 1.10.0 | pg_textsearch 1.5.1 | pg_search 0.26.0 | VectorChord-bm25 0.3.0 |
 |---|---|---|---|---|---|
 | rare / mid top-10 | **0.64 / 0.43 ms** | 1.07 / 0.83 | 0.99 / 1.21 | 2.66 / 2.27 | 20.4 / 36.8 |
 | common top-10 / top-100 | **0.81 / 1.30** | 8.48 / 8.77 | 10.71 / 13.06 | 2.63 / 5.51 | 84.5 / 86.8 |
@@ -112,7 +111,7 @@ after 1.10.0, with 1.10.0 re-measured on the same host and index
 | index size | **1,421 MiB** (1,369 as expression index) | same | 1,887 MiB | 3,397 MiB | 42,434 MiB |
 | build (expression index, analysis included) | 257 s | 412 s + 198 s `fts_vacuum` | 268 s | **71 s** | 267 s (+ 3,959 s tokenize/model) |
 
-**Read:** the development branch leads ranked latency and throughput at every term
+**Read:** 1.11.0 leads ranked latency and throughput at every term
 frequency, conjunctive queries and phrases, exact counts and index size.  pg_search builds
 3.6x faster and is within 5% on `world & war` and on a 4-term OR.  pg_textsearch is close
 on a single rare term, but its boolean and phrase forms scan the table.  VectorChord's
@@ -153,7 +152,7 @@ need a Rust toolchain, and pg_search additionally needs OpenBLAS and pgvector.
 - **pg_fts** — you want one index that answers ranked BM25 *and* boolean, exact
   counts, phrase, prefix, fuzzy and regex, with PostgreSQL-consistent stemming, the
   smallest on-disk footprint, and no preload/Rust requirement.  pg_search builds 3.6x
-  faster (the development branch; 1.10.0 also trails on common-term ranking and phrase).
+  faster (1.10.0 also trailed on common-term ranking and phrase).
 - **pg_search** — you want the fastest build, and can accept Tantivy's analyzer (configure `stemmer=english`;
   tokenization still differs slightly from `to_tsvector`), a 2.4× larger index,
   lower single-term throughput under load, and a Rust build (it also requires pgvector).

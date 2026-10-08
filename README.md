@@ -234,8 +234,7 @@ Performance
 
 Numbers below are from `bench/RESULTS_A_2026-10-07.md` (summarized in
 `bench/BENCHMARK_SUMMARY.md`; if the two ever disagree, the results file is right).  They
-are for the **unreleased** development branch (`main` after 1.10.0); the 1.10.0 release
-column is re-measured on the same host and index.  Method, briefly: four engines at their
+are for **1.11.0**; the 1.10.0 column is re-measured on the same host and index.  Method, briefly: four engines at their
 latest release, **one AWS r7gd.4xlarge per engine** (Graviton3, 16 vCPU, 128 GiB, local
 NVMe), Debian 13 arm64, PostgreSQL 17.10 built from source with identical settings on every
 host; English Wikipedia, 2,188,038 articles, md5-identical input; each engine's documented
@@ -246,7 +245,7 @@ before any timing is taken, and both are checked against an exhaustive reference
 counts are checked against a regex over the raw text.  Protocol, scripts, raw output and
 every engine's install log: `bench/PROTOCOL_A_2026-10-07.md`, `bench/data_A_2026-10-07/run/`.
 
-| ms, single client | **pg_fts dev** | pg_fts 1.10.0 | pg_textsearch 1.5.1 | pg_search 0.26.0 | VectorChord-bm25 0.3.0 |
+| ms, single client | **pg_fts 1.11.0** | pg_fts 1.10.0 | pg_textsearch 1.5.1 | pg_search 0.26.0 | VectorChord-bm25 0.3.0 |
 |---|---|---|---|---|---|
 | rare term top-10 | **0.64** | 1.07 | 0.99 | 2.66 | 20.4 |
 | mid term top-10 | **0.43** | 0.83 | 1.21 | 2.27 | 36.8 |
@@ -259,7 +258,7 @@ every engine's install log: `bench/PROTOCOL_A_2026-10-07.md`, `bench/data_A_2026
 | phrase top-10, `"united states"` | **3.55** | 24.95 | >300 s | 12.08 | n/a |
 | exact `count(*)` | **0.19** | 0.21 | n/a | 10.56 | n/a |
 
-| tps, 16 / 64 clients | **pg_fts dev** | pg_fts 1.10.0 | pg_textsearch | pg_search | VectorChord |
+| tps, 16 / 64 clients | **pg_fts 1.11.0** | pg_fts 1.10.0 | pg_textsearch | pg_search | VectorChord |
 |---|---|---|---|---|---|
 | rare term top-10 | **26,750 / 26,338** | 17,496 / 17,274 | 13,355 / 12,157 | 5,147 / 5,998 | 334 / 667 |
 | common term top-10 | **22,369 / 21,590** | 1,911 / 1,875 | 1,176 / 1,236 | 5,241 / 5,951 | 59 / 119 |
@@ -268,7 +267,7 @@ every engine's install log: `bench/PROTOCOL_A_2026-10-07.md`, `bench/data_A_2026
 Index size: pg_fts **1,421 MiB** on a stored `ftsdoc` column (1,369 MiB as an expression
 index), pg_textsearch 1,887, pg_search 3,397, VectorChord 42,434 (see the caveat in the
 results file).  Build, as an expression index so every
-engine analyses the text inside its build: pg_search **71 s**, pg_fts dev 257 s (1.10.0:
+engine analyses the text inside its build: pg_search **71 s**, pg_fts 1.11.0 257 s (1.10.0:
 412 s plus 198 s of `fts_vacuum`), pg_textsearch 268 s.
 
   * **Where pg_fts wins.**  Ranked single-term queries at every frequency, including

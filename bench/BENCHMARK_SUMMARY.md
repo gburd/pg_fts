@@ -1,4 +1,4 @@
-# pg_fts benchmark summary — methodology and results (as of the development branch after v1.10.0, 2026-10-08)
+# pg_fts benchmark summary — methodology and results (as of v1.11.0, 2026-10-08)
 
 Consolidated view of the current measurements. Every number here is traceable to a
 run recorded under `bench/`; nothing is estimated. Where a figure was previously
@@ -60,15 +60,16 @@ alone.
 
 ## 2. Comparative latency
 
-### 2a''''. Current: pg_fts development branch (after 1.10.0) vs 1.10.0 and the field (2026-10-07/08, aarch64)
+### 2a''''. Current: pg_fts 1.11.0 vs 1.10.0 and the field (2026-10-07/08, aarch64)
 
 `bench/RESULTS_A_2026-10-07.md` (protocol `bench/PROTOCOL_A_2026-10-07.md`, written before
 the run; raw data `bench/data_A_2026-10-07/run/`).  Same rig and corpus as 1.10.0; pg_fts
-1.10.0 and the development branch measured on one host, against the same index files,
+1.10.0 and 1.11.0 measured on one host, against the same index files,
 after a correctness gate (identical results, and an exhaustive reference on every band).
-Unreleased code: branch commit 39b6a42.
+Measured at commit 39b6a42; the 1.11.0 release differs from it only in a comment and a GUC
+description string.
 
-| ms, single client | pg_fts dev | pg_fts 1.10.0 | pg_textsearch | pg_search | VectorChord |
+| ms, single client | pg_fts 1.11.0 | pg_fts 1.10.0 | pg_textsearch | pg_search | VectorChord |
 |---|---|---|---|---|---|
 | rare / mid top-10 | **0.64 / 0.43** | 1.07 / 0.83 | 0.99 / 1.21 | 2.66 / 2.27 | 20.4 / 36.8 |
 | common top-10 / top-100 | **0.81 / 1.30** | 8.48 / 8.77 | 10.71 / 13.06 | 2.63 / 5.51 | 84.5 / 86.8 |
@@ -78,7 +79,7 @@ Unreleased code: branch commit 39b6a42.
 | phrase `"united states"` / `"world war"` | **3.55 / 6.84** | 24.95 / 19.79 | >300 s | 12.08 / 11.95 | n/a |
 | exact count | **0.19** | 0.21 | n/a | 10.56 | n/a |
 
-| tps at 16 / 32 / 64 clients | pg_fts dev | pg_fts 1.10.0 | pg_textsearch | pg_search | VectorChord |
+| tps at 16 / 32 / 64 clients | pg_fts 1.11.0 | pg_fts 1.10.0 | pg_textsearch | pg_search | VectorChord |
 |---|---|---|---|---|---|
 | rare top-10 | **26,750 / 26,341 / 26,338** | 17,496 / 17,328 / 17,274 | 13,355 / 12,165 / 12,157 | 5,147 / 5,360 / 5,998 | 334 / 593 / 667 |
 | mid top-10 | **35,304 / 34,407 / 34,328** | 20,414 / 20,142 / 20,146 | 10,811 / 9,976 / 9,904 | 5,987 / 6,439 / 6,789 | 175 / 323 / 359 |
@@ -386,7 +387,7 @@ Kept because the corrections are part of the result.
    (scalar postings vs bitmap + SIMD)"** (1.10.0 and earlier).  The gap was pg_fts's
    traversal: best-first block order with exact block bounds makes the common-term
    top-10 0.81 ms against pg_search's 2.63 on the same rig (2a'''').  Retracted in the
-   CHANGELOG (Unreleased).
+   CHANGELOG (1.11.0).
 8. **The 1.10.0 build time (298 s + 200 s `fts_vacuum`)** timed a build on a pre-filled
    column (the 995 s fill was not counted); the comparable expression-index figure is
    412 s + 198 s.
@@ -402,7 +403,7 @@ and **ranking quality (NDCG) vs rivals**. All four engines put 6-10 of the same
 documents in each top-10, so relevance differences are about near-ties, but that is
 not a quality measurement.
 
-## 8. Honest summary (development branch after 1.10.0, aarch64, 2026-10-08)
+## 8. Honest summary (1.11.0, aarch64, 2026-10-08)
 
 **Strengths.** Lowest ranked latency and highest throughput of the four at every term
 frequency: rare 0.64 ms / 26.8k tps, common 0.81 ms / 22.4k tps (pg_search 2.63 ms /

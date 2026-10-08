@@ -823,7 +823,7 @@ static inline void
 bm25_chain_prefetch(Relation index, BlockNumber blk, BlockNumber next)
 {
 	/* the relation size is read only for a jump: an smgr size lookup per
-	 * page of every chain walk cost 9% of a count(*) (1.11.0 development) */
+	 * page of every chain walk cost 9% of a count(*) during 1.11.0 development) */
 	if (next != InvalidBlockNumber && next != blk + 1 &&
 		next < RelationGetNumberOfBlocks(index))
 		PrefetchBuffer(index, MAIN_FORKNUM, next);

@@ -2,11 +2,12 @@
 
 All notable changes to pg_fts are documented here.
 
-## Unreleased (development branch after 1.10.0)
+## 1.11.0 - 2026-10-08
 
 Ranked queries visit blocks best-first; builds no longer need `fts_vacuum`; two wrong
 ranked results fixed.  **No on-disk format change**; **no REINDEX required**; no new SQL
-objects.  Measured in `bench/RESULTS_A_2026-10-07.md` (protocol written before the run).
+objects (`pg_fts--1.10.0--1.11.0.sql` is a no-op).  New GUC `pg_fts.bestfirst` (default
+on; off = the 1.10.0 traversals, identical results).  Measured in `bench/RESULTS_A_2026-10-07.md` (protocol written before the run).
 
 ### Fixed (wrong results)
 

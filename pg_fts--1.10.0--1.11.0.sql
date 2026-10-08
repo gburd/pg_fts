@@ -1,0 +1,13 @@
+/* pg_fts 1.10.0 -> 1.11.0
+ *
+ * No SQL-visible changes.  C-level only: best-first single-term and
+ * conjunctive (AND, phrase) ranked top-k with exact block bounds (new GUC
+ * pg_fts.bestfirst, default on); MaxScore (4+ terms) and ranked term:LABEL
+ * wrong-result fixes; faster merge with identical output and compaction inside
+ * a plain CREATE INDEX / REINDEX; a buffer ring for maintenance I/O; prefetch.
+ *
+ * No on-disk format change (BM25_VERSION unchanged): no REINDEX required.  The
+ * tighter block bound uses the existing min_doclen header field; segments
+ * written by older versions keep their looser (still sound) bound until a
+ * merge rewrites them.
+ */

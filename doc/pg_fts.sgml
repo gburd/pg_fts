@@ -799,15 +799,18 @@ SELECT * FROM messages
    <para>
     Call <function>fts_merge(<replaceable>index</replaceable>)</function> to
     <emphasis>optimize now</emphasis>: it folds the pending buffer and merges
-    live segments into one, e.g. right after a parallel build (which leaves the
-    workers' segments unmerged for speed) or after heavy churn.  It compacts the
+    live segments into one, e.g. after heavy churn, or after a build too large
+    for <varname>pg_fts.build_collapse_max_mb</varname> (which leaves the
+    workers' segments unmerged).  It compacts the
     segment directory but does <emphasis>not</emphasis> shrink the physical file.
     Call <function>fts_vacuum(<replaceable>index</replaceable>)</function> to
     <emphasis>reclaim disk</emphasis>: it additionally relocates live pages to
     the front of the index file and truncates the free tail back to the operating
     system, shrinking an index that has grown larger than its live contents
-    (after a bulk build or heavy update churn) without a
-    <command>REINDEX</command>.  A single <function>fts_vacuum()</function> call
+    (after <command>CREATE INDEX CONCURRENTLY</command>, a bulk load, or heavy
+    update churn) without a <command>REINDEX</command>.  A plain
+    <command>CREATE INDEX</command> or <command>REINDEX</command> already
+    compacts at the end of the build (1.11.0).  A single <function>fts_vacuum()</function> call
     reclaims most of the space; a second converges to the floor.
    </para>
   </formalpara>
@@ -915,13 +918,29 @@ SELECT * FROM messages
    </varlistentry>
 
    <varlistentry>
+    <term><varname>pg_fts.bestfirst</varname> (<type>boolean</type>, default on)</term>
+    <listitem>
+     <para>
+      A ranked query on a single term, an <literal>AND</literal> of terms, or a
+      phrase reads the score bound of each 128-document block first and visits
+      blocks best first, stopping as soon as no remaining block can beat the
+      k-th result.  A top-10 for a term in 735,000 documents visits about 30
+      blocks.  For <literal>AND</literal> and phrases the blocks of the rarest
+      term are visited and the other terms are looked up.  Results are
+      identical either way; <literal>off</literal> uses document-order
+      traversal (block-max WAND, or the exhaustive scoring below).
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><varname>pg_fts.dense_score_min_df</varname> (<type>integer</type>, default 32768)</term>
     <listitem>
      <para>
-      A ranked query on a single plain term whose postings live in one segment
-      and number at least this many is scored exhaustively instead of with
-      block-max WAND, which prunes almost nothing for very common terms.
-      <literal>0</literal> disables it.
+      With <varname>pg_fts.bestfirst</varname> off, a ranked query on a single
+      plain term whose postings live in one segment and number at least this
+      many is scored exhaustively instead of with block-max WAND, which prunes
+      almost nothing for very common terms.  <literal>0</literal> disables it.
      </para>
     </listitem>
    </varlistentry>
