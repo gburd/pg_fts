@@ -66,8 +66,12 @@ alone.
 the run; raw data `bench/data_A_2026-10-07/run/`).  Same rig and corpus as 1.10.0; pg_fts
 1.10.0 and 1.11.0 measured on one host, against the same index files,
 after a correctness gate (identical results, and an exhaustive reference on every band).
-Measured at commit 39b6a42; the 1.11.0 release differs from it only in a comment and a GUC
-description string.
+Measured at commit 39b6a42; the 1.11.0 release adds, after that commit, the VACUUM pending-delete fix and the four
+concurrency fixes (CHANGELOG 1.11.0), which change the write, flush, free and truncate paths
+and not the query traversals.  Timings were not re-run on the release binary (unmeasured); on a
+600k-row index built locally, 39b6a42 and the release give identical sizes after build, VACUUM
+and merge, and identical counts and top-20 on five bands
+(`data_A_2026-10-07/release/size_results_39b6a42_vs_release.txt`).
 
 | ms, single client | pg_fts 1.11.0 | pg_fts 1.10.0 | pg_textsearch | pg_search | VectorChord |
 |---|---|---|---|---|---|

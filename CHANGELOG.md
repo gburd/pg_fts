@@ -57,7 +57,8 @@ aarch64), each reproduced on 1.10.0 before the fix.
   (`bad magic number in sequence`).  The free tail is now truncated only under
   AccessExclusiveLock (already held by `fts_vacuum`, REINDEX and CREATE INDEX; VACUUM and
   `fts_merge` try for it conditionally and otherwise leave the tail for a later pass, so
-  the space stays reusable through the FSM).
+  the space stays reusable through the FSM).  As with heap VACUUM's truncation, the brief
+  lock is WAL-logged, so on a hot standby it can cancel a conflicting query on the index.
 - **A scan could follow a freed page's recycle stamp as a block number.**  Freeing a page
   stored its free-time XID in the page's next-page link, but the recycle gate exists
   because a scan on an older directory snapshot may still be walking that chain: it read

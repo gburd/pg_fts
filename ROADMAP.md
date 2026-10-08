@@ -70,7 +70,7 @@ These do not touch the index and are the cheapest, highest-leverage work in the 
 
 ## Closed (one line each; detail in CHANGELOG)
 
-- **1.11.0** (Approach A): best-first single-term and conjunctive top-k with exact block bounds; MaxScore wrong top-k for 4+ terms (every release) and ranked `term:LABEL` fixed; merge 5x faster with identical output and no `fts_vacuum` after a plain build; maintenance buffer ring; prefetch where chains jump and for the ranked heap fetches.  Champion lists (Approach C) not needed.  `bench/RESULTS_A_2026-10-07.md`.
+- **1.11.0** (Approach A): best-first single-term and conjunctive top-k with exact block bounds; MaxScore wrong top-k for 4+ terms (every release) and ranked `term:LABEL` fixed; merge 5x faster with identical output and no `fts_vacuum` after a plain build; maintenance buffer ring; prefetch where chains jump and for the ranked heap fetches; VACUUM pending-delete fix and four concurrency fixes (lost inserts during flush, truncation without AccessExclusiveLock, freed-page link overwritten by the recycle XID, double free on scan retry), all in every earlier release, regression test `t/012`.  Champion lists (Approach C) not needed.  `bench/RESULTS_A_2026-10-07.md`.
 
 - **1.9.0** ranked-retrieval release (LIMIT pushdown, resident doclen, dense high-df scoring, score reuse) and two exactness fixes present since 1.x (negative idf after deletes; WAND last-block skip). Leads pg_textsearch 1.4.0 on every latency and throughput band except phrase (3.2x behind).
 - **1.8.6** sparsemap 5.7.0 -> 5.8.0: bulk `sm_add_many_grow` merges instead of inserting per bit (1.4-4x faster standalone; unmeasured in pg_fts at scale), plus a coalesce over-read fix. Byte-identical wire output.

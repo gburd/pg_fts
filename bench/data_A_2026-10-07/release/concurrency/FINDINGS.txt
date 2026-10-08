@@ -17,7 +17,10 @@
 #    vacuum_compact backstop) while an inserter holds a pinned pending/tail page or is
 #    extending; the inserter then writes a page beyond the new EOF.
 #
-# Fixes needed (not in 1.11.0): (1) clear only the pending pages actually folded -- detach
+# STATUS (ada32aa): both FIXED in 1.11.0, plus two more found while verifying the fixes --
+# see FIXED.txt.  The text below is the pre-fix record.
+#
+# Fixes needed (as first written): (1) clear only the pending pages actually folded -- detach
 # the list under the EXCLUSIVE metapage lock BEFORE folding (swap head/tail to Invalid, keep
 # the detached chain), so concurrent inserts start a new list; (2) never truncate the index
 # under a lock that admits concurrent inserters (or take the relation-extension lock and
