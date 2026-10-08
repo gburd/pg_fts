@@ -4412,10 +4412,22 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
  * it with the current next-XID and mark it BM25_FREED, then hand it to the FSM.
  * Before REUSING a free page, require that stamp to be "old enough" that no
  * snapshot which could still reference it remains (GlobalVisCheckRemovableXid);
- * otherwise skip the page and leave it in the FSM for later.  The XID lives in
- * the freed page's nextblk field (dead once the page is off every chain), so
- * the on-disk page layout is unchanged and existing indexes need no REINDEX; a
- * page freed by an older build lacks BM25_FREED and is recyclable at once.
+ * otherwise skip the page and leave it in the FSM for later.  A page freed by
+ * a build older than the flag lacks BM25_FREED and is recyclable at once.
+ *
+ * The XID lives in the page header's pd_prune_xid (a heap-pruning hint core
+ * never reads or writes on an index page).  Until 1.11.0 it overwrote the
+ * page's nextblk, on the theory that the link is dead once the page is off
+ * every chain -- but the gate exists precisely because a scan holding an older
+ * directory snapshot is still ON that chain, and it followed the XID as a
+ * block number: past EOF ("could not read blocks N..N", N = the free-time
+ * XID) or into an unrelated live page (a "corrupt tombstone bitmap" ERROR
+ * raised before the scan's generation re-check could restart it).  Found by
+ * the 1.11.0 churn gate; present in every release since the gate.  Now a freed
+ * page keeps its contents AND its link until it is recycled, so a stale walk
+ * reads a consistent stale chain, which the generation re-check discards.
+ * Pages freed by 1.8.x-1.10.x carry the XID in nextblk and pd_prune_xid = 0;
+ * bm25_page_recyclable reads that form too (no REINDEX, no format change).
  */
 static void
 bm25_free_page(Relation index, BlockNumber blk)
@@ -4430,8 +4442,8 @@ bm25_free_page(Relation index, BlockNumber blk)
 	page = GenericXLogRegisterBuffer(state, buf, 0);
 	op = BM25PageGetOpaque(page);
 	op->flags |= BM25_FREED;
-	/* reuse nextblk as the free-time XID horizon (page is now off all chains) */
-	op->nextblk = (BlockNumber) ReadNextTransactionId();
+	/* free-time XID horizon; nextblk is left intact for in-flight walks */
+	((PageHeader) page)->pd_prune_xid = ReadNextTransactionId();
 	GenericXLogFinish(state);
 	UnlockReleaseBuffer(buf);
 	RecordFreeIndexPage(index, blk);
@@ -4498,7 +4510,13 @@ bm25_page_recyclable(Relation index, Page page)
 	 * upper bound -- it may keep a page unrecyclable slightly longer than a
 	 * heap-scoped horizon would, never shorter -- so it is always safe here.
 	 */
-	return GlobalVisCheckRemovableXid(NULL, (TransactionId) op->nextblk);
+	{
+		TransactionId fxid = ((PageHeader) page)->pd_prune_xid;
+
+		if (!TransactionIdIsValid(fxid))
+			fxid = (TransactionId) op->nextblk;	/* freed by 1.8.x-1.10.x */
+		return GlobalVisCheckRemovableXid(NULL, fxid);
+	}
 }
 
 /*
@@ -5423,30 +5441,84 @@ bm25_compact_to_one(Relation index, bool extend_only)
 	return didwork;
 }
 
-/* Truncate the contiguous run of free blocks at the end of the file back to
- * the OS.  Returns the new block count.  Scan is cancel-safe (no lock held). */
-static BlockNumber
-bm25_truncate_free_tail(Relation index)
+/*
+ * Truncating the index file drops the shared buffers of the cut blocks
+ * (DropRelationBuffers) whether or not another backend has them pinned, and
+ * races a concurrent extension.  Until 1.11.0 a merge or VACUUM truncated
+ * under a lock that admits inserters and readers: an inserter's pinned
+ * pending page vanished under it (SIGSEGV in GenericXLogFinish), extensions
+ * failed with "unexpected data beyond EOF", and scans read past the new end
+ * (every release).  So truncation needs AccessExclusiveLock on the index,
+ * taken conditionally when not already held -- the way heap VACUUM truncates.
+ * When another session holds any lock on the index the tail is left in place;
+ * its pages stay in the FSM and are reused, and a later VACUUM or fts_vacuum
+ * (which holds the lock) reclaims them.  Returns true with *took set when the
+ * caller must UnlockRelation afterwards.
+ */
+static bool
+bm25_truncate_lock(Relation index, bool *took)
 {
-	BlockNumber nblocks = RelationGetNumberOfBlocks(index);
+	*took = false;
+	if (CheckRelationLockedByMe(index, AccessExclusiveLock, true))
+		return true;
+	if (!ConditionalLockRelation(index, AccessExclusiveLock))
+		return false;
+	*took = true;
+	return true;
+}
+
+/* The start of the contiguous run of free blocks at the end of the file
+ * (nblocks if there is none).  Reads the FSM only; cancel-safe. */
+static BlockNumber
+bm25_free_tail_start(Relation index, BlockNumber nblocks, BlockNumber floor)
+{
 	BlockNumber truncpoint = nblocks;
 	BlockNumber blk;
 
-	for (blk = nblocks; blk > 1; blk--)
+	for (blk = nblocks; blk > floor; blk--)
 	{
-		CHECK_FOR_INTERRUPTS();		/* scan-only, no lock held */
+		CHECK_FOR_INTERRUPTS();
 		if (GetRecordedFreeSpace(index, blk - 1) >= BLCKSZ / 2)
 			truncpoint = blk - 1;	/* free -> part of the truncatable tail */
 		else
 			break;				/* first live block from the end; stop */
 	}
+	return truncpoint;
+}
+
+/* Truncate the contiguous run of free blocks at the end of the file back to
+ * the OS (under AccessExclusiveLock, see bm25_truncate_lock), down to no less
+ * than `floor` blocks.  Returns the new block count. */
+static BlockNumber
+bm25_truncate_free_tail_to(Relation index, BlockNumber floor)
+{
+	BlockNumber nblocks = RelationGetNumberOfBlocks(index);
+	BlockNumber truncpoint;
+	bool		took;
+
+	/* unlocked look first: most calls find no free tail and take no lock */
+	if (bm25_free_tail_start(index, nblocks, floor) >= nblocks)
+		return nblocks;
+	if (!bm25_truncate_lock(index, &took))
+		return nblocks;
+	/* recompute under the lock: the file and the FSM may have moved */
+	nblocks = RelationGetNumberOfBlocks(index);
+	truncpoint = bm25_free_tail_start(index, nblocks, floor);
 	if (truncpoint < nblocks)
 	{
 		FreeSpaceMapVacuumRange(index, truncpoint, nblocks);
 		RelationTruncate(index, truncpoint);
 		nblocks = truncpoint;
 	}
+	if (took)
+		UnlockRelation(index, AccessExclusiveLock);
 	return nblocks;
+}
+
+static BlockNumber
+bm25_truncate_free_tail(Relation index)
+{
+	return bm25_truncate_free_tail_to(index, 1);	/* block 0 = metapage */
 }
 
 /*
@@ -5725,26 +5797,9 @@ bm25_vacuum_compact(Relation index)
 	 * tail down to at most the pre-call size.
 	 */
 	nblocks = RelationGetNumberOfBlocks(index);
-	if (nblocks > startblocks)
-	{
-		BlockNumber truncpoint = nblocks;
-		BlockNumber blk;
-
-		for (blk = nblocks; blk > startblocks; blk--)
-		{
-			CHECK_FOR_INTERRUPTS();		/* scan-only, no lock held */
-			if (GetRecordedFreeSpace(index, blk - 1) >= BLCKSZ / 2)
-				truncpoint = blk - 1;
-			else
-				break;
-		}
-		if (truncpoint < nblocks)
-		{
-			FreeSpaceMapVacuumRange(index, truncpoint, nblocks);
-			RelationTruncate(index, truncpoint);
-			didwork = true;
-		}
-	}
+	if (nblocks > startblocks &&
+		bm25_truncate_free_tail_to(index, startblocks) < nblocks)
+		didwork = true;
 
 	return didwork;
 }
@@ -6733,16 +6788,60 @@ bm25_flush_pending(Relation index)
 	BM25BuildState bs;
 	BM25SegMeta seg;
 	BlockNumber blk;
+	BlockNumber sealtail;		/* last pending page this flush folds */
+	BlockNumber newtail;		/* empty page later inserts append to */
+	uint32		sealed;			/* pending documents at the seal */
+	bool		freenewtail = false;
 
+	/*
+	 * Seal the list first (1.11.0).  Under the EXCLUSIVE metapage lock, which
+	 * every inserter holds for its whole append, link a fresh empty page after
+	 * the tail and make it the tail: from here on inserts land there, so the
+	 * pages head..sealtail are frozen and hold exactly `sealed` documents.
+	 * Until 1.11.0 the flush read the list under a SHARE lock, folded it, and
+	 * then emptied the WHOLE list, discarding every document an inserter had
+	 * appended in between; with eight inserting sessions and a flush every
+	 * 0.2 s, 10 of 11 flushes lost 648-883 rows (every release).  The sealed
+	 * pages stay on the list, so scans keep finding their documents, until
+	 * the segment holding them is published.  Lock order meta, new page, old
+	 * tail is the inserter's.
+	 */
 	{
 		Buffer		mb = bm25_readbuf(index, BM25_METAPAGE_BLKNO);
+		Buffer		nb,
+					tb;
+		GenericXLogState *state;
+		Page		np,
+					tp,
+					mp;
 
-		LockBuffer(mb, BUFFER_LOCK_SHARE);
+		LockBuffer(mb, BUFFER_LOCK_EXCLUSIVE);
 		bm25_meta_from_page(BufferGetPage(mb), &meta);
+		if (meta.npending == 0 || meta.pendinghead == InvalidBlockNumber ||
+			meta.pendingtail == InvalidBlockNumber)
+		{
+			UnlockReleaseBuffer(mb);
+			return false;
+		}
+		nb = bm25_new_buffer(index);
+		newtail = BufferGetBlockNumber(nb);
+		tb = bm25_readbuf(index, meta.pendingtail);
+		LockBuffer(tb, BUFFER_LOCK_EXCLUSIVE);
+		state = GenericXLogStart(index);
+		np = GenericXLogRegisterBuffer(state, nb, GENERIC_XLOG_FULL_IMAGE);
+		bm25_init_page(np, BM25_PENDING);
+		tp = GenericXLogRegisterBuffer(state, tb, 0);
+		BM25PageGetOpaque(tp)->nextblk = newtail;
+		mp = GenericXLogRegisterBuffer(state, mb, 0);
+		bm25_meta_upcast_page(mp);	/* v3 -> v4 before struct write */
+		BM25PageGetMeta(mp)->pendingtail = newtail;
+		GenericXLogFinish(state);
+		UnlockReleaseBuffer(tb);
+		UnlockReleaseBuffer(nb);
 		UnlockReleaseBuffer(mb);
+		sealtail = meta.pendingtail;
+		sealed = meta.npending;
 	}
-	if (meta.npending == 0)
-		return false;
 
 	bs.ctx = AllocSetContextCreate(CurrentMemoryContext, "bm25 flush",
 								   ALLOCSET_DEFAULT_SIZES);
@@ -6766,7 +6865,7 @@ bm25_flush_pending(Relation index)
 							   HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
 	}
 
-	/* fold only the pending documents into the build state */
+	/* fold the sealed pages (head..sealtail) into the build state */
 	blk = meta.pendinghead;
 	while (blk != InvalidBlockNumber)
 	{
@@ -6781,7 +6880,7 @@ bm25_flush_pending(Relation index)
 		page = BufferGetPage(buffer);
 		ptr = (char *) PageGetContents(page);
 		end = bm25_page_data_end(page);
-		next = BM25PageGetOpaque(page)->nextblk;
+		next = (blk == sealtail) ? InvalidBlockNumber : BM25PageGetOpaque(page)->nextblk;
 		while (ptr < end)
 		{
 			BM25PendingItem *pi = (BM25PendingItem *) ptr;
@@ -6855,14 +6954,24 @@ bm25_flush_pending(Relation index)
 		m = BM25PageGetMeta(mp);
 		m->ndocs -= seg.ndocs;
 		m->sumdoclen -= seg.sumdoclen;
-		m->pendinghead = InvalidBlockNumber;
-		m->pendingtail = InvalidBlockNumber;
-		m->npending = 0;
+		/* drop only the sealed pages: the list now starts at newtail, which
+		 * holds whatever was inserted since the seal */
+		m->npending -= Min(sealed, m->npending);
+		if (m->npending == 0 && m->pendingtail == newtail)
+		{
+			/* nothing arrived since the seal: newtail is empty, drop it too */
+			m->pendinghead = InvalidBlockNumber;
+			m->pendingtail = InvalidBlockNumber;
+			freenewtail = true;
+		}
+		else
+			m->pendinghead = newtail;
+		m->generation++;		/* pending pages freed below: invalidate scan snapshots */
 		GenericXLogFinish(state);
 		UnlockReleaseBuffer(mb);
 	}
 
-	/* recycle the old pending pages */
+	/* recycle the folded pending pages (head..sealtail), and newtail if unused */
 	blk = meta.pendinghead;
 	while (blk != InvalidBlockNumber)
 	{
@@ -6870,11 +6979,14 @@ bm25_flush_pending(Relation index)
 		BlockNumber next;
 
 		LockBuffer(buf, BUFFER_LOCK_SHARE);
-		next = BM25PageGetOpaque(BufferGetPage(buf))->nextblk;
+		next = (blk == sealtail) ? InvalidBlockNumber
+			: BM25PageGetOpaque(BufferGetPage(buf))->nextblk;
 		UnlockReleaseBuffer(buf);
 		bm25_free_page(index, blk);
 		blk = next;
 	}
+	if (freenewtail)
+		bm25_free_page(index, newtail);
 	IndexFreeSpaceMapVacuum(index);
 
 	MemoryContextDelete(bs.ctx);

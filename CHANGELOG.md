@@ -5,7 +5,9 @@ All notable changes to pg_fts are documented here.
 ## 1.11.0 - 2026-10-08
 
 Ranked queries visit blocks best-first; builds no longer need `fts_vacuum`; three
-wrong-result bugs fixed, one of them in VACUUM (a deleted pending row stayed in the index).
+wrong-result bugs fixed, one of them in VACUUM (a deleted pending row stayed in the index);
+four concurrency bugs fixed that lost inserted rows, crashed backends or failed scans under
+concurrent insert + merge/VACUUM (all present in every earlier release).
 **No on-disk format change**; **no REINDEX required** to upgrade (a REINDEX does clear
 entries the VACUUM bug already left).  No new SQL objects (`pg_fts--1.10.0--1.11.0.sql` is a
 no-op).  New GUC `pg_fts.bestfirst` (default on; off = the 1.10.0 traversals, identical
@@ -37,6 +39,35 @@ results).  Measured in `bench/RESULTS_A_2026-10-07.md` (protocol written before 
 - **Scores are summed in query-term order on every ranked path.**  The block-max WAND
   loop summed in cursor order, which is arbitrary among equal docids, so a three-term
   score could differ in the last bit between two traversals of the same query.
+
+### Fixed (concurrency)
+
+Found by the release churn gate (8 inserters + ranked/count readers + VACUUM/`fts_merge`,
+aarch64), each reproduced on 1.10.0 before the fix.
+
+- **Rows inserted while the pending list was being flushed were lost from the index.**
+  The flush read the list under a share lock, folded it into a segment, then emptied the
+  whole list, dropping every row appended in between: 648-883 rows per flush, about 137k
+  of 3.0M rows after 40 s of 8-way ingest, missing from every scan and count until
+  REINDEX.  The flush now seals the list under the exclusive metapage lock first (a fresh
+  tail page takes new inserts) and folds and frees only the sealed pages.
+- **Merge and VACUUM truncated the index under a lock that admits inserters and
+  scans.**  Symptoms: a backend SIGSEGV in `GenericXLogFinish` on insert, "unexpected data
+  beyond EOF", "could not read blocks", and in the test a corrupted unrelated relation
+  (`bad magic number in sequence`).  The free tail is now truncated only under
+  AccessExclusiveLock (already held by `fts_vacuum`, REINDEX and CREATE INDEX; VACUUM and
+  `fts_merge` try for it conditionally and otherwise leave the tail for a later pass, so
+  the space stays reusable through the FSM).
+- **A scan could follow a freed page's recycle stamp as a block number.**  Freeing a page
+  stored its free-time XID in the page's next-page link, but the recycle gate exists
+  because a scan on an older directory snapshot may still be walking that chain: it read
+  the XID as a block ("could not read blocks N..N" with N far past the end of the index),
+  or landed on a live page and raised "corrupt tombstone bitmap".  The stamp now lives in
+  the page header's `pd_prune_xid`, unused on index pages, and the link is left intact;
+  pages freed by earlier releases are still read correctly.  No format change.
+- **A scan that raced a directory change freed its tombstone maps twice** (SIGSEGV in
+  `sm_contains_many`).  The count/bitmap path's retry freed the maps again; the free is
+  now idempotent.
 
 ### Changed (performance)
 
@@ -83,6 +114,13 @@ results).  Measured in `bench/RESULTS_A_2026-10-07.md` (protocol written before 
 
 ### Tests
 
+- `t/012_concurrent_flush.pl`: 6 inserting clients and 2 ranked/count readers against a
+  `fts_merge` + delete + VACUUM loop; the index must match the heap exactly with no
+  error or crash.  Fails 3/3 on 1.10.0's code; reverting each fix alone, it fails 3/3
+  (lost rows), 3/3 (stale link) and 5/6 (truncation lock).
+- `test/a1_recycle/double_free.sh` (out-of-band, needs `-DPG_FTS_TEST_HOOKS` and a
+  `--enable-cassert` server): forces the scan retry deterministically; "detected double
+  pfree" 3/3 unfixed, exact 3/3 fixed.
 - `pending_delete` regression test: pending rows deleted before a VACUUM, slots reused
   by non-matching rows; count, bitmap and ranked results checked (fails on 1.10.0).
 - `ranked_exact` regression test: every ranked path (best-first, block-max WAND,

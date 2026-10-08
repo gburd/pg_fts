@@ -272,6 +272,15 @@ bm25_tombstones_load(Relation index, const BM25MetaPageData *meta, BM25Tombstone
 	}
 }
 
+/*
+ * Idempotent (1.11.0): bm25_collect_matches frees the maps after collecting
+ * and again on its generation-retry path, so a scan that raced a directory
+ * change freed every map twice; the reload after the retry could then get the
+ * same chunks back and a later pfree corrupted them (a SIGSEGV in
+ * sm_contains_many reading a garbage m_data, found by the 1.11.0 churn gate).
+ * The retry is rare, which is why it went unseen in every release since the
+ * generation re-check was added.
+ */
 static void
 bm25_tombstones_free(BM25Tombstones *t)
 {
@@ -285,6 +294,10 @@ bm25_tombstones_free(BM25Tombstones *t)
 	pfree(t->blobs);
 	pfree(t->maps);
 	pfree(t->present);
+	t->hasany = false;
+	t->blobs = NULL;
+	t->maps = NULL;
+	t->present = NULL;
 }
 
 /*
