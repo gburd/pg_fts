@@ -2,7 +2,64 @@
 
 All notable changes to pg_fts are documented here.
 
-## Unreleased
+## 1.12.0 - 2026-10-09
+
+Ranked queries find a term's dictionary page in memory instead of re-reading the
+dictionary-index chain: a rare-term top-10 reads 80 shared buffers instead of 278, and
+ranked throughput rises 42-97% at 16-64 clients.  **No on-disk format change**; **no
+REINDEX**; no new SQL objects (`pg_fts--1.11.0--1.12.0.sql` is a no-op).  Measured in
+`bench/RESULTS_112_2026-10-09.md` (plan written before the code).
+
+### Changed (performance)
+
+- **Dictionary lookups on the ranked path read memory, not the index chain** (ROADMAP I7).
+  Each ranked query looked a term up in each segment three times (the max-hits bound, the
+  global document frequency and the cursor), and every lookup walked the segment's
+  dictionary-index chain from its head under a buffer pin and a share lock per page -- up
+  to 85 pages on 2.19M Wikipedia articles, pages every concurrent query reads.  Each
+  backend now copies a segment's dictionary index into its existing per-index relcache
+  chunk once per segment-directory change and binary-searches it, so a lookup reads only
+  the one dictionary page.  The copy is about 1 MB on 2.19M articles and counts against
+  `pg_fts.doclen_cache_mb`; a segment that does not fit, or a chain that looks
+  malformed, keeps the page walk.  Ranked results are identical (every band of the
+  benchmark protocol, on four hosts).  On four r7gd.4xlarge, against 1.11.0:
+  single-client rare top-10 0.54 -> 0.27 ms, common 0.67 -> 0.36 ms; throughput at 16 and
+  64 clients rare +67-97%, mid +49-60%, common +74-92%, `united & states` +42-53%;
+  `count(*)` unchanged (it does no ranked lookup).  The gain is larger on hosts where
+  shared cache-line traffic is slow (`bench/RESULTS_TPS_VARIANCE_2026-10-09.md`).
+
+### Fixed
+
+- **Setting `pg_fts.doclen_cache_mb` in a session took effect only at the index's next
+  segment-directory change** (since 1.9.0).  The per-backend chunk was rebuilt only when
+  the directory generation moved, so `SET pg_fts.doclen_cache_mb = 0` kept serving the
+  arrays built at the previous budget.  The chunk now also records the budget it was
+  built under.  Results were never affected (the setting chooses between two exact
+  lookups); found by the new `dict_dir` test, whose cache-on vs cache-off comparison was
+  comparing the cache with itself.
+
+### Known issues
+
+- **A query cancelled while a backend rebuilds its per-index relcache chunk leaks that
+  chunk until the backend exits** (since 1.5.8, when the rebuild gained a cancel check; not new in 1.12.0, which makes the chunk
+  larger).  The chunk is rebuilt by the first ranked query after a segment-directory
+  change; the old one is freed first, and the new one is attached only once complete, so
+  an ERROR during the rebuild (a cancel, an out-of-memory) leaves it unreferenced in
+  `CacheMemoryContext`, per occurrence.  Its size is not measured on its own; the whole of
+  `CacheMemoryContext` is 1.4 MB in a backend that has run one ranked query on a
+  2.19M-document index (0.54 MB with 1.11.0), which bounds it.  Results are never affected (the next query rebuilds).
+  Reproduction: cancel a ranked query issued right after `fts_merge` on a large index;
+  `pg_backend_memory_contexts` shows `CacheMemoryContext` grow by the chunk size.  ROADMAP
+  I8.
+
+### Tests
+
+- `dict_dir` regression test: cached lookup == page-chain lookup for 22 probes (first and
+  last terms, dictionary-page first terms, prefixes, terms one character short or long,
+  absent terms before, between and after) and for every term of 6,000 documents, after a
+  merge in the same backend and with several segments; and the cached lookup must read
+  fewer buffers.  Fails on a broken in-memory search (93 of 6,002 terms lost) and on a
+  directory that is never used.
 
 ### Benchmarks
 

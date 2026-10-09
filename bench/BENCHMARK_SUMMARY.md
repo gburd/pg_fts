@@ -1,4 +1,4 @@
-# pg_fts benchmark summary — methodology and results (as of v1.11.0, 2026-10-09)
+# pg_fts benchmark summary — methodology and results (as of v1.12.0, 2026-10-09)
 
 Consolidated view of the current measurements. Every number here is traceable to a
 run recorded under `bench/`; nothing is estimated. Where a figure was previously
@@ -61,7 +61,23 @@ alone.
 
 ## 2. Comparative latency
 
-### 2a'''''. Current: the 1.11.0 release vs the field (2026-10-09, aarch64)
+### 2b. Current release: 1.12.0 vs 1.11.0 (2026-10-09, aarch64, six hosts)
+
+`bench/RESULTS_112_2026-10-09.md`.  Same hosts and index files, alternating, identical
+results on every band.  Ranked lookups read the dictionary index from a per-backend
+in-memory copy (ROADMAP I7): rare top-10 reads 80 shared buffers instead of 278.
+
+| | 1.11.0 | **1.12.0** |
+|---|---|---|
+| rare / common top-10, single client (fast hosts) | 0.53-0.54 / 0.67-0.69 ms | **0.26-0.27 / 0.35-0.36** |
+| rare top-10 tps, 16 clients (fast / slow hosts) | 26,300-26,980 / 18,362-19,353 | **45,263-48,261 / 31,951-32,234** |
+| common top-10 tps, 16 clients (fast / slow) | 21,997-22,198 / 15,360-15,541 | **41,374-41,904 / 26,742-28,096** |
+| exact `count(*)` tps, 16 clients | 69,665-75,133 | 70,380-75,114 (unchanged) |
+
+Competitors not re-measured against 1.12.0; section 2a''''' below is the current
+cross-engine comparison and its pg_fts column is 1.11.0.
+
+### 2a'''''. The 1.11.0 release vs the field (2026-10-09, aarch64; the current cross-engine run)
 
 `bench/RESULTS_111_2026-10-09.md` (protocol `bench/PROTOCOL_111_2026-10-09.md`, committed
 before the hosts were launched; raw data `bench/data_111_2026-10-09/`).  The release binary

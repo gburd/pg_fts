@@ -1,0 +1,76 @@
+PG_DONE
+== tree: default_version = '1.12.0' shdoclen=baa82d1f
+== fuzz
+PASS: fuzz_for
+PASS: fuzz_docvalid
+PASS: fuzz_block
+PASS: fuzz_smblob
+PASS: fuzz_block_noclamp aborted as expected (count-clamp teeth)
+PASS: fuzz_block_signed aborted as expected (signed-count teeth)
+PASS: fuzz_block_randstream aborted as expected (corrupt-width teeth)
+PASS: fuzz_block_nosumtf aborted as expected (sumtf-vs-posbytelen teeth)
+== ALL CLEAN ==
+== build
+0
+== regress+isolation
+ok 1 pg_fts;ok 2 unicode_fold;ok 3 idx_scan_stats;ok 4 limit_hint;ok 5 doclen_slots;ok 6 score_reuse;ok 7 wand_last_block;ok 8 dense_score;ok 9 phrase_gate;ok 10 shared_doclen;ok 11 ranked_exact;ok 12 pending_delete;ok 13 dict_dir;ok 1 bm25_concurrency;ok 2 bm25_cic;
+== tap (all t/*)
+t/001_crash_recovery.pl ....... ok
+t/002_replication.pl .......... ok
+t/003_corruption.pl ........... ok
+t/004_encodings.pl ............ ok
+t/005_concurrency.pl .......... ok
+t/006_concurrent_extend.pl .... ok
+t/007_segment_cap.pl .......... ok
+t/008_vacuum_reclaim.pl ....... ok
+t/009_doclen_sidecar.pl ....... ok
+t/010_vacuum_delete_heavy.pl .. ok
+t/011_shared_doclen.pl ........ ok
+t/012_concurrent_flush.pl ..... ok
+Files=12, Tests=137, 247 wallclock secs ( 0.46 usr  0.02 sys +  5.71 cusr  4.25 csys = 10.44 CPU)
+Result: PASS
+== coverage
+Result: PASS
+== pg_fts-own line coverage: 91.2% (gate: >= 90%) ==
+PASS: line coverage 91.2% >= 90%
+== pg_fts-own function coverage: 96.9% (gate: >= 85%) ==
+== pg_fts-own branch coverage:   73.0% (gate: >= 73%) ==
+PASS: function 96.9% >= 85%, branch 73.0% >= 73%
+GATE_DONE
+so f2432826
+writers: number of transactions actually processed: 3158972 number of failed transactions: 0 (0.000%) tps = 10529.988169 (without initial connection time) 
+readers: number of transactions actually processed: 912 number of failed transactions: 0 (0.000%) tps = 2.482814 (without initial connection time) 
+maintenance errors: 0
+server log ERROR/PANIC lines: 6
+      1 2026-10-09 22:26:06.724 UTC [19150] ERROR:  canceling autovacuum task
+      1 2026-10-09 22:23:32.020 UTC [18866] ERROR:  canceling autovacuum task
+      1 2026-10-09 22:22:05.145 UTC [18672] ERROR:  canceling autovacuum task
+      1 2026-10-09 22:20:33.509 UTC [18516] ERROR:  canceling autovacuum task
+      1 2026-10-09 22:19:33.226 UTC [18434] ERROR:  canceling autovacuum task
+[common] truth=12208327 pushdown=12208327 OK bitmap(rows/nonmatching)=12208327/0 OK ranked1000(rows/nonmatching)=1000/0
+[rare] truth=2182207 pushdown=2182207 OK bitmap(rows/nonmatching)=2182207/0 OK ranked1000(rows/nonmatching)=1000/0
+[rare & w5] truth=10367 pushdown=10367 OK bitmap(rows/nonmatching)=10367/0 OK ranked1000(rows/nonmatching)=1000/0
+[common & rare] truth=2182207 pushdown=2182207 OK bitmap(rows/nonmatching)=2182207/0 OK ranked1000(rows/nonmatching)=1000/0
+index size 448 MB nseg=1
+hard errors: 0
+so f2432826
+writers: number of transactions actually processed: 3192042 number of failed transactions: 0 (0.000%) tps = 10640.229626 (without initial connection time) 
+readers: number of transactions actually processed: 968 number of failed transactions: 0 (0.000%) tps = 2.230303 (without initial connection time) 
+maintenance errors: 0
+server log ERROR/PANIC lines: 5
+      1 2026-10-09 22:41:48.766 UTC [21177] ERROR:  canceling autovacuum task
+      1 2026-10-09 22:35:57.616 UTC [20478] ERROR:  canceling autovacuum task
+      1 2026-10-09 22:34:30.141 UTC [20346] ERROR:  canceling autovacuum task
+      1 2026-10-09 22:33:22.754 UTC [20244] ERROR:  canceling autovacuum task
+      1 2026-10-09 22:32:40.811 UTC [20168] ERROR:  canceling autovacuum task
+[common] truth=12280147 pushdown=12280147 OK bitmap(rows/nonmatching)=12280147/0 OK ranked1000(rows/nonmatching)=1000/0
+[rare] truth=2182637 pushdown=2182637 OK bitmap(rows/nonmatching)=2182637/0 OK ranked1000(rows/nonmatching)=1000/0
+[rare & w5] truth=10366 pushdown=10366 OK bitmap(rows/nonmatching)=10366/0 OK ranked1000(rows/nonmatching)=1000/0
+[common & rare] truth=2182637 pushdown=2182637 OK bitmap(rows/nonmatching)=2182637/0 OK ranked1000(rows/nonmatching)=1000/0
+index size 100 MB nseg=1
+hard errors: 0
+CHURN_DONE
+fts_merge calls=33 heap=2993765 truth=2993765 pushdown=2993765 bitmap=2993765 missing=0 OK
+fts_merge calls=33 heap=2998685 truth=2998685 pushdown=2998685 bitmap=2998685 missing=0 OK
+fts_merge calls=33 heap=2976235 truth=2976235 pushdown=2976235 bitmap=2976235 missing=0 OK
+ALL_DONE

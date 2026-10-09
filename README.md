@@ -232,6 +232,13 @@ Example
 Performance
 -----------
 
+**1.12.0** (`bench/RESULTS_112_2026-10-09.md`) changes ranked queries only, measured
+against 1.11.0 on the same hosts and indexes: identical results; single-client rare /
+common top-10 0.54 / 0.67 -> 0.27 / 0.36 ms; throughput at 16-64 clients rare +67-97%,
+mid +49-60%, common +74-92%, `united & states` +42-53%; `count(*)` unchanged.  The
+competitors have not been re-measured against 1.12.0, so the cross-engine table below is
+still the 1.11.0 run, and every pg_fts figure in it is 1.11.0's.
+
 Numbers below are from `bench/RESULTS_111_2026-10-09.md` (summarized in
 `bench/BENCHMARK_SUMMARY.md`; if the two ever disagree, the results file is right).  They
 are for the **1.11.0 release binary**, built from its PGXN zip.  Method, briefly: four

@@ -112,6 +112,10 @@ built from its PGXN zip (`bench/RESULTS_111_2026-10-09.md`; the 1.10.0 compariso
 | index size | **1,421 MiB** (1,369 as expression index) | 1,887 MiB | 3,395 MiB | 42,434 MiB |
 | build (expression index, analysis included) | 238 s, no `fts_vacuum` | 267 s | **72 s** | 209 s (+ 3,246 s tokenize/model) |
 
+**1.12.0** (2026-10-09, `bench/RESULTS_112_2026-10-09.md`) halves single-term ranked latency
+and raises ranked throughput 42-97% over the 1.11.0 column above, with identical results;
+the competitors were not re-measured against it, so the table stays the 1.11.0 run.
+
 **Read:** 1.11.0 leads ranked latency and throughput at every term frequency, conjunctive
 queries and phrases, exact counts and index size.  pg_search builds 3.3x faster and is
 2% faster on `world & war` (spreads overlapping) and 4% on a 4-term OR.  pg_textsearch is

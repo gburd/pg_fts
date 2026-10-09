@@ -894,6 +894,15 @@ SELECT * FROM messages
       <varname>pg_fts.shared_doclen</varname>), so this budget is per index
       segment, not per backend.
      </para>
+     <para>
+      Since 1.12.0 the same budget also holds a per-backend copy of each
+      segment's dictionary index (one entry per dictionary page, about 1 MB
+      on a 2.2-million-document index), so a ranked query finds a term's
+      dictionary page without reading the index's page chain.  A segment that
+      does not fit keeps the page-chain lookup; results are identical either
+      way.  Changing the setting in a session takes effect on that session's
+      next ranked query.
+     </para>
     </listitem>
    </varlistentry>
 
