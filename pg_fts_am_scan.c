@@ -2665,9 +2665,14 @@ static bool
 bm25_lookup_dict(Relation index, const BM25SegMeta *seg,
 				 const char *term, int termlen,
 				 uint32 *df, uint32 *max_tf, BlockNumber *firstposting,
-				 uint32 *firstoffset)
+				 uint32 *firstoffset, const BM25DoclenDirCache *dc)
 {
-	BlockNumber blk = bm25_dict_seek(index, seg, term, termlen);
+	/* I7: a cached dictionary-index directory replaces the chain walk; the
+	 * located page is the same one bm25_dict_seek would return */
+	const BM25DictDir *dd = bm25_dictdir_find(dc, seg);
+	BlockNumber blk = dd != NULL
+		? bm25_dictdir_seek(dc, dd, seg->dictstart, term, termlen)
+		: bm25_dict_seek(index, seg, term, termlen);
 	bool		onlyone = (seg->dictindexstart != InvalidBlockNumber);
 
 	while (blk != InvalidBlockNumber)
@@ -5163,6 +5168,7 @@ static double
 bm25_query_maxhits(Relation index, FtsQuery q, double N)
 {
 	BM25MetaPageData meta;
+	const BM25DoclenDirCache *dc;
 	double	   *stack;
 	int			top = 0;
 	uint32		i;
@@ -5171,6 +5177,7 @@ bm25_query_maxhits(Relation index, FtsQuery q, double N)
 	if (q->nitems == 0)
 		return 0;
 	bm25_read_meta(index, &meta);
+	dc = bm25_doclendir_cache(index, &meta);	/* I7: cached dictionary directory */
 	stack = (double *) palloc(q->nitems * sizeof(double));
 
 	for (i = 0; i < q->nitems; i++)
@@ -5195,7 +5202,7 @@ bm25_query_maxhits(Relation index, FtsQuery q, double N)
 
 					if (bm25_lookup_dict(index, &meta.segs[s],
 										 FTS_QUERY_ITEMTEXT(q, it), it->termlen,
-										 &df, &mtf, &fb, &fo))
+										 &df, &mtf, &fb, &fo, dc))
 						gdf += df;
 				}
 				stack[top++] = (double) gdf;
@@ -5438,7 +5445,7 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 			uint32		firstoff;
 
 			if (bm25_lookup_dict(index, &meta.segs[s], terms[t], lens[t],
-								 &df, &max_tf, &firstblk, &firstoff))
+								 &df, &max_tf, &firstblk, &firstoff, doclendir))
 				gdf += df;
 		}
 		if (gdf == 0)
@@ -5455,7 +5462,7 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 			double		mtf;
 
 			if (!bm25_lookup_dict(index, &meta.segs[s], terms[t], lens[t],
-								  &df, &max_tf, &firstblk, &firstoff))
+								  &df, &max_tf, &firstblk, &firstoff, doclendir))
 				continue;
 			mtf = (double) max_tf;
 			cursors[nactive].index = index;
@@ -5820,7 +5827,7 @@ bm25_count_dictdf_fastpath(Relation index, FtsQuery q)
 		if (sg->dictstart == InvalidBlockNumber)
 			continue;
 		if (bm25_lookup_dict(index, sg, term, termlen,
-							 &df, &max_tf, &fpost, &foff))
+							 &df, &max_tf, &fpost, &foff, NULL))
 			sumdf += df;
 	}
 
