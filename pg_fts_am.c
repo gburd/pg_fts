@@ -2526,6 +2526,9 @@ typedef struct BM25DictDir
 {
 	BlockNumber dictstart;
 	BlockNumber dictindexstart;
+	uint32		nterms;			/* identity, with ndocs/sumdoclen: see bm25_dictdir_find */
+	double		ndocs;
+	double		sumdoclen;
 	uint32		n;
 	Size		entry_off;		/* uint32 off[n], each to a packed entry */
 } BM25DictDir;
@@ -2537,6 +2540,7 @@ typedef struct BM25DoclenDirCache
 	int			nsegs;
 	int			ndocid;			/* total entries across all segs (docid[] len) */
 	Size		used;			/* bytes of this chunk in use (appenders copy this much) */
+	int			budget_mb;		/* pg_fts.doclen_cache_mb it was built under */
 	int			ndictdirs;		/* I7: dictionary-index directories cached */
 	BM25DictDir dictdirs[BM25_MAX_SEGMENTS];
 	BM25DoclenDir segs[BM25_MAX_SEGMENTS];
@@ -2655,8 +2659,16 @@ bm25_doclendir_cache(Relation index, const BM25MetaPageData *meta)
 	Size		sz;
 	MemoryContext old;
 
+	/*
+	 * Valid only for the generation AND the settings it was built under: the
+	 * slot arrays and (1.12.0) the dictionary directories are both sized by
+	 * pg_fts.doclen_cache_mb, so a chunk built at 64 MB must not keep serving a
+	 * session that has since SET it to 0 (until 1.12.0 it did, so "0 disables"
+	 * only took effect at the next directory change).
+	 */
 	if (dc != NULL && dc->generation == meta->generation &&
-		dc->private_slots == !(pg_fts_shared_doclen && IsUnderPostmaster))
+		dc->private_slots == !(pg_fts_shared_doclen && IsUnderPostmaster) &&
+		dc->budget_mb == pg_fts_doclen_cache_mb)
 		return dc;
 
 	/* stale or absent: drop the old single chunk, rebuild */
@@ -2691,6 +2703,7 @@ bm25_doclendir_cache(Relation index, const BM25MetaPageData *meta)
 	dc->ndocid = total;
 	dc->nsegs = 0;
 	dc->used = sz;
+	dc->budget_mb = pg_fts_doclen_cache_mb;
 
 	{
 		uint64	   *docid = dc->data;
@@ -3083,6 +3096,9 @@ bm25_dictdir_add(Relation index, const BM25MetaPageData *meta, BM25DoclenDirCach
 			dd = &out->dictdirs[out->ndictdirs++];
 			dd->dictstart = meta->segs[s].dictstart;
 			dd->dictindexstart = meta->segs[s].dictindexstart;
+			dd->nterms = meta->segs[s].nterms;
+			dd->ndocs = meta->segs[s].ndocs;
+			dd->sumdoclen = meta->segs[s].sumdoclen;
 			dd->n = cnt[s];
 			dd->entry_off = pos;
 			offs = (uint32 *) ((char *) out + pos);
@@ -3105,9 +3121,17 @@ bm25_dictdir_add(Relation index, const BM25MetaPageData *meta, BM25DoclenDirCach
 
 /*
  * The cached dictionary-index directory of `seg` in `dc`, or NULL (not cached:
- * use the chain walk).  Matched on both chain heads: a segment descriptor is
- * written once and only copied afterwards, and a scan's metapage snapshot and
- * the chunk are of the same generation whenever the caller checked it.
+ * use the chain walk).
+ *
+ * The guard is the chunk's metapage generation (bm25_doclendir_cache rebuilds
+ * when it moves).  The key is defence in depth, as for the shared doclen copies
+ * (pg_fts_shdoclen.c): both chain heads plus the segment's nterms, ndocs and
+ * sumdoclen, none of which a segment changes while it is listed (VACUUM rewrites
+ * only tombstones).  A new segment can only match a stale entry if it starts
+ * on the same recycled blocks AND has identical counts; the recycle gate keeps
+ * a freed page from being reused while a snapshot that could see it is alive.
+ * For the same reason a test cannot make a stale entry match on purpose:
+ * dict_dir checks the lookup itself and the not-found fallback.
  */
 static const BM25DictDir *
 bm25_dictdir_find(const BM25DoclenDirCache *dc, const BM25SegMeta *seg)
@@ -3118,7 +3142,10 @@ bm25_dictdir_find(const BM25DoclenDirCache *dc, const BM25SegMeta *seg)
 		return NULL;
 	for (i = 0; i < dc->ndictdirs; i++)
 		if (dc->dictdirs[i].dictindexstart == seg->dictindexstart &&
-			dc->dictdirs[i].dictstart == seg->dictstart)
+			dc->dictdirs[i].dictstart == seg->dictstart &&
+			dc->dictdirs[i].nterms == seg->nterms &&
+			dc->dictdirs[i].ndocs == seg->ndocs &&
+			dc->dictdirs[i].sumdoclen == seg->sumdoclen)
 			return &dc->dictdirs[i];
 	return NULL;
 }

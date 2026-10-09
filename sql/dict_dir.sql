@@ -8,10 +8,14 @@ SET client_min_messages = warning;
 SET enable_seqscan = off;
 SET enable_bitmapscan = off;
 
--- enough distinct terms for a multi-page dictionary index (~120 dict pages)
+-- a dictionary index of many pages: each document adds a long term (190 chars),
+-- so a dictionary page holds ~36 terms and an index page ~40 entries; 20,000
+-- documents give ~560 dictionary pages and ~15 index pages, and the chain walk
+-- reads several index pages for a late term
 CREATE TABLE dd (id int PRIMARY KEY, d ftsdoc);
 INSERT INTO dd SELECT g, to_ftsdoc('simple', 't' || lpad(g::text, 6, '0') || ' common '
-                                   || CASE WHEN g % 10 = 0 THEN 'tenth' ELSE '' END)
+                                   || CASE WHEN g % 10 = 0 THEN 'tenth ' ELSE '' END
+                                   || 'l' || lpad(g::text, 6, '0') || repeat('x', 183))
 FROM generate_series(1, 30000) g;
 CREATE INDEX dd_fts ON dd USING fts (d);
 VACUUM ANALYZE dd;
@@ -34,10 +38,27 @@ INSERT INTO probes VALUES
   ('t000001', true), ('t030000', true), ('t015000', true), ('t000255', true),
   ('t000256', true), ('t029999', true), ('common', true), ('tenth', true),
   ('a', false), ('t', false), ('t00000', false), ('t0000011', false),
-  ('t030001', false), ('zzzz', false), ('t015000x', false), ('s999999', false);
+  ('t030001', false), ('zzzz', false), ('t015000x', false), ('s999999', false),
+  ('l000001' || repeat('x', 183), true), ('l030000' || repeat('x', 183), true),
+  ('l015000' || repeat('x', 183), true), ('l015000' || repeat('x', 182), false),
+  ('l015000' || repeat('x', 184), false), ('l030001' || repeat('x', 183), false);
 
-SELECT q, dd_ids(q, 64) = dd_ids(q, 0) AS same, (dd_ids(q, 64) <> '-') = want_hit AS expected
+SELECT CASE WHEN length(q) > 20 THEN left(q, 7) || '+' || (length(q) - 7) || 'x' ELSE q END AS probe,
+       dd_ids(q, 64) = dd_ids(q, 0) AS same, (dd_ids(q, 64) <> '-') = want_hit AS expected
 FROM probes ORDER BY q;
+
+-- every term of the index's first 3,000 documents, in both arms: this covers
+-- many dictionary-page FIRST terms -- the equal-key case of the directory's
+-- binary search (largest entry <= term), which a probe set of interior and
+-- absent terms never reaches.  Reported as a count of disagreements.
+SELECT count(*) FILTER (WHERE dd_ids(q, 64) IS DISTINCT FROM dd_ids(q, 0)) AS disagree,
+       count(*) FILTER (WHERE dd_ids(q, 64) = '-') AS cached_misses,
+       count(*) AS probes
+FROM (SELECT 't' || lpad(g::text, 6, '0') AS q FROM generate_series(1, 3000) g
+      UNION ALL
+      SELECT 'l' || lpad(g::text, 6, '0') || repeat('x', 183) FROM generate_series(1, 3000) g
+      UNION ALL                       -- the lowest-sorting terms: the directory's FIRST
+      SELECT 'common' UNION ALL SELECT 'l000001' || repeat('x', 183)) p;   -- entry
 
 -- the dictionary index really has several pages (the test means nothing otherwise)
 SELECT (SELECT nterms FROM fts_index_stats('dd_fts')) > 20000 AS many_terms;
@@ -62,6 +83,29 @@ SELECT fts_index_nsegments('dd_fts') >= 1 AS segs,
        dd_ids('t029999', 64) = dd_ids('t029999', 0) AS same_old2,
        dd_ids('third1', 64) <> '-' AS third_found;
 
+-- the cache is actually used: a ranked lookup reads fewer index buffers with it
+-- (doclen_cache_mb 64) than with the chain walk (0).  Fails if the directory is
+-- never built or never matched (the lookup silently falls back to the chain).
+CREATE FUNCTION dd_bufs(q text, mb int) RETURNS int LANGUAGE plpgsql AS $$
+DECLARE l text; n int := 0;
+BEGIN
+  EXECUTE format('SET LOCAL pg_fts.doclen_cache_mb = %s', mb);
+  -- warm: the first ranked scan of a generation builds the chunk
+  EXECUTE format('SELECT count(*) FROM (SELECT id FROM dd WHERE d @@@ to_ftsquery(''simple'',%L)
+                  ORDER BY d <=> to_ftsquery(''simple'',%L) LIMIT 5) s', q, q);
+  FOR l IN EXECUTE format('EXPLAIN (ANALYZE, BUFFERS, COSTS OFF, TIMING OFF, SUMMARY OFF)
+                  SELECT id FROM dd WHERE d @@@ to_ftsquery(''simple'',%L)
+                  ORDER BY d <=> to_ftsquery(''simple'',%L) LIMIT 5', q, q) LOOP
+    IF n = 0 AND l ~ 'Buffers: shared hit=' THEN
+      n := substring(l from 'hit=([0-9]+)')::int;
+    END IF;
+  END LOOP;
+  RETURN n;
+END $$;
+SELECT dd_bufs('t029999', 64) + 3 < dd_bufs('t029999', 0) AS cache_reads_fewer,
+       dd_bufs('t029999', 64) > 0 AS measured;
+
+DROP FUNCTION dd_bufs(text, int);
 DROP TABLE probes;
 DROP TABLE dd;
 DROP FUNCTION dd_ids(text, int);
