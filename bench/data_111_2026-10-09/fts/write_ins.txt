@@ -1,0 +1,13 @@
+pgbench (17.10)
+transaction type: /tmp/w_ins.sql
+scaling factor: 1
+query mode: simple
+number of clients: 8
+number of threads: 8
+maximum number of tries: 1
+duration: 120 s
+number of transactions actually processed: 5423568
+number of failed transactions: 0 (0.000%)
+latency average = 0.177 ms
+initial connection time = 3.513 ms
+tps = 45197.610543 (without initial connection time)

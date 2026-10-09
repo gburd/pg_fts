@@ -1,0 +1,5 @@
+engine=vchord 2026-10-09T02:52:58Z loadavg=13.07 27.87 23.40
+rare_k10 rows=10
+pass=1 band=rare_k10 c16=360.985433 c32=861.920129 c64=871.609867
+pass=2 band=rare_k10 c16=366.851316 c32=862.394531 c64=877.094332
+mid_k10 rows=10

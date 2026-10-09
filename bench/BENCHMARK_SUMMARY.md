@@ -1,4 +1,4 @@
-# pg_fts benchmark summary — methodology and results (as of v1.11.0, 2026-10-08)
+# pg_fts benchmark summary — methodology and results (as of v1.11.0, 2026-10-09)
 
 Consolidated view of the current measurements. Every number here is traceable to a
 run recorded under `bench/`; nothing is estimated. Where a figure was previously
@@ -9,9 +9,10 @@ published wrong, the correction is stated rather than quietly replaced.
 ## 1. Methodology
 
 ### Rig
-**Current (1.10.0):** EC2 **r7gd.4xlarge** (AWS Graviton3 / Neoverse-V1, 16 vCPU, 128 GiB,
+**Current (1.11.0 release run, 2026-10-09):** EC2 **r7gd.4xlarge** (AWS Graviton3 / Neoverse-V1, 16 vCPU, 128 GiB,
 32 MB L3, local NVMe instance store), Debian 13 arm64, PostgreSQL **17.10** built from
-source, `shared_buffers = 32GB`; full protocol in `bench/PROTOCOL_110_2026-10-07.md`.
+source, `shared_buffers = 32GB`; full protocol in `bench/PROTOCOL_111_2026-10-09.md` (on top of
+`PROTOCOL_A_2026-10-07.md` and `PROTOCOL_110_2026-10-07.md`).
 Earlier sections were measured on EC2 **r6id.4xlarge** (Xeon 8375C @ 2.90 GHz, 16 vCPU,
 128 GB RAM, 884 GB local NVMe), Amazon Linux 2023 or Debian 13 x86-64,
 `shared_buffers = 64GB`; numbers from the two rigs are not compared column by column.
@@ -60,7 +61,46 @@ alone.
 
 ## 2. Comparative latency
 
-### 2a''''. Current: pg_fts 1.11.0 vs 1.10.0 and the field (2026-10-07/08, aarch64)
+### 2a'''''. Current: the 1.11.0 release vs the field (2026-10-09, aarch64)
+
+`bench/RESULTS_111_2026-10-09.md` (protocol `bench/PROTOCOL_111_2026-10-09.md`, committed
+before the hosts were launched; raw data `bench/data_111_2026-10-09/`).  The release binary
+built from its PGXN zip, and 39b6a42 (the binary of the section below) on the same host and
+index files: identical results on every band, and the release matches the exhaustive
+references (21 cases, 0 differ).  Release vs 39b6a42: overlapping spreads on 10 of 12
+latency bands; mid k10 3.4% slower and `"united states"` 5.0% faster, neither on a changed
+code path; settled throughput overlapping.  Competitors re-measured the same night;
+pg_search moved to 0.26.1.
+
+| ms, single client | **pg_fts 1.11.0** | pg_textsearch 1.5.1 | pg_search 0.26.1 | VectorChord-bm25 0.3.0 |
+|---|---|---|---|---|
+| rare / mid top-10 | **0.57 / 0.42** | 0.99 / 1.21 | 2.59 / 2.27 | 13.6 / 26.6 |
+| common top-10 / top-100 | **0.72 / 1.15** | 10.69 / 13.01 | 2.63 / 5.46 | 72.4 / 78.0 |
+| AND / OR top-10 (rare) | **1.16 / 1.68** | >300 s (seq scan) | 3.31 / 3.58 | n/a / 7.90 |
+| AND `united & states` / `world & war` | **2.49** / 5.87 | >300 s | 11.61 / **5.75** | n/a |
+| 4-term OR | 13.97 | 14.63 | **13.40** | 42.4 |
+| phrase `"united states"` / `"world war"` | **2.84 / 6.45** | >300 s | 11.41 / 11.54 | n/a |
+| exact count | **0.18** | n/a | 8.64 | n/a |
+
+| tps at 16 / 32 / 64 clients (settled) | **pg_fts 1.11.0** | pg_textsearch | pg_search 0.26.1 | VectorChord |
+|---|---|---|---|---|
+| rare top-10 | **24,696 / 25,322 / 25,431** | 14,259 / 13,439 / 12,595 | 5,364 / 5,561 / 6,291 | 366 / 862 / 875 |
+| mid top-10 | **33,808 / 33,604 / 33,315** | 11,215 / 10,654 / 10,329 | 5,768 / 6,222 / 6,582 | 183 / 433 / 466 |
+| common top-10 | **19,359 / 19,038 / 19,507** | 1,321 / 1,270 / 1,267 | 5,327 / 5,573 / 5,959 | 73 / 124 / 138 |
+| exact count | **74,619 / 70,371 / 68,764** | n/a | 945 / 3,375 / 4,434 | n/a |
+
+Settled throughput for every engine this time (two runs each, 4 passes).  pg_fts's absolute
+tps is 0.5-13.5% below the section below on a different host of the same type; the release and
+39b6a42 agree on this host, so that is host-to-host variation (unmeasured cause); ratios
+are taken within one run.  Build (expression index): pg_search **71.6 s**, pg_fts 237.5 s
+(no `fts_vacuum` needed), pg_textsearch 266.7 s, VectorChord 209 s after 3,246 s of
+model + tokenize.  Size: pg_fts **1,369 MiB** expression / 1,421 MiB column, pg_textsearch
+1,887, pg_search 3,395, VectorChord 42,434.  VectorChord was 14-37% faster than in the
+section below at the same version and plans (unmeasured cause; its 42 GiB index exceeds
+`shared_buffers`).  A concurrent-write check (8 inserters at 45k tps + 4 ranked readers +
+`fts_merge`, 120 s) ended with index count == heap count and no errors.
+
+### 2a''''. 1.11.0 at 39b6a42 vs 1.10.0 and the field (2026-10-07/08, aarch64)
 
 `bench/RESULTS_A_2026-10-07.md` (protocol `bench/PROTOCOL_A_2026-10-07.md`, written before
 the run; raw data `bench/data_A_2026-10-07/run/`).  Same rig and corpus as 1.10.0; pg_fts

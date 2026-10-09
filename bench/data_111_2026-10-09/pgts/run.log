@@ -1,0 +1,13 @@
+[01:31:24] engine=pgts host=<host> arch=aarch64 cpu=Neoverse-V1 nproc=16 pg=postgres (PostgreSQL) 17.10
+[01:31:36] corpus md5=f5939e8559543f16e8a2365049836d63 rows=2188038
+[01:31:36] ext 1.5.1
+[01:36:04] build_s=266.702698013
+[01:36:04] size_bytes=1978318848
+[01:39:56] count slovakia=10875
+[01:43:47] count hungary=24097
+[01:47:39] count year=734896
+[01:47:52] regex slovakia=10898
+[01:48:05] regex hungary=24148
+[01:48:15] regex years?=733960
+[02:33:16] LAT_DONE
+[02:42:46] CONC_DONE

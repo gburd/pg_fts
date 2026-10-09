@@ -1,0 +1,12 @@
+pass=1 band=and_common_k10 rows=TIMEOUT(300s) median_last5= raw=[300000.220 ]
+pass=1 band=and_ww_k10 rows=TIMEOUT(300s) median_last5= raw=[300000.233 ]
+pass=1 band=phrase_ww_k10 rows=TIMEOUT(300s) median_last5= raw=[300000.165 ]
+pass=1 band=or4_k10 rows=10, median_last5=14.640 raw=[18.975 14.888 14.577 14.683 14.511 14.684 14.484 14.640 ]
+pass=2 band=and_common_k10 rows=SKIPPED(timed out in an earlier pass)
+pass=2 band=and_ww_k10 rows=SKIPPED(timed out in an earlier pass)
+pass=2 band=phrase_ww_k10 rows=SKIPPED(timed out in an earlier pass)
+pass=2 band=or4_k10 rows=10, median_last5=14.634 raw=[18.748 14.701 14.510 14.657 14.494 14.634 14.510 14.678 ]
+pass=3 band=and_common_k10 rows=SKIPPED(timed out in an earlier pass)
+pass=3 band=and_ww_k10 rows=SKIPPED(timed out in an earlier pass)
+pass=3 band=phrase_ww_k10 rows=SKIPPED(timed out in an earlier pass)
+pass=3 band=or4_k10 rows=10, median_last5=14.620 raw=[18.643 14.704 14.475 14.667 14.489 14.620 14.465 14.622 ]

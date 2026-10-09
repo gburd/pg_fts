@@ -1,0 +1,6 @@
+PG_DONE
+zip sha256 fff822fe7e3cf84942e611661472d4f1d40a4f9cbf3c3fce3d61b6cf98398d7b  /tmp/pg_fts-1.11.0.zip
+da915fc28a6fa9c76487f1f96a46f5bf  /nvme/pg_fts_rel.so
+4486203a3fee04734cf37b18c4a9571d  /nvme/pg_fts_a.so
+EXT_DONE
+SETUP_DONE

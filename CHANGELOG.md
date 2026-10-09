@@ -2,6 +2,23 @@
 
 All notable changes to pg_fts are documented here.
 
+## Unreleased
+
+### Benchmarks
+
+- **The 1.11.0 release binary is now measured** (`bench/RESULTS_111_2026-10-09.md`,
+  protocol written before the run).  The 1.11.0 numbers published with the release were
+  taken at commit 39b6a42, before the VACUUM and concurrency fixes, and the release itself
+  had not been timed.  Built from the PGXN zip and run against 39b6a42 on one host and
+  the same indexes: identical results, overlapping spreads on 10 of 12 latency bands, mid
+  k10 3.4% slower and `"united states"` 5.0% faster (neither on a changed code path).  The
+  release matches the exhaustive references (21 cases, 0 differ).  Competitors
+  re-measured the same night (pg_search now 0.26.1); README, BENCHMARK_SUMMARY and the
+  comparison matrix now quote this run.  pg_fts leads 10 of 12 latency bands as before;
+  pg_search is ahead by 2% on `world & war` and 4% on the 4-term OR.  Absolute pg_fts
+  throughput is 0.5-13.5% below the 39b6a42 run, on a different host of the same type,
+  with the release and 39b6a42 agreeing on this one (host variation, cause unmeasured).
+
 ## 1.11.0 - 2026-10-08
 
 Ranked queries visit blocks best-first; builds no longer need `fts_vacuum`; three

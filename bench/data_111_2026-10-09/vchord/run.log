@@ -1,0 +1,16 @@
+[01:31:25] engine=vchord host=<host> arch=aarch64 cpu=Neoverse-V1 nproc=16 pg=postgres (PostgreSQL) 17.10
+[01:31:37] corpus md5=f5939e8559543f16e8a2365049836d63 rows=2188038
+[01:31:37] ext pg_tokenizer 0.1.1, vchord_bm25 0.3.0
+[01:45:36] model_s=838.606819686
+[02:25:43] tokenize_s=2407.063587278
+[02:25:44] emb_filled=2188038
+[02:29:30] build_s=209.189078742
+[02:29:30] size_bytes=44495724544
+[02:30:25] count slovakia=n/a
+[02:30:25] count hungary=n/a
+[02:30:25] count year=n/a
+[02:30:40] regex slovakia=10898
+[02:30:55] regex hungary=24148
+[02:31:06] regex years?=733960
+[02:31:11] LAT_DONE
+[02:40:43] CONC_DONE

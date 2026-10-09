@@ -1,0 +1,25 @@
+[01:31:24] host=<host> arch=aarch64 cpu=Neoverse-V1 nproc=16 pg=postgres (PostgreSQL) 17.10
+[01:31:36] corpus md5=f5939e8559543f16e8a2365049836d63 rows=2188038
+[01:31:36] so rel=da915fc2 a=4486203a zip_sha256=fff822fe7e3cf849 a_tree=39b6a42 prefetch: read the relation size only for a jump (per-page l
+[01:31:36] markers rel: seal=1 prune=1 | a: seal=0
+[01:31:45] ext 1.11.0
+[01:35:43] arm=rel expr_build_s=237.510435324 size_after_build=1435443200 fts_vacuum_s=.021957119 size=1435443200
+[01:39:43] arm=a expr_build_s=238.251656417 size_after_build=1435443200 fts_vacuum_s=.020376856 size=1435443200
+[01:56:18] column_fill_s=995.242670895
+[01:58:48] arm=rel positions=off column_build_s=127.488341116 size_after_build=1489600512 fts_vacuum_s=.021268941 size=1489600512
+[02:01:43] arm=rel positions=on column_build_s=174.701626043 size_after_build=2754183168 fts_vacuum_s=.034936179 size=2754183168
+[02:03:51] arm=a positions=off column_build_s=124.128210103 size_after_build=1489600512 fts_vacuum_s=.021387123 size=1489600512
+[02:06:41] arm=a positions=on column_build_s=170.648246000 size_after_build=2754199552 fts_vacuum_s=.035116110 size=2754199552
+[02:06:42] measuring on docs_idx=1489600512 docs_pos=2754183168 (built by arm rel)
+[02:06:46] gate: 12 bands identical, 0 differ
+[02:12:44] oracle or: TOTAL 6 cases, 0 differ, 0 float-tie order only | and: TOTAL docs_idx 9 cases, 0 differ | phrase: TOTAL docs_pos 6 cases, 0 differ
+[02:13:31] LAT_DONE
+[02:14:57] COLD_DONE
+[02:48:50] TPS_INRUN_DONE
+[03:02:32] settled arm=rel run=1: 8 lines
+[03:16:14] settled arm=a run=1: 8 lines
+[03:29:55] settled arm=a run=2: 8 lines
+[03:43:37] settled arm=rel run=2: 8 lines
+[03:43:38] TPS_SETTLED_DONE
+[03:47:28] write band: ins number of failed transactions: 0 (0.000%) tps = 45197.610543 (without initial connection time)  | read number of failed transactions: 0 (0.000%) tps = 5506.074006 (without initial connection time)  | heap=5423568 index=5423568 maint_err=0 server_errors=0
+[03:47:28] ALL_DONE
