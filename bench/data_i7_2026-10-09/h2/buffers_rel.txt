@@ -1,0 +1,11 @@
+rare_k10 hit=278
+mid_k10 hit=208
+common_k10 hit=511
+common_k100 hit=847
+and_k10 hit=896
+or_k10 hit=838
+and_common_k10 hit=1615
+and_ww_k10 hit=4096
+or4_k10 hit=10721
+phrase_k10 hit=2380
+phrase_ww_k10 hit=4520

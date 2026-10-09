@@ -1,0 +1,20 @@
+[19:42:01] so rel=da915fc2 i7=6ffa29fb i7_commit=579a9f4 marker=1 build_warnings=0
+[19:43:21] mbench2 before: chase  1024 MiB 4k  : 194.7 ns/load chase  4096 MiB 4k  : 240.2 ns/load 
+[20:07:38] indexes: docs_idx=1489600512 docs_pos=2754191360
+[20:07:53] gate: 0 failures; buffers rel vs i7: rare_k10: hit=278 -> hit=80 mid_k10: hit=208 -> hit=94 common_k10: hit=511 -> hit=262 common_k100: hit=847 -> hit=598 and_k10: hit=896 -> hit=584 or_k10: hit=838 -> hit=526 and_common_k10: hit=1615 -> hit=1195 and_ww_k10: hit=4096 -> hit=3637 or4_k10: hit=10721 -> hit=10376 phrase_k10: hit=2380 -> hit=1960 phrase_ww_k10: hit=4520 -> hit=4061 
+[20:08:39] LAT_DONE
+[20:11:45] round=1 arm=rel rare c16=19519 c64=20222 mid c16=26938 c64=29987 common c16=15937 c64=16576 and c16=4652 count c16=73963
+[20:14:51] round=1 arm=i7 rare c16=31990 c64=39717 mid c16=39377 c64=46613 common c16=28317 c64=30788 and c16=6977 count c16=73568
+[20:17:58] round=1 arm=i7 rare c16=34681 c64=41655 mid c16=47298 c64=47023 common c16=29584 c64=31503 and c16=6973 count c16=74383
+[20:21:04] round=1 arm=rel rare c16=19656 c64=20892 mid c16=26683 c64=29595 common c16=15869 c64=17972 and c16=4716 count c16=73067
+[20:24:10] round=2 arm=rel rare c16=19207 c64=22184 mid c16=26777 c64=30016 common c16=16013 c64=17671 and c16=4728 count c16=74110
+[20:27:16] round=2 arm=i7 rare c16=32479 c64=39869 mid c16=47400 c64=44402 common c16=28018 c64=30032 and c16=6892 count c16=74149
+[20:30:22] round=2 arm=i7 rare c16=33496 c64=40297 mid c16=46302 c64=43784 common c16=28174 c64=31164 and c16=6957 count c16=73323
+[20:33:29] round=2 arm=rel rare c16=19499 c64=20287 mid c16=26793 c64=29427 common c16=15213 c64=15050 and c16=4365 count c16=71318
+[20:36:35] round=3 arm=rel rare c16=16539 c64=18040 mid c16=23561 c64=25619 common c16=14116 c64=15075 and c16=4377 count c16=70506
+[20:39:41] round=3 arm=i7 rare c16=26481 c64=29967 mid c16=34248 c64=39296 common c16=23867 c64=25744 and c16=6294 count c16=73360
+[20:42:48] round=3 arm=i7 rare c16=27345 c64=30420 mid c16=34436 c64=37980 common c16=23913 c64=25937 and c16=6321 count c16=72030
+[20:45:54] round=3 arm=rel rare c16=16591 c64=18125 mid c16=23696 c64=24300 common c16=14252 c64=15134 and c16=4361 count c16=72661
+[20:47:22] mbench2 after: chase  1024 MiB 4k  : 225.3 ns/load chase  4096 MiB 4k  : 262.4 ns/load 
+[20:47:22] server errors: 0
+[20:47:22] I7AB_DONE

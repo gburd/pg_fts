@@ -1,0 +1,26 @@
+== rel tps = 25849.581103 (without initial connection time)
+  37.08% pg_fts.so bm25_dict_seek.isra.0
+  0xaaaad8a8c2d8  
+  0xffff996c225c  
+  9.84% pg_fts.so bm25_doclen_cursor_lookup
+  0xaaaad8a8c2d8  
+  0xffff996c225c  
+  6.79% pg_fts.so fts_search_bestfirst1
+  0xaaaad8a8c2d8  
+  0xffff996c225c  
+  6.51% postgres __aarch64_cas4_acq_rel
+  0xaaaad8a8c2d8  
+  0xffff996c225c  
+== i7 tps = 44877.379579 (without initial connection time)
+  21.21% pg_fts.so bm25_doclen_cursor_lookup
+  0xaaaab8d2c2d8  
+  0xffff8fd6225c  
+  11.73% pg_fts.so fts_search_bestfirst1
+  0xaaaab8d2c2d8  
+  0xffff8fd6225c  
+  4.56% postgres __aarch64_cas4_acq_rel
+  0xaaaab8d2c2d8  
+  0xffff8fd6225c  
+  4.01% pg_fts.so bm25_for_unpack
+  0xaaaab8d2c2d8  
+  0xffff8fd6225c  
