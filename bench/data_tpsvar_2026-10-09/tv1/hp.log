@@ -1,0 +1,9 @@
+[13:23:49] mode=4k huge_pages_status=off HugePages_Total=0 Free=0
+[13:26:53] round=1 mode=4k rare c16=19127 c64=22385 mid c16=26893 common c16=16136 count c16=74006
+[13:26:56] mode=huge huge_pages_status=on HugePages_Total=17000 Free=16645
+[13:29:57] round=1 mode=huge rare c16=20248 c64=23493 mid c16=27466 common c16=16590 count c16=73933
+[13:29:58] mode=4k huge_pages_status=off HugePages_Total=0 Free=0
+[13:33:02] round=2 mode=4k rare c16=19907 c64=23040 mid c16=27168 common c16=16537 count c16=73994
+[13:33:04] mode=huge huge_pages_status=on HugePages_Total=17000 Free=16645
+[13:36:06] round=2 mode=huge rare c16=19670 c64=23497 mid c16=27689 common c16=16584 count c16=74208
+[13:36:06] HP_DONE

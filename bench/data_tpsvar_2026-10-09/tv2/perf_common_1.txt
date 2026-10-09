@@ -1,0 +1,40 @@
+    35.28%  pg_fts.so                                        [.] bm25_dict_seek.isra.0
+                                     0xaaaad3e9c2d8
+                                     0xffff9fce225c
+     7.23%  postgres                                         [.] hash_search_with_hash_value
+                                                                      0xaaaad3e9c2d8
+                                                                      0xffff9fce225c
+     6.92%  [kernel.kallsyms]                                [k] default_idle_call
+     6.36%  pg_fts.so                                        [.] bestfirst_collect
+               0xaaaad3e9c2d8
+               0xffff9fce225c
+     2.94%  pg_fts.so                                        [.] bestfirst_siftdown
+               0xaaaad3e9c2d8
+               0xffff9fce225c
+     2.44%  postgres                                         [.] __aarch64_cas4_acq_rel
+     1.91%  pg_fts.so                                        [.] fts_search_bestfirst1
+               0xaaaad3e9c2d8
+               0xffff9fce225c
+     1.49%  postgres                                         [.] LWLockAcquire
+                                                           0xaaaad3e9c2d8
+                                                           0xffff9fce225c
+     1.16%  postgres                                         [.] base_yyparse
+               0xaaaad3e9c2d8
+               0xffff9fce225c
+     1.10%  postgres                                         [.] __aarch64_ldadd4_sync
+     0.95%  libc.so.6                                        [.] memcmp
+     0.93%  pg_fts.so                                        [.] bm25_doclen_cursor_lookup
+               0xaaaad3e9c2d8
+               0xffff9fce225c
+     0.86%  postgres                                         [.] SearchCatCacheInternal
+     0.84%  pg_fts.so                                        [.] bm25_for_unpack
+     0.67%  postgres                                         [.] StartReadBuffer
+     0.59%  [kernel.kallsyms]                                [k] finish_task_switch.isra.0
+     0.58%  postgres                                         [.] PinBuffer
+     0.54%  postgres                                         [.] LWLockRelease
+     0.47%  postgres                                         [.] palloc0
+     0.47%  postgres                                         [.] hash_bytes
+     0.47%  [kernel.kallsyms]                                [k] el0_svc
+     0.44%  [kernel.kallsyms]                                [k] __wake_up_sync_key
+     0.39%  postgres                                         [.] AllocSetAlloc
+     0.37%  postgres                                         [.] fmgr_info_cxt_security

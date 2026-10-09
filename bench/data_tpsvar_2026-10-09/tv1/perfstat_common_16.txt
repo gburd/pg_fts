@@ -1,0 +1,12 @@
+
+ Performance counter stats for 'system wide':
+
+      201206737351      cycles                                                                  (75.00%)
+      395323872889      instructions                     #    1.96  insn per cycle            
+                                                  #    0.26  stalled cycles per insn     (74.99%)
+        2593858088      cache-misses                                                            (75.00%)
+   <not supported>      LLC-load-misses                                                       
+      103469342292      stalled-cycles-backend           #   51.42% backend cycles idle         (50.02%)
+
+       5.004570037 seconds time elapsed
+

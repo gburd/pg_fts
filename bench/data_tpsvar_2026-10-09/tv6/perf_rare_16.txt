@@ -1,0 +1,40 @@
+    28.88%  pg_fts.so          [.] bm25_dict_seek.isra.0
+                          0xaaaae2e3c2d8
+                          0xffffa794225c
+    15.45%  pg_fts.so          [.] bm25_doclen_cursor_lookup
+                          0xaaaae2e3c2d8
+                          0xffffa794225c
+     9.55%  postgres           [.] __aarch64_cas4_acq_rel
+     5.22%  postgres           [.] __aarch64_ldadd4_sync
+     5.08%  pg_fts.so          [.] fts_search_bestfirst1
+                          0xaaaae2e3c2d8
+                          0xffffa794225c
+     2.69%  postgres           [.] LWLockAcquire
+                                                           0xaaaae2e3c2d8
+                                                           0xffffa794225c
+     1.72%  pg_fts.so          [.] bm25_for_unpack
+                          0xaaaae2e3c2d8
+                          0xffffa794225c
+     1.52%  postgres           [.] hash_search_with_hash_value
+                                                                      0xaaaae2e3c2d8
+                                                                      0xffffa794225c
+     1.31%  postgres           [.] PinBuffer
+     1.14%  postgres           [.] StartReadBuffer
+     1.05%  postgres           [.] base_yyparse
+                          0xaaaae2e3c2d8
+                          0xffffa794225c
+     0.82%  [kernel.kallsyms]  [k] finish_task_switch.isra.0
+     0.72%  postgres           [.] BufferGetBlockNumber
+               0xaaaae2e3c2d8
+               0xffffa794225c
+     0.68%  [kernel.kallsyms]  [k] __wake_up_sync_key
+     0.60%  pg_fts.so          [.] wand_load_block
+               0xaaaae2e3c2d8
+               0xffffa794225c
+     0.56%  libc.so.6          [.] memcmp
+     0.49%  postgres           [.] SearchCatCacheInternal
+     0.41%  [kernel.kallsyms]  [k] el0_svc
+     0.37%  pg_fts.so          [.] bm25_lookup_dict
+     0.36%  [kernel.kallsyms]  [k] default_idle_call
+     0.34%  postgres           [.] LWLockRelease
+     0.26%  pg_fts.so          [.] bestfirst_collect

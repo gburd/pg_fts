@@ -1,0 +1,13 @@
+pgbench (17.10)
+transaction type: /tmp/q_common.sql
+scaling factor: 1
+query mode: simple
+number of clients: 16
+number of threads: 8
+maximum number of tries: 1
+duration: 40 s
+number of transactions actually processed: 669735
+number of failed transactions: 0 (0.000%)
+latency average = 0.956 ms
+initial connection time = 4.833 ms
+tps = 16744.865293 (without initial connection time)

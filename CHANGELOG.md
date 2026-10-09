@@ -17,7 +17,10 @@ All notable changes to pg_fts are documented here.
   comparison matrix now quote this run.  pg_fts leads 10 of 12 latency bands as before;
   pg_search is ahead by 2% on `world & war` and 4% on the 4-term OR.  Absolute pg_fts
   throughput is 0.5-13.5% below the 39b6a42 run, on a different host of the same type,
-  with the release and 39b6a42 agreeing on this one (host variation, cause unmeasured).
+  with the release and 39b6a42 agreeing on this one.  Cause (`bench/RESULTS_TPS_VARIANCE_
+  2026-10-09.md`): the same binary runs ~27k or ~17-20k rare top-10 tps at 16 clients
+  depending on which r7gd.4xlarge host, and on that host's state; the code is not the
+  cause.  pg_fts's exposure to it (buffer pin and lock traffic per query) is ROADMAP I7.
 
 ## 1.11.0 - 2026-10-08
 

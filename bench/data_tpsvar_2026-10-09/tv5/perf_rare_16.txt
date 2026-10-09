@@ -1,0 +1,40 @@
+    36.54%  pg_fts.so          [.] bm25_dict_seek.isra.0
+                          0xaaaad474c2d8
+                          0xffffb83e225c
+    10.06%  pg_fts.so          [.] bm25_doclen_cursor_lookup
+                          0xaaaad474c2d8
+                          0xffffb83e225c
+     6.96%  pg_fts.so          [.] fts_search_bestfirst1
+                          0xaaaad474c2d8
+                          0xffffb83e225c
+     6.75%  postgres           [.] __aarch64_cas4_acq_rel
+                                                0xaaaad474c2d8
+                                                0xffffb83e225c
+     2.53%  postgres           [.] LWLockAcquire
+                                                           0xaaaad474c2d8
+                                                           0xffffb83e225c
+     2.25%  pg_fts.so          [.] bm25_for_unpack
+                          0xaaaad474c2d8
+                          0xffffb83e225c
+     2.00%  postgres           [.] hash_search_with_hash_value
+                                                                      0xaaaad474c2d8
+                                                                      0xffffb83e225c
+     1.76%  postgres           [.] __aarch64_ldadd4_sync
+                                                0xaaaad474c2d8
+                                                0xffffb83e225c
+     1.22%  postgres           [.] base_yyparse
+                          0xaaaad474c2d8
+                          0xffffb83e225c
+     0.89%  pg_fts.so          [.] wand_load_block
+                          0xaaaad474c2d8
+                          0xffffb83e225c
+     0.87%  [kernel.kallsyms]  [k] finish_task_switch.isra.0
+     0.85%  [kernel.kallsyms]  [k] __wake_up_sync_key
+                                     0xffffb84428fc
+                                     0xaaaad474c2d8
+                                     0xffffb83e225c
+     0.74%  postgres           [.] PinBuffer
+     0.74%  libc.so.6          [.] memcmp
+     0.59%  postgres           [.] SearchCatCacheInternal
+     0.55%  [kernel.kallsyms]  [k] el0_svc
+     0.53%  postgres           [.] StartReadBuffer

@@ -1,0 +1,40 @@
+    41.02%  pg_fts.so                                        [.] bm25_dict_seek.isra.0
+                          0xaaaac55dc2d8
+                          0xffffbd24225c
+     9.03%  pg_fts.so                                        [.] bm25_doclen_cursor_lookup
+               0xaaaac55dc2d8
+               0xffffbd24225c
+     7.68%  pg_fts.so                                        [.] fts_search_bestfirst1
+               0xaaaac55dc2d8
+               0xffffbd24225c
+     4.51%  postgres                                         [.] hash_search_with_hash_value
+                                                                      0xaaaac55dc2d8
+                                                                      0xffffbd24225c
+     2.56%  pg_fts.so                                        [.] bm25_for_unpack
+                          0xaaaac55dc2d8
+                          0xffffbd24225c
+     2.46%  [kernel.kallsyms]                                [k] default_idle_call
+     1.46%  postgres                                         [.] LWLockAcquire
+     1.24%  postgres                                         [.] __aarch64_cas4_acq_rel
+     1.09%  postgres                                         [.] base_yyparse
+               0xaaaac55dc2d8
+               0xffffbd24225c
+     0.98%  [kernel.kallsyms]                                [k] finish_task_switch.isra.0
+     0.97%  pg_fts.so                                        [.] wand_load_block
+               0xaaaac55dc2d8
+               0xffffbd24225c
+     0.90%  postgres                                         [.] __aarch64_ldadd4_sync
+     0.73%  postgres                                         [.] StartReadBuffer
+     0.73%  libc.so.6                                        [.] memcmp
+     0.71%  [kernel.kallsyms]                                [k] __wake_up_sync_key
+     0.66%  postgres                                         [.] SearchCatCacheInternal
+     0.50%  [kernel.kallsyms]                                [k] el0_svc
+     0.49%  postgres                                         [.] LWLockRelease
+     0.49%  postgres                                         [.] PinBuffer
+     0.49%  pg_fts.so                                        [.] bm25_lookup_dict
+     0.41%  postgres                                         [.] GetPrivateRefCountEntry
+     0.37%  postgres                                         [.] AllocSetAlloc
+     0.34%  postgres                                         [.] core_yylex
+     0.32%  pg_fts.so                                        [.] bestfirst_siftdown
+     0.31%  pg_fts.so                                        [.] bestfirst_collect
+     0.29%  postgres                                         [.] hash_bytes

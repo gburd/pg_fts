@@ -1,0 +1,40 @@
+    27.74%  pg_fts.so            [.] bm25_dict_seek.isra.0
+                          0xaaaae2e3c2d8
+                          0xffffa794225c
+    14.40%  postgres             [.] __aarch64_cas4_acq_rel
+                                     0xaaaae2e3c2d8
+                                     0xffffa794225c
+     8.47%  postgres             [.] __aarch64_ldadd4_sync
+     7.40%  pg_fts.so            [.] bestfirst_collect
+               0xaaaae2e3c2d8
+               0xffffa794225c
+     3.67%  pg_fts.so            [.] bestfirst_siftdown
+               0xaaaae2e3c2d8
+               0xffffa794225c
+     3.55%  postgres             [.] LWLockAcquire
+                                                0xaaaae2e3c2d8
+                                                0xffffa794225c
+     2.65%  postgres             [.] hash_search_with_hash_value
+                                                                      0xaaaae2e3c2d8
+                                                                      0xffffa794225c
+     2.60%  pg_fts.so            [.] fts_search_bestfirst1
+               0xaaaae2e3c2d8
+               0xffffa794225c
+     2.23%  postgres             [.] PinBuffer
+     1.77%  postgres             [.] StartReadBuffer
+                                     0xaaaae2e3c2d8
+                                     0xffffa794225c
+     1.49%  pg_fts.so            [.] bm25_doclen_cursor_lookup
+               0xaaaae2e3c2d8
+               0xffffa794225c
+     1.07%  pg_fts.so            [.] bm25_for_unpack
+                          0xaaaae2e3c2d8
+                          0xffffa794225c
+     0.93%  postgres             [.] base_yyparse
+                          0xaaaae2e3c2d8
+                          0xffffa794225c
+     0.80%  [kernel.kallsyms]    [k] finish_task_switch.isra.0
+     0.58%  [kernel.kallsyms]    [k] __wake_up_sync_key
+     0.54%  postgres             [.] LWLockRelease
+     0.50%  libc.so.6            [.] memcmp
+     0.41%  postgres             [.] SearchCatCacheInternal

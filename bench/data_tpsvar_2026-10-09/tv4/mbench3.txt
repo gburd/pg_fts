@@ -1,0 +1,10 @@
+atomic gap=0 T= 1 shared     5.1 ns/op   private    5.0 ns/op
+atomic gap=0 T= 2 shared    16.6 ns/op   private    5.1 ns/op
+atomic gap=0 T= 4 shared    35.2 ns/op   private    5.2 ns/op
+atomic gap=0 T= 8 shared    64.2 ns/op   private    5.2 ns/op
+atomic gap=0 T=16 shared   130.7 ns/op   private    5.2 ns/op
+atomic gap=200 T= 1 shared   389.8 ns/op   private  389.8 ns/op
+atomic gap=200 T= 2 shared   389.8 ns/op   private  389.7 ns/op
+atomic gap=200 T= 4 shared   389.8 ns/op   private  389.7 ns/op
+atomic gap=200 T= 8 shared   389.8 ns/op   private  389.7 ns/op
+atomic gap=200 T=16 shared   651.0 ns/op   private  389.7 ns/op

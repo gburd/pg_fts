@@ -1,0 +1,40 @@
+    34.08%  pg_fts.so            [.] bm25_dict_seek.isra.0
+                          0xaaaae2e3c2d8
+                          0xffffa794225c
+    14.95%  [kernel.kallsyms]    [k] default_idle_call
+     8.90%  pg_fts.so            [.] bm25_doclen_cursor_lookup
+               0xaaaae2e3c2d8
+               0xffffa794225c
+     7.10%  pg_fts.so            [.] fts_search_bestfirst1
+               0xaaaae2e3c2d8
+               0xffffa794225c
+     3.12%  postgres             [.] hash_search_with_hash_value
+                                                                      0xaaaae2e3c2d8
+                                                                      0xffffa794225c
+     2.26%  pg_fts.so            [.] bm25_for_unpack
+                          0xaaaae2e3c2d8
+                          0xffffa794225c
+     1.64%  postgres             [.] __aarch64_cas4_acq_rel
+     0.98%  postgres             [.] base_yyparse
+               0xaaaae2e3c2d8
+               0xffffa794225c
+     0.97%  postgres             [.] LWLockAcquire
+     0.86%  [kernel.kallsyms]    [k] finish_task_switch.isra.0
+     0.83%  pg_fts.so            [.] wand_load_block
+               0xaaaae2e3c2d8
+               0xffffa794225c
+     0.81%  postgres             [.] __aarch64_ldadd4_sync
+     0.66%  postgres             [.] SearchCatCacheInternal
+     0.55%  libc.so.6            [.] memcmp
+     0.55%  [kernel.kallsyms]    [k] el0_svc
+     0.53%  postgres             [.] StartReadBuffer
+     0.45%  [kernel.kallsyms]    [k] __wake_up_sync_key
+     0.43%  postgres             [.] LWLockRelease
+     0.43%  postgres             [.] PinBuffer
+     0.38%  postgres             [.] GetPrivateRefCountEntry
+     0.34%  postgres             [.] hash_bytes
+     0.34%  pg_fts.so            [.] bestfirst_siftdown
+     0.34%  postgres             [.] UnpinBufferNoOwner
+     0.32%  pg_fts.so            [.] bestfirst_collect
+     0.32%  pg_fts.so            [.] bm25_lookup_dict
+     0.28%  postgres             [.] palloc0

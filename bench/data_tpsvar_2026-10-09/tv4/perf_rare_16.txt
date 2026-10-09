@@ -1,0 +1,40 @@
+    29.07%  pg_fts.so          [.] bm25_dict_seek.isra.0
+                                     0xaaaacf64c2d8
+                                     0xffffa4a7225c
+    14.95%  pg_fts.so          [.] bm25_doclen_cursor_lookup
+                          0xaaaacf64c2d8
+                          0xffffa4a7225c
+     9.66%  postgres           [.] __aarch64_cas4_acq_rel
+     5.14%  pg_fts.so          [.] fts_search_bestfirst1
+               0xaaaacf64c2d8
+               0xffffa4a7225c
+     4.92%  postgres           [.] __aarch64_ldadd4_sync
+     2.66%  postgres           [.] LWLockAcquire
+                                                           0xaaaacf64c2d8
+                                                           0xffffa4a7225c
+     1.85%  pg_fts.so          [.] bm25_for_unpack
+                          0xaaaacf64c2d8
+                          0xffffa4a7225c
+     1.60%  postgres           [.] hash_search_with_hash_value
+                                                                      0xaaaacf64c2d8
+                                                                      0xffffa4a7225c
+     1.33%  postgres           [.] PinBuffer
+     1.15%  postgres           [.] StartReadBuffer
+     1.13%  postgres           [.] base_yyparse
+                          0xaaaacf64c2d8
+                          0xffffa4a7225c
+     0.85%  [kernel.kallsyms]  [k] finish_task_switch.isra.0
+     0.81%  postgres           [.] BufferGetBlockNumber
+               0xaaaacf64c2d8
+               0xffffa4a7225c
+     0.73%  [kernel.kallsyms]  [k] __wake_up_sync_key
+                                     0xffffa4ad28fc
+                                     0xaaaacf64c2d8
+                                     0xffffa4a7225c
+     0.66%  pg_fts.so          [.] wand_load_block
+                          0xaaaacf64c2d8
+                          0xffffa4a7225c
+     0.55%  libc.so.6          [.] memcmp
+     0.48%  postgres           [.] SearchCatCacheInternal
+     0.46%  [kernel.kallsyms]  [k] el0_svc
+     0.34%  [kernel.kallsyms]  [k] default_idle_call

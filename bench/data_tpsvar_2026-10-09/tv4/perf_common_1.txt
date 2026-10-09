@@ -1,0 +1,40 @@
+    43.97%  pg_fts.so                 [.] bm25_dict_seek.isra.0
+                          0xaaaacf64c2d8
+                          0xffffa4a7225c
+     9.04%  pg_fts.so                 [.] bestfirst_collect
+               0xaaaacf64c2d8
+               0xffffa4a7225c
+     7.94%  postgres                  [.] hash_search_with_hash_value
+                                                                      0xaaaacf64c2d8
+                                                                      0xffffa4a7225c
+     4.54%  pg_fts.so                 [.] bestfirst_siftdown
+               0xaaaacf64c2d8
+               0xffffa4a7225c
+     3.14%  postgres                  [.] __aarch64_cas4_acq_rel
+     2.91%  pg_fts.so                 [.] fts_search_bestfirst1
+               0xaaaacf64c2d8
+               0xffffa4a7225c
+     1.84%  postgres                  [.] __aarch64_ldadd4_sync
+     1.50%  postgres                  [.] LWLockAcquire
+     1.47%  [kernel.kallsyms]         [k] default_idle_call
+     1.33%  pg_fts.so                 [.] bm25_for_unpack
+                          0xaaaacf64c2d8
+                          0xffffa4a7225c
+     1.28%  pg_fts.so                 [.] bm25_doclen_cursor_lookup
+               0xaaaacf64c2d8
+               0xffffa4a7225c
+     1.16%  postgres                  [.] StartReadBuffer
+     0.79%  libc.so.6                 [.] memcmp
+     0.64%  [kernel.kallsyms]         [k] finish_task_switch.isra.0
+     0.64%  postgres                  [.] base_yyparse
+               0xaaaacf64c2d8
+               0xffffa4a7225c
+     0.52%  postgres                  [.] LWLockRelease
+     0.49%  postgres                  [.] PinBuffer
+     0.47%  postgres                  [.] GetPrivateRefCountEntry
+     0.46%  [kernel.kallsyms]         [k] el0_svc
+     0.42%  postgres                  [.] hash_bytes
+     0.42%  postgres                  [.] SearchCatCacheInternal
+     0.39%  pg_fts.so                 [.] wand_load_block
+     0.37%  postgres                  [.] UnpinBufferNoOwner
+     0.32%  postgres                  [.] palloc0

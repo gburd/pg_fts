@@ -1,0 +1,21 @@
+[12:04:28] host=<host> kernel=6.12.111+deb13-cloud-arm64 cpu=Neoverse-V1 nproc=16 thp=[always] madvise never numa_balancing=0
+[12:04:28] dmi: r7gd.4xlarge i-02xx
+[12:04:28] meminfo: MemTotal: 129563952 kB HugePages_Total: 0 
+[12:04:46] mbench: ghz 2.595 lat1_ns 149.1 lat16_ns median 129.2 max 132.3 bw16_gbs 234.8 c2c_ns median 263 min 250 max 274 
+[12:23:28] fill_s=987
+[12:25:35] build_s=127 size=1489600512
+[12:26:46] unsettled rare c16: 26867.504506 26868.270064
+[12:40:38] settled r1: pass=1 band=rare_k10 c16=26961 c64=26452 pass=2 band=rare_k10 c16=26964 c64=26427 pass=1 band=mid_k10 c16=35565 c64=34409 pass=2 band=mid_k10 c16=35554 c64=34384 pass=1 band=common_k10 c16=22324 c64=20892 pass=2 band=common_k10 c16=22353 c64=20637 pass=1 band=count_common c16=75025 c64=69146 pass=2 band=count_common c16=75537 c64=69139 
+[12:54:18] settled r2: pass=1 band=rare_k10 c16=26931 c64=26385 pass=2 band=rare_k10 c16=26949 c64=26426 pass=1 band=mid_k10 c16=35515 c64=34428 pass=2 band=mid_k10 c16=35617 c64=34432 pass=1 band=common_k10 c16=22287 c64=20676 pass=2 band=common_k10 c16=22280 c64=20920 pass=1 band=count_common c16=75455 c64=69061 pass=2 band=count_common c16=75662 c64=69170 
+[12:54:38] latency rare k10 pass medians: 0.545 0.520 0.523  c1 tps=1971.261672
+[12:54:58] latency common k10 pass medians: 0.670 0.650 0.646  c1 tps=1548.734251
+[12:55:38] c16 rare: tps=26546.405749 vmstat(us sy id cs)=93 5 2 57905 waits=CPU:-=2810 Client:ClientRead=18 
+[12:56:00] c1 rare: tps=1924.803362
+[12:56:40] c16 common: tps=21999.706923 vmstat(us sy id cs)=95 4 1 47260 waits=CPU:-=2860 Client:ClientRead=9 
+[12:57:02] c1 common: tps=1537.605787
+[12:58:02] shared_doclen=on rep=1: rare c16=26967.883643 common c16=22287.220866
+[12:59:02] shared_doclen=off rep=1: rare c16=27581.732536 common c16=22354.550703
+[13:00:02] shared_doclen=on rep=2: rare c16=26916.104750 common c16=22307.435891
+[13:01:02] shared_doclen=off rep=2: rare c16=27581.506506 common c16=22351.688619
+[13:03:02] rare c16 -j8=26898.321887 -j16=27154.141855 -j8=26930.725707 -j16=27217.247159
+[13:03:02] TV_DONE

@@ -66,3 +66,26 @@ On each host:
   there.
 - Remediation follows the hypothesis that holds: code for H3, protocol for H1/H2 (report
   the measured host spread; A/B only within one host, as already done).
+
+## Addendum (2026-10-09 14:10 UTC, after the six-host run, before the measurements below)
+
+Six-host result (data in `bench/data_tpsvar_2026-10-09/`): same binary, index and settings,
+rare k10 c16 settled 26,931-26,964 on tv5, 19,685-20,465 on tv2/tv3/tv6, and 26,357-26,762
+then 16,627-18,309 on tv1/tv4 within one hour.  Slow/fast correlates with a 4 KiB-page
+DRAM pointer chase (1 GiB: 142-149 ns fast, 178-201 ns slow; tv1/tv4 moved with it), not
+with THP, hugetlb shared_buffers, /dev/shm huge pages, c2c latency or contended-atomic
+cost.  On slow hosts the extra per-transaction core time is in buffer pin/lock atomics
+(73 -> 172-176 us of 592 -> 760-778) and the shared doclen lookup (60 -> 106-111 us); the
+pg_fts per-query work (dict seek, scoring) is identical across hosts.  `shared_doclen=off`
+recovers 13-23% of rare c16 on slow hosts (20,330 -> 25,025 on tv2), nothing on tv5.
+
+H3 refined.  Two pg_fts levers, each a measurable reduction of hot-line traffic:
+- **H3a** a rare k10 query reads 278 shared buffers; ~200 are three dictionary lookups of
+  the same term (maxhits bound, global df, cursor), each walking the dictionary-index
+  chain.  Doing the lookup once per (term, segment) per scan removes ~2/3 of that.
+- **H3b** the shared doclen copy (DSM, 4 KiB pages) costs more than a private copy on slow
+  hosts and nothing on fast ones; 1.10.0's I6 measurement (private worse at 32-64
+  clients) was on one host.  Decide `shared_doclen`'s default from all six hosts at
+  c16/c32/c64, rare and mid.
+Measured on the same six hosts, alternating, against the 1.11.0 release; a change ships
+only if it is never slower on the fast host and results are identical.

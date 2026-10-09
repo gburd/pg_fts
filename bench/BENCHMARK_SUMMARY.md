@@ -91,8 +91,9 @@ pg_search moved to 0.26.1.
 
 Settled throughput for every engine this time (two runs each, 4 passes).  pg_fts's absolute
 tps is 0.5-13.5% below the section below on a different host of the same type; the release and
-39b6a42 agree on this host, so that is host-to-host variation (unmeasured cause); ratios
-are taken within one run.  Build (expression index): pg_search **71.6 s**, pg_fts 237.5 s
+39b6a42 agree on this host, so that is host-to-host variation: ~27k vs ~17-20k rare
+tps on hosts of one type, by host state (`RESULTS_TPS_VARIANCE_2026-10-09.md`); ratios are
+taken within one run.  Build (expression index): pg_search **71.6 s**, pg_fts 237.5 s
 (no `fts_vacuum` needed), pg_textsearch 266.7 s, VectorChord 209 s after 3,246 s of
 model + tokenize.  Size: pg_fts **1,369 MiB** expression / 1,421 MiB column, pg_textsearch
 1,887, pg_search 3,395, VectorChord 42,434.  VectorChord was 14-37% faster than in the

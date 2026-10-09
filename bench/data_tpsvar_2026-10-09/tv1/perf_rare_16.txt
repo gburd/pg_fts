@@ -1,0 +1,40 @@
+    26.81%  pg_fts.so          [.] bm25_dict_seek.isra.0
+                                     0xaaaac55dc2d8
+                                     0xffffbd24225c
+    14.82%  pg_fts.so          [.] bm25_doclen_cursor_lookup
+                          0xaaaac55dc2d8
+                          0xffffbd24225c
+    10.69%  postgres           [.] __aarch64_cas4_acq_rel
+     5.80%  postgres           [.] __aarch64_ldadd4_sync
+                                                0xaaaac55dc2d8
+                                                0xffffbd24225c
+     5.00%  pg_fts.so          [.] fts_search_bestfirst1
+               0xaaaac55dc2d8
+               0xffffbd24225c
+     2.92%  postgres           [.] LWLockAcquire
+     1.74%  pg_fts.so          [.] bm25_for_unpack
+                          0xaaaac55dc2d8
+                          0xffffbd24225c
+     1.64%  postgres           [.] PinBuffer
+                                     0xaaaac55dc2d8
+                                     0xffffbd24225c
+     1.62%  postgres           [.] hash_search_with_hash_value
+                                                                      0xaaaac55dc2d8
+                                                                      0xffffbd24225c
+     1.37%  postgres           [.] StartReadBuffer
+                                     0xaaaac55dc2d8
+                                     0xffffbd24225c
+     1.15%  postgres           [.] BufferGetBlockNumber
+               0xaaaac55dc2d8
+               0xffffbd24225c
+     1.04%  postgres           [.] base_yyparse
+               0xaaaac55dc2d8
+               0xffffbd24225c
+     0.78%  [kernel.kallsyms]  [k] finish_task_switch.isra.0
+     0.63%  pg_fts.so          [.] wand_load_block
+                          0xaaaac55dc2d8
+                          0xffffbd24225c
+     0.61%  [kernel.kallsyms]  [k] __wake_up_sync_key
+     0.57%  libc.so.6          [.] memcmp
+     0.51%  postgres           [.] SearchCatCacheInternal
+     0.39%  [kernel.kallsyms]  [k] el0_svc

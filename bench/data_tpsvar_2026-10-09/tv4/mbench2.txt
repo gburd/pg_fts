@@ -1,0 +1,8 @@
+chase    64 MiB 4k  : 134.8 ns/load (AnonHugePages 0 kB)
+chase    64 MiB thp : 121.8 ns/load (AnonHugePages 71680 kB)
+chase   256 MiB 4k  : 138.1 ns/load (AnonHugePages 6144 kB)
+chase   256 MiB thp : 122.0 ns/load (AnonHugePages 268288 kB)
+chase  1024 MiB 4k  : 201.5 ns/load (AnonHugePages 6144 kB)
+chase  1024 MiB thp : 122.3 ns/load (AnonHugePages 1054720 kB)
+chase  4096 MiB 4k  : 243.2 ns/load (AnonHugePages 6144 kB)
+chase  4096 MiB thp : 124.0 ns/load (AnonHugePages 4200448 kB)

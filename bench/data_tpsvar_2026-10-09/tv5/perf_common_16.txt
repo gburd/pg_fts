@@ -1,0 +1,40 @@
+    36.17%  pg_fts.so          [.] bm25_dict_seek.isra.0
+                          0xaaaad474c2d8
+                          0xffffb83e225c
+     9.59%  postgres           [.] __aarch64_cas4_acq_rel
+     8.64%  pg_fts.so          [.] bestfirst_collect
+               0xaaaad474c2d8
+               0xffffb83e225c
+     4.40%  pg_fts.so          [.] bestfirst_siftdown
+               0xaaaad474c2d8
+               0xffffb83e225c
+     3.33%  pg_fts.so          [.] fts_search_bestfirst1
+               0xaaaad474c2d8
+               0xffffb83e225c
+     3.28%  postgres           [.] hash_search_with_hash_value
+                                                                      0xaaaad474c2d8
+                                                                      0xffffb83e225c
+     3.20%  postgres           [.] LWLockAcquire
+                                                0xaaaad474c2d8
+                                                0xffffb83e225c
+     2.41%  postgres           [.] __aarch64_ldadd4_sync
+     1.69%  pg_fts.so          [.] bm25_doclen_cursor_lookup
+                          0xaaaad474c2d8
+                          0xffffb83e225c
+     1.30%  pg_fts.so          [.] bm25_for_unpack
+                          0xaaaad474c2d8
+                          0xffffb83e225c
+     1.02%  postgres           [.] base_yyparse
+               0xaaaad474c2d8
+               0xffffb83e225c
+     0.79%  postgres           [.] PinBuffer
+     0.75%  postgres           [.] StartReadBuffer
+     0.66%  libc.so.6          [.] memcmp
+     0.65%  [kernel.kallsyms]  [k] __wake_up_sync_key
+                                     0xffffb84428fc
+                                     0xaaaad474c2d8
+                                     0xffffb83e225c
+     0.64%  [kernel.kallsyms]  [k] finish_task_switch.isra.0
+     0.54%  postgres           [.] LWLockRelease
+     0.53%  postgres           [.] SearchCatCacheInternal
+     0.48%  pg_fts.so          [.] wand_load_block

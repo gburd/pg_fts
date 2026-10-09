@@ -1,0 +1,18 @@
+[13:43:56] cfg=A hp_status=off shm_mount=default shdl_slots=1 mem: anon:Rss=1M dsm:Rss=4M mainshm:Rss=83M
+[13:46:26] round=1 cfg=A rare c16=20711 c64=23740 mid c16=28165 common c16=16891 count c16=73174
+[13:47:02] cfg=B hp_status=off shm_mount=default shdl_slots=0 mem: 
+[13:49:32] round=1 cfg=B rare c16=25616 c64=20421 mid c16=34578 common c16=17231 count c16=73675
+[13:50:08] cfg=C hp_status=off shm_mount=huge=always shdl_slots=1 mem: anon:Rss=1M dsm:Rss=5M,ShmemPmdMapped=4M mainshm:Rss=83M
+[13:52:39] round=1 cfg=C rare c16=20760 c64=23518 mid c16=30704 common c16=17057 count c16=73332
+[13:53:12] cfg=D hp_status=on shm_mount=default shdl_slots=1 mem: anon:Rss=1M dsm:Rss=0M mainshm:Private_Hugetlb=228M,Shared_Hugetlb=280M
+[13:55:42] round=1 cfg=D rare c16=20991 c64=24544 mid c16=29235 common c16=17771 count c16=74476
+[13:56:17] cfg=A hp_status=off shm_mount=default shdl_slots=1 mem: anon:Rss=1M dsm:Rss=4M mainshm:Rss=83M
+[13:58:47] round=2 cfg=A rare c16=21020 c64=23737 mid c16=29511 common c16=17295 count c16=73203
+[13:59:23] cfg=B hp_status=off shm_mount=default shdl_slots=0 mem: 
+[14:01:53] round=2 cfg=B rare c16=25278 c64=20277 mid c16=33591 common c16=17252 count c16=72288
+[14:02:30] cfg=C hp_status=off shm_mount=huge=always shdl_slots=1 mem: anon:Rss=1M dsm:Rss=5M,ShmemPmdMapped=4M mainshm:Rss=82M
+[14:05:00] round=2 cfg=C rare c16=21120 c64=24070 mid c16=28955 common c16=17277 count c16=74387
+[14:05:34] cfg=D hp_status=on shm_mount=default shdl_slots=1 mem: anon:Rss=1M dsm:Rss=0M mainshm:Private_Hugetlb=224M,Shared_Hugetlb=298M
+[14:08:04] round=2 cfg=D rare c16=21117 c64=24502 mid c16=29353 common c16=17800 count c16=74653
+[14:08:38] cfg=A hp_status=off shm_mount=default shdl_slots=1 mem: anon:Rss=1M dsm:Rss=4M mainshm:Rss=83M
+[14:08:38] FIX_DONE
