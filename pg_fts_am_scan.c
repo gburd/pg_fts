@@ -972,7 +972,9 @@ bm25_eval_query(Relation index, const BM25SegMeta *seg, FtsQuery q,
 			}
 			stack[top].set = s;
 			stack[top].negated = false;
-			stack[top].approx = 0;
+			/* term:LABEL is read as the term's presence (postings carry no
+			 * labels): a superset, which a NOT turns into a subset */
+			stack[top].approx = (it->flags & FTS_QF_WEIGHTED) ? +1 : 0;
 			top++;
 		}
 		else if (it->op == FTS_OP_NOT)

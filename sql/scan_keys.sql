@@ -65,6 +65,27 @@ SELECT r.q, r.how, r.ids AS got, t.ids AS want
 FROM skr r JOIN skr t ON t.q = r.q AND t.how = 'seq' WHERE r.how <> 'seq' AND r.ids <> t.ids ORDER BY 1, 2;
 SELECT count(*) FILTER (WHERE ids <> '-') AS nonempty_truths, count(*) AS queries FROM skr WHERE how = 'seq';
 
+-- term:LABEL under a NOT (postings carry no labels, so the index reads the
+-- term's presence, a superset that a NOT turns into a subset): every path
+-- must equal the sequential scan
+CREATE TABLE skl (id int, d ftsdoc);
+INSERT INTO skl VALUES (1, to_ftsdoc('simple', 'apple', 'B') || to_ftsdoc('simple', 'cherry', 'C')),
+                       (2, to_ftsdoc('simple', 'apple cherry', 'A')), (3, to_ftsdoc('simple', 'apple', 'A'));
+CREATE INDEX skl_off ON skl USING fts (d);
+CREATE INDEX skl_on ON skl USING fts (d) WITH (positions = on);
+CREATE FUNCTION skl_ids(q text) RETURNS text LANGUAGE sql AS $$
+  SELECT coalesce(string_agg(id::text, ',' ORDER BY id), '-') FROM skl WHERE d @@@ q::ftsquery $$;
+CREATE TABLE sklq (q text);
+INSERT INTO sklq VALUES ('apple & !cherry:A'), ('apple & !cherry:C'), ('!cherry:A'),
+                        ('apple & !(cherry:A | zz)'), ('apple & !!cherry:A'), ('cherry:A');
+SET enable_indexscan = off; SET enable_bitmapscan = off;
+CREATE TEMP TABLE sklt AS SELECT q, skl_ids(q) AS want FROM sklq;
+RESET enable_indexscan; RESET enable_bitmapscan; SET enable_seqscan = off; SET enable_indexscan = off;
+SELECT t.q, t.want, skl_ids(t.q) AS bitmap,
+       fts_count('skl_off', t.q::ftsquery) AS count_off, fts_count('skl_on', t.q::ftsquery) AS count_on
+FROM sklt t ORDER BY 1;
+RESET enable_seqscan; RESET enable_indexscan;
+
 -- #9 and #10 (the reporter's table), plain index scans
 CREATE TABLE sk9 (id int, d ftsdoc);
 INSERT INTO sk9 VALUES (1, to_ftsdoc('simple', 'apple cherry')), (2, to_ftsdoc('simple', 'apple')),
@@ -123,5 +144,5 @@ EXECUTE sko3(NULL);
 SELECT 'alive' AS server;
 
 RESET ALL;
-DROP TABLE sk, skq, skr, sk9;
+DROP TABLE sk, skq, skr, sk9, skl, sklq;
 DROP FUNCTION sk_ids(text);
