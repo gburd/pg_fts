@@ -112,8 +112,14 @@ static int bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 
 typedef struct BM25ScanOpaqueData
 {
-	FtsQuery	query;			/* copied into the scan's context */
+	FtsQuery	query;			/* the WHERE query the scan evaluates (bm25_rescan) */
 	bool		queryValid;
+	bool		keysRecheck;	/* more than one WHERE key, or an ORDER BY query
+								 * that differs from it: rows are returned with
+								 * xs_recheck so the executor applies every
+								 * original qual (1.12.1) */
+	bool		orderNull;		/* the ORDER BY argument is NULL: NULL distances */
+	FtsQuery	orderQuery;		/* ORDER BY query when it differs from query */
 	/* ordering-scan (amgettuple) state, materialized on first call */
 	bool		orderInit;		/* have we computed the ordered results? */
 	ScoredTid  *ordered;		/* top-k by ascending distance */
@@ -869,11 +875,55 @@ bm25_lookup_prefix(Relation index, const BM25SegMeta *seg,
  * level negative result is complemented against all indexed TIDs (via the
  * universe set).
  */
+/*
+ * One stack entry.  `set` (or, if `negated`, its complement) approximates the
+ * entry's true match set M:
+ *   approx == 0: exact;  +1: a SUPERSET of M;  -1: a SUBSET of M.
+ * A PHRASE is evaluated as the AND of its operands, a superset.  NOT flips the
+ * direction (complement of a superset is a subset).  AND/OR are monotone, so
+ * they keep the direction of their operands; mixing a superset with a subset
+ * gives an unknown direction, which is not allowed to survive (see below).
+ *
+ * The final result must be a SUPERSET (the heap recheck can only remove rows).
+ * Every release until 1.12.1 ignored the direction, so NOT over a phrase
+ * returned a subset: `alpha & !"bravo cherry"` under-counted through every
+ * index scan (GitHub #8).  Now a subset never reaches the result: an entry
+ * that would become a subset is replaced by its sound superset -- the universe
+ * (for a negated entry: the complement of the empty set) -- which the recheck
+ * narrows.  Double negation keeps the original superset (+1 -> -1 -> +1), so
+ * `!!"b c"` stays as tight as `"b c"`.
+ */
 typedef struct EvalVal
 {
 	TidSet		set;
 	bool		negated;		/* true => set represents docs NOT to include */
+	int8		approx;			/* 0 exact, +1 superset, -1 subset of the truth */
 } EvalVal;
+
+/* Widen an entry that under-approximates its truth to the universe, a sound
+ * superset of anything: a negated entry with an empty set means "everything". */
+static void
+eval_widen(EvalVal *v)
+{
+	if (v->approx < 0)
+	{
+		v->set.tids = NULL;
+		v->set.n = 0;
+		v->negated = true;
+		v->approx = +1;
+	}
+}
+
+/* Direction of a monotone combination (AND/OR) of two entries. */
+static int8
+eval_combine(EvalVal *a, EvalVal *b)
+{
+	if (a->approx < 0 && b->approx > 0)
+		eval_widen(a);			/* mixed directions: keep the result a superset */
+	else if (b->approx < 0 && a->approx > 0)
+		eval_widen(b);
+	return (a->approx > 0 || b->approx > 0) ? +1 : (a->approx < 0 || b->approx < 0) ? -1 : 0;
+}
 
 static TidSet
 bm25_eval_query(Relation index, const BM25SegMeta *seg, FtsQuery q,
@@ -922,19 +972,32 @@ bm25_eval_query(Relation index, const BM25SegMeta *seg, FtsQuery q,
 			}
 			stack[top].set = s;
 			stack[top].negated = false;
+			stack[top].approx = 0;
 			top++;
 		}
 		else if (it->op == FTS_OP_NOT)
 		{
 			Assert(top >= 1);
 			stack[top - 1].negated = !stack[top - 1].negated;
+			stack[top - 1].approx = (int8) -stack[top - 1].approx;
 		}
-		else					/* AND / OR */
+		else					/* AND / OR / PHRASE */
 		{
 			EvalVal		b = stack[--top];
 			EvalVal		a = stack[--top];
 			EvalVal		res;
+			int8		dir = eval_combine(&a, &b);
 
+			if (it->op == FTS_OP_PHRASE)
+			{
+				/* phrase-as-AND over-generates: positive operands only (the
+				 * parser builds phrases from terms); anything else is
+				 * widened so the superset claim holds */
+				eval_widen(&a);
+				eval_widen(&b);
+				dir = +1;
+			}
+			res.approx = dir;
 			if (it->op == FTS_OP_AND || it->op == FTS_OP_PHRASE)
 			{
 				/* PHRASE is treated as AND for candidate generation; the
@@ -987,6 +1050,7 @@ bm25_eval_query(Relation index, const BM25SegMeta *seg, FtsQuery q,
 	}
 
 	Assert(top == 1);
+	eval_widen(&stack[0]);		/* the result must not under-approximate */
 	if (stack[0].negated)
 		result = tidset_andnot(universe, stack[0].set);
 	else
@@ -1395,6 +1459,9 @@ bm25_beginscan(Relation r, int nkeys, int norderbys)
 
 	so->query = NULL;
 	so->queryValid = false;
+	so->keysRecheck = false;
+	so->orderNull = false;
+	so->orderQuery = NULL;
 	so->orderInit = false;
 	so->ordered = NULL;
 	so->nordered = 0;
@@ -1414,29 +1481,37 @@ bm25_beginscan(Relation r, int nkeys, int norderbys)
 	return scan;
 }
 
+/*
+ * Same query, ignoring `flags` -- the planner-only LIMIT hint the ordering
+ * scan's copy carries (pg_fts_customscan.c) and the WHERE copy does not.
+ */
+static bool
+fts_query_same(FtsQuery a, FtsQuery b)
+{
+	Size		la = VARSIZE_ANY(a),
+				lb = VARSIZE_ANY(b);
+	Size		off = offsetof(FtsQueryData, nitems);
+
+	return la == lb && a->version == b->version &&
+		memcmp((const char *) a + off, (const char *) b + off, la - off) == 0;
+}
+
 void
 bm25_rescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
 			ScanKey orderbys, int norderbys)
 {
 	BM25ScanOpaque so = (BM25ScanOpaque) scan->opaque;
+	int			i;
+	bool		nullkey = false;
+	FtsQuery	where = NULL;
 
 	if (scankey && scan->numberOfKeys > 0)
 		memmove(scan->keyData, scankey,
 				scan->numberOfKeys * sizeof(ScanKeyData));
-
-	so->queryValid = false;
-	if (scan->numberOfKeys >= 1)
-	{
-		FtsQuery	q = DatumGetFtsQuery(scan->keyData[0].sk_argument);
-
-		so->query = q;
-		so->queryValid = true;
-	}
-
-	/* ordering scan: the query is the <=> operator's right operand */
 	if (orderbys && scan->numberOfOrderBys > 0)
 		memmove(scan->orderByData, orderbys,
 				scan->numberOfOrderBys * sizeof(ScanKeyData));
+
 	so->orderInit = false;
 	so->ordered = NULL;
 	so->nordered = 0;
@@ -1446,11 +1521,65 @@ bm25_rescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
 	so->nplain = 0;
 	so->plainpos = 0;
 	so->plainRecheck = false;
+
+	/*
+	 * Which query to evaluate (1.12.1; GitHub #9, #10, and a NULL-argument
+	 * crash).  Until 1.12.1 this took keyData[0], replaced it with the ORDER BY
+	 * argument for an ordering scan, and reported no recheck: a second WHERE
+	 * key was never applied (#10), a WHERE query different from the ORDER BY
+	 * query was replaced by it (#9), and a NULL argument was dereferenced (a
+	 * prepared `ORDER BY d <=> $1` with $1 = NULL crashed the backend).
+	 *
+	 *  - Any NULL WHERE key: no rows (`@@@` is strict), as GiST/SP-GiST.
+	 *  - One WHERE key and no ORDER BY, or an ORDER BY query equal to the
+	 *    WHERE query (the normal ranked form): unchanged -- one query, exact,
+	 *    no recheck.
+	 *  - More than one WHERE key: evaluate keyData[0] and set keysRecheck; the
+	 *    executor then applies every original WHERE qual to each returned row
+	 *    (nodeIndexscan.c applies indexqualorig when xs_recheck is set,
+	 *    ordering scans included).
+	 *  - ORDER BY query different from the WHERE query: the scan must return
+	 *    EVERY row passing WHERE, in ORDER BY distance; the ORDER BY query
+	 *    alone does not reach rows it does not match.  orderQuery is set and
+	 *    the ordering scan takes bm25_order_split (exhaustive over the WHERE
+	 *    match set, scored by the ORDER BY query).
+	 *  - NULL ORDER BY argument: every distance is NULL; the WHERE rows are
+	 *    returned with NULL distances, as GiST does.
+	 */
+	so->queryValid = false;
+	so->keysRecheck = false;
+	so->orderNull = false;
+	so->orderQuery = NULL;
+	so->query = NULL;
+
+	for (i = 0; i < scan->numberOfKeys; i++)
+		if (scan->keyData[i].sk_flags & SK_ISNULL)
+			nullkey = true;
+	if (nullkey)
+		return;
+	if (scan->numberOfKeys >= 1)
+		where = DatumGetFtsQuery(scan->keyData[0].sk_argument);
+	if (scan->numberOfKeys > 1)
+		so->keysRecheck = true;
+	so->query = where;
 	if (scan->numberOfOrderBys >= 1)
 	{
-		so->query = DatumGetFtsQuery(scan->orderByData[0].sk_argument);
-		so->queryValid = true;
+		if (scan->orderByData[0].sk_flags & SK_ISNULL)
+			so->orderNull = true;
+		else
+		{
+			FtsQuery	ord = DatumGetFtsQuery(scan->orderByData[0].sk_argument);
+
+			if (where == NULL || fts_query_same(where, ord))
+				so->query = ord;	/* the normal ranked form; ord carries the
+									 * planner's LIMIT hint (flags) */
+			else
+				so->orderQuery = ord;
+		}
+		if (so->orderNull || so->orderQuery != NULL)
+			so->keysRecheck = true;
 	}
+	so->queryValid = (so->query != NULL);
 }
 
 /*
@@ -1505,6 +1634,153 @@ bm25_set_itup(IndexScanDesc scan, BM25ScanOpaque so)
 }
 
 /*
+ * bm25_order_split (1.12.1): every visible row matching `where`, as distances
+ * ascending under `order` (NULL order: in TID order, distances unused).
+ *
+ * The rows are the exact WHERE set (bm25_collect_matches + heap recheck, the
+ * set fts_count counts); each is scored from its heap ftsdoc with the index's
+ * own BM25: N and avgdl from the metapage, idf from the global df of each
+ * ORDER BY term, and the document length the index scores with (quantized on
+ * a v4 sidecar segment), so a row's distance equals what an equal WHERE/ORDER
+ * BY scan reports for it.  Rows ORDER BY does not reach score 0 (distance 1),
+ * as `d <=> q` does on the heap.  Cost is O(|WHERE set|) heap fetches; this
+ * query shape returned wrong rows before 1.12.1 (GitHub #9).
+ */
+static uint32 bm25_lookup_df(Relation index, const BM25SegMeta *seg,
+							 const char *term, int termlen);
+
+static int
+cmp_scored_dist(const void *a, const void *b)
+{
+	const ScoredTid *x = (const ScoredTid *) a,
+			   *y = (const ScoredTid *) b;
+
+	if (x->score != y->score)
+		return x->score < y->score ? -1 : 1;
+	return ItemPointerCompare((ItemPointer) &x->tid, (ItemPointer) &y->tid);
+}
+
+static int
+bm25_order_split(Relation index, FtsQuery where, FtsQuery order, ScoredTid **out)
+{
+	TidSet		matches;
+	bool		recheck;
+	BM25MetaPageData meta;
+	const char **terms = NULL;
+	int		   *lens = NULL;
+	int			nterms = 0;
+	double	   *idf = NULL;
+	double		N,
+				avgdl,
+				k1 = 1.2,
+				b = 0.75;
+	bool		quantize = false;
+	Relation	heap;
+	IndexInfo  *indexInfo;
+	EState	   *estate;
+	ExprContext *econtext;
+	TupleTableSlot *slot;
+	IndexFetchTableData *fetch;
+	Snapshot	snap = GetActiveSnapshot();
+	ScoredTid  *res;
+	int			i,
+				t,
+				n = 0;
+
+	*out = NULL;
+	bm25_collect_matches(index, where, &matches, &recheck);
+	if (matches.n == 0)
+		return 0;
+
+	bm25_read_meta(index, &meta);
+	N = meta.ndocs < 1.0 ? 1.0 : meta.ndocs;
+	avgdl = meta.ndocs > 0 ? meta.sumdoclen / meta.ndocs : 1.0;
+	for (i = 0; i < (int) meta.nsegments; i++)
+		if (meta.segs[i].doclenstart != InvalidBlockNumber)
+			quantize = true;	/* v4: the index scores the quantized length */
+	if (order != NULL)
+	{
+		nterms = fts_query_terms(order, &terms, &lens);
+		idf = (double *) palloc(Max(nterms, 1) * sizeof(double));	/* alloc-ok: one entry per ORDER BY query term */
+		for (t = 0; t < nterms; t++)
+		{
+			uint64		gdf = 0;
+			uint32		s;
+
+			for (s = 0; s < meta.nsegments; s++)
+				gdf += bm25_lookup_df(index, &meta.segs[s], terms[t], lens[t]);
+			idf[t] = gdf > 0 ? bm25_index_idf(N, (double) gdf) : 0.0;
+		}
+	}
+
+	res = (ScoredTid *) FTS_ALLOC_MAYBE_HUGE((Size) matches.n * sizeof(ScoredTid));
+	heap = table_open(index->rd_index->indrelid, AccessShareLock);
+	indexInfo = BuildIndexInfo(index);
+	estate = CreateExecutorState();
+	econtext = GetPerTupleExprContext(estate);
+	slot = table_slot_create(heap, NULL);
+	econtext->ecxt_scantuple = slot;
+#if PG_VERSION_NUM >= 190000
+	fetch = table_index_fetch_begin(heap, SO_NONE);
+#else
+	fetch = table_index_fetch_begin(heap);
+#endif
+	for (i = 0; i < matches.n; i++)
+	{
+		ItemPointerData tid = matches.tids[i];
+		bool		call_again = false;
+		bool		all_dead = false;
+		Datum		values[INDEX_MAX_KEYS];
+		bool		isnull[INDEX_MAX_KEYS];
+
+		CHECK_FOR_INTERRUPTS();	/* per row; no index buffer lock held */
+		ExecClearTuple(slot);
+		if (table_index_fetch_tuple(fetch, &tid, snap, slot, &call_again, &all_dead))
+		{
+			FormIndexDatum(indexInfo, slot, estate, values, isnull);
+			if (!isnull[0])
+			{
+				FtsDoc		doc = (FtsDoc) PG_DETOAST_DATUM(values[0]);
+
+				if (!recheck || fts_doc_matches(doc, where))
+				{
+					double		score = 0.0;
+					double		dl = (double) doc->doclen;
+
+					if (quantize)
+						dl = (double) fts_byte_to_doclen(fts_doclen_to_byte(doc->doclen));
+					for (t = 0; t < nterms; t++)
+					{
+						FtsTermEntry *e = fts_doc_lookup(doc, terms[t], lens[t]);
+
+						if (e != NULL && idf[t] > 0.0)
+						{
+							double		tf = (double) e->tf;
+
+							score += idf[t] * (k1 + 1.0) * tf /
+								(tf + k1 * (1.0 - b) + k1 * b / avgdl * dl);
+						}
+					}
+					res[n].tid = tid;
+					res[n].score = 1.0 / (1.0 + score);
+					n++;
+				}
+			}
+		}
+		ResetExprContext(econtext);
+	}
+	table_index_fetch_end(fetch);
+	ExecDropSingleTupleTableSlot(slot);
+	FreeExecutorState(estate);
+	table_close(heap, AccessShareLock);
+	pfree(matches.tids);
+	if (order != NULL && n > 1)
+		qsort(res, n, sizeof(ScoredTid), cmp_scored_dist);
+	*out = res;
+	return n;
+}
+
+/*
  * bm25_gettuple: ordering scan for ORDER BY (ftsdoc <=> ftsquery) LIMIT k.
  * On the first call it computes the block-max WAND top-k (visibility-filtered)
  * into scan state, then returns tuples one per call in ascending distance
@@ -1546,9 +1822,23 @@ bm25_gettuple(IndexScanDesc scan, ScanDirection dir)
 		if (so->plainpos >= so->nplain)
 			return false;
 		scan->xs_heaptid = so->plainTids[so->plainpos++];
-		scan->xs_recheck = so->plainRecheck;
+		scan->xs_recheck = so->plainRecheck || so->keysRecheck;
 		bm25_set_itup(scan, so);
 		return true;
+	}
+
+	if (!so->orderInit && (so->orderNull || so->orderQuery != NULL))
+	{
+		/* 1.12.1: the WHERE set, ordered by the ORDER BY query (or unordered
+		 * with NULL distances); exhaustive, see bm25_rescan */
+		pgstat_count_index_scan(scan->indexRelation);
+		so->nordered = bm25_order_split(scan->indexRelation, so->query,
+										so->orderNull ? NULL : so->orderQuery,
+										&so->ordered);
+		so->curk = so->nordered;
+		so->maxhits = (double) so->nordered;
+		so->ordpos = 0;
+		so->orderInit = true;
 	}
 
 	if (!so->orderInit)
@@ -1628,7 +1918,7 @@ bm25_gettuple(IndexScanDesc scan, ScanDirection dir)
 		return false;
 
 	scan->xs_heaptid = so->ordered[so->ordpos].tid;
-	scan->xs_recheck = false;	/* score computed exactly from the index */
+	scan->xs_recheck = so->keysRecheck;	/* score is exact; quals per bm25_rescan */
 	bm25_set_itup(scan, so);
 	if (scan->numberOfOrderBys > 0)
 	{
@@ -1636,7 +1926,7 @@ bm25_gettuple(IndexScanDesc scan, ScanDirection dir)
 		Oid			typ = FLOAT8OID;
 
 		dist.value = so->ordered[so->ordpos].score;
-		dist.isnull = false;
+		dist.isnull = so->orderNull;
 		index_store_float8_orderby_distances(scan, &typ, &dist, false);
 		/* the planner may have replaced the target-list copy of this same
 		 * <=> expression with fts_current_distance(); see pg_fts_customscan.c */
@@ -2079,6 +2369,47 @@ typedef enum
  * function).  Behaviour is unchanged: the three branches -- fuzzy/regex
  * candidates, positional phrase, general boolean -- are exactly as they were.
  */
+/*
+ * Does every document matching `q` contain at least one fuzzy/regex operand's
+ * term?  (Then the union of those operands' candidates covers the matches.)
+ * A leaf is "covered" if it is fuzzy/regex; AND/PHRASE is covered if either
+ * side is; OR only if both are; anything under NOT is not.
+ */
+static bool
+fuzzy_funnel_ok(FtsQuery q)
+{
+	bool	   *st;
+	int			top = 0;
+	uint32		i;
+	bool		ok;
+
+	if (q->nitems == 0)
+		return false;
+	st = (bool *) palloc(q->nitems * sizeof(bool));
+	for (i = 0; i < q->nitems; i++)
+	{
+		const FtsQueryItem *it = &q->items[i];
+
+		if (it->type == FTS_QI_VAL)
+			st[top++] = (it->flags & (FTS_QF_FUZZY | FTS_QF_REGEX)) != 0;
+		else if (it->op == FTS_OP_NOT)
+		{
+			if (top >= 1)
+				st[top - 1] = false;
+		}
+		else if (top >= 2)
+		{
+			bool		b = st[--top];
+			bool		a = st[--top];
+
+			st[top++] = (it->op == FTS_OP_OR) ? (a && b) : (a || b);
+		}
+	}
+	ok = (top == 1) && st[0];
+	pfree(st);
+	return ok;
+}
+
 static BM25SegStatus
 bm25_collect_segment(Relation index, BM25SegMeta *sg, uint32 s, BM25CollectCtx *ctx)
 {
@@ -2093,11 +2424,25 @@ bm25_collect_segment(Relation index, BM25SegMeta *sg, uint32 s, BM25CollectCtx *
 		TidSet		cands;
 		bool		any_trgm = false;
 		bool		exact = (query->nitems == 1);
+		bool		funnel_ok = !ctx->has_not && fuzzy_funnel_ok(query);
 		uint32		qi;
 
 		cands.tids = NULL;
 		cands.n = 0;
-		for (qi = 0; qi < query->nitems; qi++)
+		/*
+		 * The candidates below are the documents matching ANY fuzzy/regex term.
+		 * That is a superset of the query's matches only when every match must
+		 * contain one of those terms.  Two shapes break it, and returned too few
+		 * rows through the index in every release until 1.12.1 (found while
+		 * fixing GitHub #8):
+		 *  - a NOT: `alpha & !bravo~1` matches documents WITHOUT the term;
+		 *  - a plain term the query could match on alone: `delta | bravo~1`
+		 *    lost every `delta`-only document.
+		 * So the funnel is used only when the query has no NOT and every
+		 * disjunct contains a fuzzy/regex term (fuzzy_funnel_ok); otherwise
+		 * take the universe fallback below, which the recheck narrows.
+		 */
+		for (qi = 0; qi < query->nitems && funnel_ok; qi++)
 		{
 			FtsQueryItem *it = &query->items[qi];
 			TidSet		ts;
@@ -2134,7 +2479,7 @@ bm25_collect_segment(Relation index, BM25SegMeta *sg, uint32 s, BM25CollectCtx *
 				break;
 			}
 		}
-		if (any_trgm)
+		if (any_trgm && funnel_ok)
 		{
 			if (!exact)
 				ctx->need_recheck = true;
@@ -2567,7 +2912,7 @@ bm25_getbitmap(IndexScanDesc scan, TIDBitmap *tbm)
 	pgstat_count_index_scan(scan->indexRelation);
 	bm25_collect_matches(scan->indexRelation, so->query, &matches, &recheck);
 	if (matches.n > 0)
-		tbm_add_tuples(tbm, matches.tids, matches.n, recheck);
+		tbm_add_tuples(tbm, matches.tids, matches.n, recheck || so->keysRecheck);
 	return matches.n;
 }
 

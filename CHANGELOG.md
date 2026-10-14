@@ -2,6 +2,62 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.12.1 - 2026-10-14
+
+Index scans returned wrong rows for four query shapes, and a NULL query argument could
+crash the backend.  All were present in every release.  Reported in GitHub #8, #9 and
+#10 by jimdawdy-hub (with reproductions, against 1.8.3); the NOT/fuzzy cases beyond #8
+and the NULL ORDER BY crash were found while fixing them.  **No on-disk format change**;
+**no REINDEX**; no new SQL objects (`pg_fts--1.12.0--1.12.1.sql` is a no-op).
+
+### Fixed (wrong results)
+
+- **NOT over a phrase or NEAR under-counted through the index** (GitHub #8).  The boolean
+  evaluator reads a phrase as the AND of its words, a superset of its matches that the
+  heap recheck narrows.  Under a NOT that superset becomes a subset of the true answer,
+  and a recheck only removes rows, so the missing rows were lost:
+  `alpha & !"bravo cherry"` returned 0 of 1 matching rows, through the bitmap scan, the
+  plain index scan and `fts_count`, on `positions = off` and `on`.  The evaluator now
+  tracks whether each intermediate set is a superset or a subset of its truth and widens
+  a subset to the universe (narrowed by the recheck), so the result is always a superset.
+  `!!"phrase"` stays as tight as the phrase.
+- **Fuzzy and regex terms under a NOT, or ORed with a plain term, under-counted** (found
+  with #8).  The trigram/Levenshtein funnel collects documents that contain a fuzzy/regex
+  term, which covers the matches only if every match must contain one: `alpha & !bravo~1`
+  returned nothing and `delta | bravo~1` lost every `delta`-only document.  The funnel is
+  now used only when that holds; otherwise the scan takes the existing full-segment
+  fallback, which the recheck narrows.
+- **A second `@@@` condition on the same index was never applied** (GitHub #10).  The
+  scan evaluated the first key only and reported no recheck.  It now asks the executor to
+  recheck whenever there is more than one key, so every condition applies.
+- **`WHERE d @@@ q1 ORDER BY d <=> q2` filtered by `q2` instead of `q1`** (GitHub #9).  The
+  ordering scan replaced the WHERE query with the ORDER BY query.  It now returns exactly
+  the rows that pass WHERE, ordered by `q2`'s BM25 score with the index's own statistics,
+  so the order and distances equal what an equal WHERE/ORDER BY scan reports.  This form
+  is evaluated exhaustively over the WHERE matches; the usual form, where both queries
+  are the same, is unchanged.
+- In 1.12.0's 28-shape x 4-path test matrix, 52 of 112 index results were wrong; with the
+  fix, 0.
+
+### Fixed (crash)
+
+- **A NULL ORDER BY argument crashed the backend**, e.g. a prepared
+  `ORDER BY d <=> $1` executed with `$1 = NULL`.  A NULL `WHERE` argument in a generic
+  plan was also dereferenced.  A NULL WHERE key now matches nothing (as GiST does), and a
+  NULL ORDER BY returns the WHERE rows with NULL distances.
+
+### Tests
+
+- `scan_keys` regression test: 28 boolean/phrase/NEAR/fuzzy/regex/prefix shapes over 64
+  documents covering every combination, each through the bitmap and the plain index scan
+  on `positions = off` and `on`, must equal a sequential scan; #9 and #10 as reported;
+  the split ORDER BY in BM25 order over two segments with deletes; NULL WHERE and ORDER BY
+  arguments in generic plans.  It fails on 1.12.0 (52 wrong) and on each of the five
+  fixes reverted alone.
+- `pg_fts.sql`'s count-pushdown block expected 50 rows for
+  `d @@@ 'term1' AND d @@@ 'body'`; a sequential scan returns 0 (the documents hold the
+  stemmed `bodi`), so the expected value was the #10 bug and is now 0.
+
 ## 1.12.0 - 2026-10-09
 
 Ranked queries find a term's dictionary page in memory instead of re-reading the

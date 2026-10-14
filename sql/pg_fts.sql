@@ -1,4 +1,4 @@
-CREATE EXTENSION pg_fts VERSION '1.12.0';
+CREATE EXTENSION pg_fts VERSION '1.12.1';
 
 -- ftsdoc: analysis, output shows terms with term frequencies
 SELECT to_ftsdoc('The quick brown fox, the QUICK fox!');
@@ -2896,7 +2896,9 @@ CREATE INDEX psh_txt ON psh (txt);   -- a NON-fts index on the same rel
 SET enable_seqscan = off;
 -- @@@ with a NON-constant RHS (a subquery-derived value) -> RHS not a plan Const
 SELECT count(*) FROM psh WHERE d @@@ (SELECT 'term1'::ftsquery);
--- two @@@ quals -> more than one qual, no single-@@@ pushdown
+-- two @@@ quals -> more than one qual, no single-@@@ pushdown.  0 is right: the
+-- documents hold the stemmed 'bodi', and a sequential scan returns 0 too.  Until
+-- 1.12.1 the index applied only the first qual and returned 50 (GitHub #10).
 SELECT count(*) FROM psh WHERE d @@@ 'term1'::ftsquery AND d @@@ 'body'::ftsquery;
 -- @@@ on a rel where the matched column also has a non-fts index (index-list walk)
 SELECT count(*) FROM psh WHERE d @@@ 'term1'::ftsquery;
