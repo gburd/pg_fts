@@ -112,6 +112,29 @@ SELECT count(*) AS shapes, count(*) FILTER (WHERE want <> '-') AS nonempty,
 FROM skzt;
 RESET enable_seqscan; RESET enable_indexscan;
 
+-- candidate tightness (1.13.0): `alpha & !"bravo cherry"` is a superset of
+-- alpha & !("bravo" & "cherry") and a subset of alpha, so the index hands the
+-- heap at most the alpha rows.  Until 1.13.0 the under-approximating
+-- !"bravo cherry" widened `alpha & ...` at the root, i.e. to every row of the
+-- segment (correct after the recheck, but 9.4 s -> 0.14 s on 2M rows).  On a
+-- positions = off index the recheck removes rows, so its count measures the
+-- candidates: the alpha rows that are not matches, not the whole table.
+CREATE FUNCTION sk_removed(qry text) RETURNS bigint LANGUAGE plpgsql AS $$
+DECLARE p json;
+BEGIN
+  UPDATE pg_index SET indisvalid = false WHERE indexrelid = 'sk_pos'::regclass;
+  SET LOCAL enable_seqscan = off; SET LOCAL enable_indexscan = off;
+  EXECUTE format('EXPLAIN (ANALYZE, FORMAT JSON, COSTS OFF, TIMING OFF, SUMMARY OFF) '
+                 'SELECT id FROM sk WHERE d @@@ %L::ftsquery', qry) INTO p;
+  UPDATE pg_index SET indisvalid = true WHERE indexrelid = 'sk_pos'::regclass;
+  RETURN coalesce((p->0->'Plan'->>'Rows Removed by Index Recheck')::bigint, 0);
+END $$;
+SELECT q, (SELECT count(*) FROM sk WHERE d @@@ 'alpha'::ftsquery) AS alpha_rows,
+       sk_removed(q) AS removed, sk_removed(q) <= (SELECT count(*) FROM sk WHERE d @@@ 'alpha'::ftsquery) AS bounded_by_alpha
+FROM (VALUES ('alpha & !"bravo cherry"'), ('alpha & !NEAR(bravo cherry, 1)'),
+             ('alpha & !(delta | "bravo cherry")')) v(q);
+DROP FUNCTION sk_removed(text);
+
 -- #9 and #10 (the reporter's table), plain index scans
 CREATE TABLE sk9 (id int, d ftsdoc);
 INSERT INTO sk9 VALUES (1, to_ftsdoc('simple', 'apple cherry')), (2, to_ftsdoc('simple', 'apple')),

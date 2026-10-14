@@ -43,7 +43,11 @@ END $$;
 -- comparing empty against empty (rule 9: non-zero hits)
 SELECT qs, k, pg_same(qs, k) AS lazy_vs_collect
 FROM (VALUES ('"w1 w2"'), ('"w2 w1"'), ('"w3 w3"'), ('"w0 w5 w2"'), ('"w1 w2 w3 w4"'),
-             ('NEAR(w1 w6, 3)'), ('"w7 w0"')) qq(qs),
+             ('NEAR(w1 w6, 3)'), ('"w7 w0"'),
+             -- 1.13.0: quoted phrases are exact <-> steps; exact gaps, a mixed
+             -- exact/within chain and a nested (not left-deep) exact chain
+             ('w1 <2> w3'), ('w1 <0> w1'), ('"w1 w2" <2> w4'), ('w1 <-> (w2 <-> w3)'),
+             ('NEAR(w1 w2, 2) <-> w3')) qq(qs),
      (VALUES (1), (10), (100), (5000)) ks(k)
 ORDER BY qs, k;
 

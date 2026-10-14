@@ -999,21 +999,70 @@ eval_widen(EvalVal *v)
 	}
 }
 
-/* Direction of a monotone combination (AND/OR) of two entries. */
+/*
+ * Direction of a monotone combination (AND/OR) of two entries.  `odd`: the
+ * node sits under an odd number of NOTs.
+ *
+ * Under an even number a subset can only end up widened (at the root, or
+ * after flipping twice), and widening it HERE is the tightest place: by
+ * monotonicity `w5 & U` is a subset of anything a later widening yields.
+ * Until 1.13.0 a subset beside an exact operand stayed a subset and was
+ * widened at the root, so `w5 & !"hot dog"` evaluated as the whole segment
+ * (2M candidates for the span matcher; 2.2 s instead of 0.1 s).  Under an odd
+ * number it is kept: the NOT above flips it into a tight superset
+ * (`!(a & !"b c")`).
+ */
 static int8
-eval_combine(EvalVal *a, EvalVal *b)
+eval_combine(EvalVal *a, EvalVal *b, bool odd)
 {
-	if (a->approx < 0 && b->approx > 0)
+	if (!odd)
+	{
+		eval_widen(a);			/* no-op unless a subset */
+		eval_widen(b);
+	}
+	else if (a->approx < 0 && b->approx > 0)
 		eval_widen(a);			/* mixed directions: keep the result a superset */
 	else if (b->approx < 0 && a->approx > 0)
 		eval_widen(b);
 	return (a->approx > 0 || b->approx > 0) ? +1 : (a->approx < 0 || b->approx < 0) ? -1 : 0;
 }
 
+/* Per item: is it under an odd number of NOTs?  (Walk the RPN from its root,
+ * each operator handing its parity down to its operands.) */
+static bool *
+eval_not_parity(FtsQuery q)
+{
+	bool	   *odd = palloc(q->nitems * sizeof(bool));
+	bool	   *work = palloc(q->nitems * sizeof(bool));
+	int			depth = 0;
+	uint32		i;
+
+	work[depth++] = false;
+	for (i = q->nitems; i-- > 0;)
+	{
+		FtsQueryItem *it = &q->items[i];
+		bool		p = (depth > 0) ? work[--depth] : false;
+
+		odd[i] = p;
+		if (it->type == FTS_QI_VAL)
+			continue;
+		if (it->op == FTS_OP_NOT)
+			work[depth++] = !p;
+		else if (depth + 2 <= (int) q->nitems)
+		{
+			work[depth++] = p;
+			work[depth++] = p;
+		}
+	}
+	pfree(work);
+	return odd;
+}
+
 static TidSet
 bm25_eval_query(Relation index, const BM25SegMeta *seg, FtsQuery q)
 {
 	EvalVal    *stack;
+	bool	   *odd;
 	int			top = 0;
 	uint32		i;
 	TidSet		result;
@@ -1026,6 +1075,7 @@ bm25_eval_query(Relation index, const BM25SegMeta *seg, FtsQuery q)
 	}
 
 	stack = palloc(q->nitems * sizeof(EvalVal));
+	odd = eval_not_parity(q);
 
 	for (i = 0; i < q->nitems; i++)
 	{
@@ -1074,7 +1124,7 @@ bm25_eval_query(Relation index, const BM25SegMeta *seg, FtsQuery q)
 			EvalVal		b = stack[--top];
 			EvalVal		a = stack[--top];
 			EvalVal		res;
-			int8		dir = eval_combine(&a, &b);
+			int8		dir = eval_combine(&a, &b, odd[i]);
 
 			if (it->op == FTS_OP_PHRASE || it->op == FTS_OP_WITHIN ||
 				it->op == FTS_OP_EXACT)
@@ -1140,6 +1190,7 @@ bm25_eval_query(Relation index, const BM25SegMeta *seg, FtsQuery q)
 	}
 
 	Assert(top == 1);
+	pfree(odd);
 	eval_widen(&stack[0]);		/* the result must not under-approximate */
 	if (stack[0].negated)
 	{
@@ -4589,6 +4640,7 @@ struct PhraseGate
 	int			npt;			/* phrase terms, in phrase order */
 	int			term[FTS_QUERY_MAX_PHRASE_TERMS];	/* fts_query_terms ordinal of each */
 	uint32		step[FTS_QUERY_MAX_PHRASE_TERMS];	/* distance joining term i to i+1 */
+	bool		exact[FTS_QUERY_MAX_PHRASE_TERMS];	/* step i is an exact <N> gap */
 	uint32	   *acc;			/* scratch, BM25_PHRASE_POSBUF each */
 	uint32	   *tmp;
 	uint32	   *right;
@@ -4683,7 +4735,7 @@ phrase_gate_adjacent(PhraseGate *g, WandCursor **pc)
 			nacc = -1;
 			break;
 		}
-		fts_phrase_step_pos(g->acc, nacc, g->right, nt, g->step[t - 1], false, g->tmp, &nout);
+		fts_phrase_step_pos(g->acc, nacc, g->right, nt, g->step[t - 1], g->exact[t - 1], g->tmp, &nout);
 		memcpy(g->acc, g->tmp, nout * sizeof(uint32));
 		nacc = nout;
 	}
@@ -6282,21 +6334,31 @@ static bool
 bm25_lazy_phrase_ok(Relation index, FtsQuery q, PhraseGate *g)
 {
 	int			itemidx[FTS_QUERY_MAX_PHRASE_TERMS];
-	bool		exact[FTS_QUERY_MAX_PHRASE_TERMS] = {false};
 	int			or_anchor;
 	int			t;
 	uint32		k;
 
 	memset(g, 0, sizeof(*g));
-	/* the gate verifies ordered within-distance steps (PHRASE / NEAR) only:
-	 * exact <N> steps, w/N and OR anchors take the collect path */
+	/*
+	 * The gate chains ordered steps left to right: PHRASE / NEAR (within N) and
+	 * exact <N> (a quoted phrase is <-> since 1.13.0).  w/N (either order) and
+	 * the OR-anchored shape take the collect path.  bm25_phrase_chain's
+	 * all-exact branch builds a nested chain whose step order is not the
+	 * left-to-right one, so a mixed or nested exact shape is refused here too.
+	 */
 	for (k = 0; k < q->nitems; k++)
-		if (q->items[k].type == FTS_QI_OPR && q->items[k].op != FTS_OP_PHRASE)
+		if (q->items[k].type == FTS_QI_OPR && q->items[k].op != FTS_OP_PHRASE &&
+			q->items[k].op != FTS_OP_EXACT)
 			return false;
 	if (!bm25_index_wants_positions(index) ||
-		!bm25_phrase_chain(q, itemidx, g->step, exact, &g->npt, &or_anchor) ||
+		!bm25_phrase_chain(q, itemidx, g->step, g->exact, &g->npt, &or_anchor) ||
 		or_anchor >= 0)
 		return false;
+	/* left-deep only: item order v0 v1 OP v2 OP ... (what a quoted phrase and
+	 * a PHRASE chain emit), so step t joins term t to term t+1 */
+	for (t = 0; t < g->npt; t++)
+		if (itemidx[t] != (t == 0 ? 0 : 2 * t - 1))
+			return false;
 	for (t = 0; t < g->npt; t++)
 	{
 		int			vi = 0;

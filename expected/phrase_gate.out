@@ -41,40 +41,64 @@ END $$;
 -- comparing empty against empty (rule 9: non-zero hits)
 SELECT qs, k, pg_same(qs, k) AS lazy_vs_collect
 FROM (VALUES ('"w1 w2"'), ('"w2 w1"'), ('"w3 w3"'), ('"w0 w5 w2"'), ('"w1 w2 w3 w4"'),
-             ('NEAR(w1 w6, 3)'), ('"w7 w0"')) qq(qs),
+             ('NEAR(w1 w6, 3)'), ('"w7 w0"'),
+             -- 1.13.0: quoted phrases are exact <-> steps; exact gaps, a mixed
+             -- exact/within chain and a nested (not left-deep) exact chain
+             ('w1 <2> w3'), ('w1 <0> w1'), ('"w1 w2" <2> w4'), ('w1 <-> (w2 <-> w3)'),
+             ('NEAR(w1 w2, 2) <-> w3')) qq(qs),
      (VALUES (1), (10), (100), (5000)) ks(k)
 ORDER BY qs, k;
-       qs       |  k   | lazy_vs_collect 
-----------------+------+-----------------
- "w0 w5 w2"     |    1 | ok 1
- "w0 w5 w2"     |   10 | ok 10
- "w0 w5 w2"     |  100 | ok 100
- "w0 w5 w2"     | 5000 | ok 199
- "w1 w2 w3 w4"  |    1 | ok 1
- "w1 w2 w3 w4"  |   10 | ok 10
- "w1 w2 w3 w4"  |  100 | ok 100
- "w1 w2 w3 w4"  | 5000 | ok 307
- "w1 w2"        |    1 | ok 1
- "w1 w2"        |   10 | ok 10
- "w1 w2"        |  100 | ok 100
- "w1 w2"        | 5000 | ok 840
- "w2 w1"        |    1 | ok 1
- "w2 w1"        |   10 | ok 10
- "w2 w1"        |  100 | ok 100
- "w2 w1"        | 5000 | ok 339
- "w3 w3"        |    1 | ok 1
- "w3 w3"        |   10 | ok 10
- "w3 w3"        |  100 | ok 100
- "w3 w3"        | 5000 | ok 406
- "w7 w0"        |    1 | ok 1
- "w7 w0"        |   10 | ok 10
- "w7 w0"        |  100 | ok 100
- "w7 w0"        | 5000 | ok 303
- NEAR(w1 w6, 3) |    1 | ok 1
- NEAR(w1 w6, 3) |   10 | ok 10
- NEAR(w1 w6, 3) |  100 | ok 100
- NEAR(w1 w6, 3) | 5000 | ok 275
-(28 rows)
+          qs           |  k   | lazy_vs_collect 
+-----------------------+------+-----------------
+ "w0 w5 w2"            |    1 | ok 1
+ "w0 w5 w2"            |   10 | ok 10
+ "w0 w5 w2"            |  100 | ok 100
+ "w0 w5 w2"            | 5000 | ok 199
+ "w1 w2 w3 w4"         |    1 | ok 1
+ "w1 w2 w3 w4"         |   10 | ok 10
+ "w1 w2 w3 w4"         |  100 | ok 100
+ "w1 w2 w3 w4"         | 5000 | ok 307
+ "w1 w2"               |    1 | ok 1
+ "w1 w2"               |   10 | ok 10
+ "w1 w2"               |  100 | ok 100
+ "w1 w2"               | 5000 | ok 840
+ "w1 w2" <2> w4        |    1 | ok 1
+ "w1 w2" <2> w4        |   10 | ok 10
+ "w1 w2" <2> w4        |  100 | ok 100
+ "w1 w2" <2> w4        | 5000 | ok 307
+ "w2 w1"               |    1 | ok 1
+ "w2 w1"               |   10 | ok 10
+ "w2 w1"               |  100 | ok 100
+ "w2 w1"               | 5000 | ok 339
+ "w3 w3"               |    1 | ok 1
+ "w3 w3"               |   10 | ok 10
+ "w3 w3"               |  100 | ok 100
+ "w3 w3"               | 5000 | ok 406
+ "w7 w0"               |    1 | ok 1
+ "w7 w0"               |   10 | ok 10
+ "w7 w0"               |  100 | ok 100
+ "w7 w0"               | 5000 | ok 303
+ NEAR(w1 w2, 2) <-> w3 |    1 | ok 1
+ NEAR(w1 w2, 2) <-> w3 |   10 | ok 10
+ NEAR(w1 w2, 2) <-> w3 |  100 | ok 100
+ NEAR(w1 w2, 2) <-> w3 | 5000 | ok 307
+ NEAR(w1 w6, 3)        |    1 | ok 1
+ NEAR(w1 w6, 3)        |   10 | ok 10
+ NEAR(w1 w6, 3)        |  100 | ok 100
+ NEAR(w1 w6, 3)        | 5000 | ok 275
+ w1 <-> (w2 <-> w3)    |    1 | ok 1
+ w1 <-> (w2 <-> w3)    |   10 | ok 10
+ w1 <-> (w2 <-> w3)    |  100 | ok 100
+ w1 <-> (w2 <-> w3)    | 5000 | ok 307
+ w1 <0> w1             |    1 | ok 1
+ w1 <0> w1             |   10 | ok 10
+ w1 <0> w1             |  100 | ok 100
+ w1 <0> w1             | 5000 | ok 2041
+ w1 <2> w3             |    1 | ok 1
+ w1 <2> w3             |   10 | ok 10
+ w1 <2> w3             |  100 | ok 100
+ w1 <2> w3             | 5000 | ok 1023
+(48 rows)
 
 -- the phrase set the gate admits must equal @@@ exactly (an unbounded ranked
 -- scan returns every match)
