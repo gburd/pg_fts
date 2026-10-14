@@ -602,6 +602,22 @@ that its one behaviour change made necessary. No on-disk format change on either
   re-resolved, and the tombstone blob is stamped `BM25_TRGM_DATA` (1<<5) by the shared blob
   writer -- `BM25_LIVEDOCS` (1<<6) is a dead define nothing writes.
 
+### Performance
+
+- **`a & !b` no longer decodes every posting list in the segment.** Whenever a query
+  contained NOT, the evaluator behind bitmap scans and counts first built each segment's
+  "universe" -- every TID in the segment, found by decoding every posting list. It needs
+  that set only when the query's final result is negated (`!a`, `!a & !b`, `a | !b`):
+  negation is tracked with De Morgan, so `a & !b` is a plain set difference and paid for a
+  full-segment decode it never used. The universe is now built per segment only for a
+  negated final result. Answers are unchanged.
+
+### Tests
+
+- A regression block compares ten NOT shapes through the index (bitmap scan and
+  `fts_count`) with the heap matcher, across two segments with tombstones plus the
+  pending list.
+
 ## 1.8.3 - 2026-09-18
 
 **Correctness release: two deadlocks that shipped in every prior version, found while
