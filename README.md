@@ -444,10 +444,11 @@ Query execution
     / pg_repack.  It is interruptible: pg_cancel_backend and statement_timeout
     stop it promptly, and a cancelled (or out-of-disk) run leaves the index
     valid and correct, just not fully compacted.
-  * Ranked (<=>/fts_search) results include pending documents and modifier
-    matches through an exact heap fallback. Plain merged queries keep WAND.
-    Ranking still scores literal query terms: expansion-only matches can score
-    zero. Equal scores use TID order, keeping pagination stable.
+  * Ranked (<=>/fts_search) results include pending (unflushed) documents,
+    scored exactly as they will be after the next flush, and the documents a
+    prefix/fuzzy/regex term matches only through an expansion (an exact heap
+    fallback; ranking still scores literal query terms, so such a match can
+    score zero).  Equal scores use TID order, keeping pagination stable.
 
 Vendored dependencies
 ---------------------

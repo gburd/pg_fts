@@ -1034,9 +1034,11 @@ SELECT * FROM messages
    </listitem>
    <listitem>
     <para>
-     Pending documents and modifier queries use an exact heap ranking fallback.
-     Plain merged queries retain WAND. Ranking uses literal query-term BM25
-     scores, so expansion-only matches can score zero. Equal scores are ordered
+     Ranked results include documents still in the pending write buffer,
+     scored exactly as they will be after the next flush.  A prefix, fuzzy or
+     regex query is ranked through an exact heap fallback, so documents that
+     match only an expansion are returned too; ranking uses literal query-term
+     BM25 scores, so such a match can score zero. Equal scores are ordered
      by tuple identifier to keep pagination stable.  When the
      <literal>WHERE</literal> query differs from the <literal>ORDER BY</literal>
      query, the rows satisfying every <literal>WHERE</literal> key are ranked by

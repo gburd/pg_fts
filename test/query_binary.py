@@ -81,6 +81,11 @@ invalid = [
     ("regex_distance", [val(4, 1)]),
     ("not_distance", [val(), operator(1, 1)]),
     ("operator_stack", [operator(6, 1)]),
+    # one operand for a binary AND: accepted before 1.13.0, and matching it
+    # underflowed the evaluator's stack (backend crash / invalid pfree)
+    ("and_one_operand", [val(), operator(2)]),
+    ("or_no_operand", [operator(3)]),
+    ("two_roots", [val(), val(term="beta")]),
 ]
 for name, op, distance, flags in [
     ("operator_flags", 6, 1, 1), ("and_distance", 2, 2, 0),

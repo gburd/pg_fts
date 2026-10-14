@@ -37,7 +37,7 @@ the squashed install script `pg_fts--0.3.2.sql`. All
 | Unique / multicolumn / ordered-btree / clusterable | No | `amcanunique=false` `:3320`, `amcanmulticol=false` `:3321`, `amcanorder=false` `:3312`, `amclusterable=false` `:3326` |
 | NULL / optional-key indexing | No | `amsearchnulls=false` `:3324`, `amoptionalkey=false` `:3322` (a NULL ftsdoc is not indexed: `bm25_insert` returns early on `isnull[0]` `pg_fts_am.c:2649`) |
 | Predicate locks (SSI) | No | `ampredlocks=false` `pg_fts_am.c:3327` |
-| Ranked scan over unflushed pending docs | Yes | Exact heap fallback includes pending docs; merged plain queries retain WAND. |
+| Ranked scan over unflushed pending docs | Yes (1.13.0) | Pending matches are scored exactly and merged into the segment WAND top-k; df counts them, so a ranked scan scores as it will after a flush (`sql/pending_rank.sql`). |
 | Faceting / aggregation Custom Scan pushdown | No | none in tree; only `fts_count` count-pushdown exists |
 | Impact-ordered postings | No | postings are docid-ordered (block-max WAND); listed as future work, README lines 62-64 |
 | Storage AIO / read_stream prefetch | No (build heap scan gets core AIO free) | 0 `read_stream`/`StartReadBuffers` sites; `nextblk` pointer-chains defeat prefetch; see Q6 |
@@ -139,7 +139,8 @@ online index REPACK beyond VACUUM+`fts_merge()` and REINDEX**.
 - No faceting / aggregation Custom Scan pushdown (only count-pushdown exists).
 - No impact-ordered postings — docid-ordered only (README 62-64).
 - Configured analysis inherits the 16,383-position cap; long-document proximity
-  can miss matches beyond it. Modifier/pending ranking uses the heap fallback.
+  can miss matches beyond it. Modifier (prefix/fuzzy/regex) ranking uses the
+  heap fallback.
 
 Versus Elasticsearch/Tantivy this is a single-node, single-threaded-per-query
 engine with no distributed aggregation; versus tsvector/GIN it adds real BM25

@@ -86,6 +86,32 @@ SELECT t.q, t.want, skl_ids(t.q) AS bitmap,
 FROM sklt t ORDER BY 1;
 RESET enable_seqscan; RESET enable_indexscan;
 
+-- fuzzy over non-ASCII terms counts CHARACTER edits (1.13.0, from PR #12):
+-- the automaton and the trigram/length filters counted bytes, so the index
+-- missed matches a sequential scan finds (cafe~1 vs 'caf\u00e9', naive~1,
+-- resume~2, nihongo~1), on the bitmap scan and fts_count alike
+CREATE TABLE skz (id int, d ftsdoc);
+INSERT INTO skz VALUES (1, to_ftsdoc('simple', E'caf\u00e9')), (2, to_ftsdoc('simple', 'cafe')),
+  (3, to_ftsdoc('simple', E'na\u00efve')), (4, to_ftsdoc('simple', E'stra\u00dfe')),
+  (5, to_ftsdoc('simple', E'\u65e5\u672c\u8a9e')), (6, to_ftsdoc('simple', E'r\u00e9sum\u00e9')),
+  (7, to_ftsdoc('simple', 'abcdefghij'));
+INSERT INTO skz SELECT 100 + g, to_ftsdoc('simple', 'filler' || g) FROM generate_series(1, 50) g;
+CREATE INDEX skz_fts ON skz USING fts (d);
+CREATE TABLE skzq (q text);
+INSERT INTO skzq VALUES ('cafe~1'), (E'caf\u00e9~1'), ('naive~1'), ('strasse~2'),
+  (E'\u65e5\u672c\u4eba~1'), ('resume~2'), ('abcdefghix~1'), ('"cafe~1"'), ('cafe~1 | zzz');
+CREATE FUNCTION skz_ids(q text) RETURNS text LANGUAGE sql AS $$
+  SELECT coalesce(string_agg(id::text, ',' ORDER BY id), '-') FROM skz WHERE d @@@ q::ftsquery $$;
+SET enable_indexscan = off; SET enable_bitmapscan = off;
+CREATE TEMP TABLE skzt AS SELECT q, skz_ids(q) AS want FROM skzq;
+RESET enable_indexscan; RESET enable_bitmapscan; SET enable_seqscan = off; SET enable_indexscan = off;
+SELECT count(*) AS shapes, count(*) FILTER (WHERE want <> '-') AS nonempty,
+       count(*) FILTER (WHERE skz_ids(q) <> want) AS bitmap_wrong,
+       count(*) FILTER (WHERE fts_count('skz_fts', q::ftsquery)
+                              <> cardinality(string_to_array(nullif(want, '-'), ','))) AS count_wrong
+FROM skzt;
+RESET enable_seqscan; RESET enable_indexscan;
+
 -- #9 and #10 (the reporter's table), plain index scans
 CREATE TABLE sk9 (id int, d ftsdoc);
 INSERT INTO sk9 VALUES (1, to_ftsdoc('simple', 'apple cherry')), (2, to_ftsdoc('simple', 'apple')),
@@ -144,5 +170,7 @@ EXECUTE sko3(NULL);
 SELECT 'alive' AS server;
 
 RESET ALL;
-DROP TABLE sk, skq, skr, sk9, skl, sklq;
+DROP TABLE sk, skq, skr, sk9, skl, sklq, skz, skzq;
 DROP FUNCTION sk_ids(text);
+DROP FUNCTION skl_ids(text);
+DROP FUNCTION skz_ids(text);
