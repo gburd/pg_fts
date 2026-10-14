@@ -2996,6 +2996,9 @@ bm25_collect_pending_ex(Relation index, const BM25MetaPageData *meta,
 						FtsQuery query, TidSet *out, PendingRank *pr)
 {
 	BlockNumber blk = meta->pendinghead;
+	ItemPointerData *acc = NULL;	/* matches, in list order */
+	int			nacc = 0,
+				capacc = 0;
 
 	while (blk != InvalidBlockNumber)
 	{
@@ -3061,11 +3064,17 @@ bm25_collect_pending_ex(Relation index, const BM25MetaPageData *meta,
 			}
 			else if (fts_doc_matches(pdoc, query))
 			{
-				TidSet		one;
-
-				one.tids = &pi->tid;
-				one.n = 1;
-				*out = tidset_or(*out, one);	/* exact per-doc match */
+				/*
+				 * Append; sorted and de-duplicated once after the walk.  Until
+				 * 1.13.0 each match was tidset_or'ed into *out -- a fresh
+				 * allocation and copy of the whole set per match, O(n^2) in
+				 * the pending list: 32k pending matches took 4.5 s and 5 GB in
+				 * one backend, and t/012's readers were OOM-killed once 1.13.0
+				 * made every ranked query read the pending list (every
+				 * release, for bitmap/count scans over a long pending list).
+				 */
+				if (out != NULL)
+					bm25_tidbuf_push(&acc, &nacc, &capacc, pi->tid);
 				if (pr != NULL)
 				{
 					if (pr->nhits >= pr->caphits)
@@ -3084,6 +3093,15 @@ bm25_collect_pending_ex(Relation index, const BM25MetaPageData *meta,
 		}
 		UnlockReleaseBuffer(buffer);
 		blk = next;
+	}
+	if (out != NULL && nacc > 0)
+	{
+		TidSet		got;
+
+		got.tids = acc;
+		got.n = nacc;
+		tidset_sort_uniq(&got);
+		*out = (out->n > 0) ? tidset_or(*out, got) : got;
 	}
 }
 
@@ -6306,7 +6324,6 @@ bm25_topk_add_pending(Relation index, FtsQuery q, const BM25MetaPageData *meta,
 					  ScoredTid *cand, int ncand, ScoredTid **out)
 {
 	PendingRank pr;
-	TidSet		ignore = {NULL, 0};
 	ScoredTid  *merged;
 	int			n;
 #ifdef USE_ASSERT_CHECKING
@@ -6323,9 +6340,7 @@ bm25_topk_add_pending(Relation index, FtsQuery q, const BM25MetaPageData *meta,
 	for (s = 0; s < meta->nsegments; s++)
 		if (meta->segs[s].doclenstart != InvalidBlockNumber)
 			pr.quantize = true;
-	bm25_collect_pending_ex(index, meta, q, &ignore, &pr);
-	if (ignore.tids)
-		pfree(ignore.tids);
+	bm25_collect_pending_ex(index, meta, q, NULL, &pr);
 	if (pr.nhits == 0)
 	{
 		*out = cand;

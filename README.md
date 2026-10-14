@@ -237,8 +237,8 @@ rechecks, and so does a document whose positions were not stored or are
 oversized (that document alone).
 The configured analyzer inherits PostgreSQL's position cap of 16,383; matches
 beyond it can be lost. The unconfigured `to_ftsdoc(text)` analyzer stores wider
-positions. This inherited limitation needs resolution before a legal-corpus
-cutover; existing document vectors cannot recover spacing already lost on input.
+positions (ROADMAP I9); existing document vectors cannot recover spacing
+already lost on input.
 
 Example
 -------
@@ -486,7 +486,7 @@ Testing
     MVCC/tombstone/oversized-doc correctness edges).
   * sql/legal_proximity.sql -- an independent occurrence-span oracle, including
     nested proximity, exact phrases, expansions, stopwords and query roundtrips.
-  * test/query_binary.py -- 46 valid/malformed binary-query checks; run only in
+  * test/query_binary.py -- 49 valid/malformed binary-query checks; run only in
     a disposable server (`pg_virtualenv python3 test/query_binary.py --local`).
   * specs/bm25_concurrency.spec, specs/bm25_cic.spec -- isolation tests: MVCC
     snapshot stability, pending-list visibility, VACUUM/merge invisibility to

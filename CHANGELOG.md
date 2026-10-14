@@ -2,6 +2,122 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.13.0 - 2026-10-15
+
+Compound proximity search, exact ranked recall, and stricter query input, from GitHub
+PR #12 by Jim Dawdy (jimdawdy-hub), ported onto 1.12.1 commit by commit with
+`Co-authored-by`.  Where the PR and 1.12.1 fixed the same bug differently, 1.12.1's
+code was kept and the PR's tests were run against it (they pass).  Two follow-ups
+found while porting are also here.  **No on-disk format change; no REINDEX**; no new
+SQL objects (`pg_fts--1.12.1--1.13.0.sql` is a no-op).
+
+### Added (query language)
+
+- **Unordered proximity `a w/N b`**: within N token positions, either order.
+  **Ordered `a p/N b`**, the same as `NEAR(a b, N)`.  **Exact gaps** `a <N> b`, `a <-> b`
+  and `a <0> b` (the same position).  Each side can be a term, a phrase, an OR group
+  or another proximity group, nested and chained (left-associative): `(a | b) w/5 c`,
+  `"summary judgment" w/5 negligence`, `(a w/3 b) w/5 c`.  AND or NOT directly inside a
+  proximity group is an error, since they have no span.
+- **Quoted phrases keep the gaps of removed stopwords**:
+  `to_ftsquery('english', '"breach of contract"')` is `'breach' <2> 'contract'`, as
+  PostgreSQL's `phraseto_tsquery` gives.  Until 1.13.0 it was `'breach' <-> 'contract'`,
+  so the phrase never matched its own text.  `tsquery` imports keep exact gaps,
+  prefixes and weights.
+- **Prefix, fuzzy and regex terms inside a phrase** use their real positions.  Before,
+  a prefix inside a phrase only had to be present.  Prefixes accept a weight
+  (`attorn*:A`); fuzzy or regex combined with a weight is an error.
+- An unterminated regex (`/abc`) is now an error; before, it was silently an empty query.
+
+### Fixed (wrong results and a crash; every release)
+
+- **A malformed binary `ftsquery` could crash the backend.**  `ftsquery_recv` did not
+  check that operators have operands: an AND with one operand, accepted through
+  `COPY ... BINARY` or a binary bind parameter, underflowed the matcher's stack
+  (SIGSEGV or "pfree called with invalid pointer").  It now validates every operator's
+  operands, every modifier combination, each weight mask and each distance.
+  `test/query_binary.py` runs 49 cases.
+- **Fuzzy matching counted bytes instead of characters for non-ASCII terms.**
+  `cafe~1` did not match `caf\u00e9`, and `naive~1`, `resume~2` and a 3-character CJK term
+  did not match their accented or CJK neighbours through the index.  A sequential scan
+  did match them.  The index now measures character edit distance
+  (`varstr_levenshtein_less_equal`) for any non-ASCII term, and no longer applies the
+  byte-length and trigram exclusions that were unsound for them.  On 1.12.1, 4 of 9
+  shapes in the new `scan_keys` block were wrong.
+- **Ranked prefix, fuzzy and regex queries returned only a subset** (documented):
+  ranked `/^appl/` returned 0 of 200 matches and `apple* & !pie` 0 of 100.  Such a
+  query is now ranked through an exact heap pass over its matches.  Scores still come
+  from the literal query terms, so a document that matches only through an expansion
+  scores 0.
+- **Ranked scans skipped pending documents** (documented: found by `@@@` and counted,
+  ranked only after the next flush).  They are now ranked, scored exactly as they will
+  be once flushed.  See also Follow-ups below.
+- **A positional query retried after a concurrent merge freed its TID buffer twice**
+  (`bm25_collect_matches`).  The positional half of the 1.11.0 double-free fix was
+  missed.  `test/a1_recycle/double_free.sh MODE=near` crashed the backend 2 of 2 times
+  on 1.12.1 and passes 3 of 3 now.  It needs a merge to land inside the scan window, so
+  it is reachable in production under concurrent `fts_merge`/VACUUM.
+- **Block-max WAND could skip a block that held a top-k document** when one cursor's
+  current block ended before the pivot (`safe_until`).  The last block of a term's
+  posting list could also be bounded by the next term's block header.  No query found
+  a wrong top-k on 1.12.1, whose best-first paths already avoid both cases.  The PR's
+  regression blocks for both pass on 1.12.1 and on this release.
+- **`term:LABEL` under a NOT under-counted through the index**: `apple & !cherry:A`
+  returned one of the two matching rows.  This is a sibling of #8, reported in the PR
+  and still present in 1.12.1.
+
+### Performance
+
+- **Proximity combined with AND or NOT is decided from the stored positions.**  On a
+  `positions = on` index, a phrase, `w/N`, `<N>` or `NEAR` beside an AND or under a NOT
+  is now evaluated by the same span matcher the heap recheck uses, fed from the
+  postings.  Before, every candidate was rechecked against the heap.  Only a document
+  whose positions the index could not store, or that exceeds the matcher's bound, still
+  goes to the recheck, and the bitmap flags only those rows.  The PR's own measurements
+  (its case-law corpus): phrase queries combined with AND/OR x32-x53 faster, exact
+  counts x2-x20.  In this project's local test (200k rows, unqualified):
+  `apple & !"bravo cherry"` rechecked 152,123 rows on 1.12.1 and 0 now.
+- **`a & !b` no longer decodes every posting list in the segment**: the NOT universe is
+  built only for a negated final result.
+
+### Follow-ups found while porting (not in the PR)
+
+- **Pending documents are merged into the WAND top-k instead of forcing a heap pass.**
+  The PR ranked every query, whenever anything was pending, through a heap pass over
+  its whole match set: a common-term top-10 on 200k rows went from 1.2 ms to 155 ms
+  after one INSERT.  Now the segment top-k is kept and the pending matches are scored
+  with the cursors' formula and merged in: 1.5 ms.  These are local single runs, not a
+  benchmark.
+- **Pending documents now count toward each term's df**, as they already counted
+  toward N.  A term held only by pending documents had idf 0; every other idf was off
+  by the pending share.  The new `pending_rank` test checks that the top-30 ids and
+  distances of 7 queries are identical before and after the flush.  It fails on 1.12.1
+  (4 of 7 wrong), without the df change (2 of 7), and without the merge.
+- The lazy phrase gate (1.9.1) takes only PHRASE/NEAR chains.  Exact `<N>`, `w/N` and
+  OR-anchored shapes take the collect path, which verifies them.
+
+### Known issues
+
+- **ROADMAP I9: the configured analyzer loses positions after 16,383.**
+  `to_ftsdoc('simple', ...)` inherits PostgreSQL's position cap, so a phrase that
+  starts past it does not match; the unconfigured `to_ftsdoc(text)` is not affected.
+  Reported in the PR.  This is not a regression.
+
+### Tests
+
+- `legal_proximity` (from the PR): an independent occurrence-span oracle for nested
+  proximity, exact phrases, expansions, stopwords and query round-trips, checked
+  through every scan, count and ranking path.
+- Additions to `pg_fts.sql`, all from the PR:
+  - NOT over phrase, `w/N`, `<->`, `NEAR` and `term:A`, counted six ways;
+  - WHERE that differs from ORDER BY, several WHERE keys and NULL keys;
+  - the four inherited ranked defects;
+  - the `fts_vacuum` convergence check, now run with autovacuum off on its table.
+- `scan_keys` gains `term:LABEL` under NOT and Unicode fuzzy; `pending_rank` is new;
+  `test/query_binary.py` runs in nix and CI; `test/a1_recycle/double_free.sh` gains
+  `MODE=near`.
+- The gate ran on Debian 13 EC2 hosts (x86_64 and aarch64; PG 17.10 and 18.1).
+
 ## 1.12.1 - 2026-10-14
 
 Index scans returned wrong rows for four query shapes, and a NULL query argument could
