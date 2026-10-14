@@ -1759,6 +1759,9 @@ bm25_set_itup(IndexScanDesc scan, BM25ScanOpaque so)
  */
 static uint32 bm25_lookup_df(Relation index, const BM25SegMeta *seg,
 							 const char *term, int termlen);
+static double *bm25_rank_idf(Relation index, const BM25MetaPageData *meta,
+							 const char **terms, const int *lens, int nterms,
+							 double N);
 
 static int
 cmp_scored_dist(const void *a, const void *b)
@@ -1812,16 +1815,7 @@ bm25_order_split(Relation index, FtsQuery where, FtsQuery order, ScoredTid **out
 	if (order != NULL)
 	{
 		nterms = fts_query_terms(order, &terms, &lens);
-		idf = (double *) palloc(Max(nterms, 1) * sizeof(double));	/* alloc-ok: one entry per ORDER BY query term */
-		for (t = 0; t < nterms; t++)
-		{
-			uint64		gdf = 0;
-			uint32		s;
-
-			for (s = 0; s < meta.nsegments; s++)
-				gdf += bm25_lookup_df(index, &meta.segs[s], terms[t], lens[t]);
-			idf[t] = gdf > 0 ? bm25_index_idf(N, (double) gdf) : 0.0;
-		}
+		idf = bm25_rank_idf(index, &meta, terms, lens, nterms, N);
 	}
 
 	res = (ScoredTid *) FTS_ALLOC_MAYBE_HUGE((Size) matches.n * sizeof(ScoredTid));
@@ -2940,9 +2934,66 @@ bm25_collect_segment(Relation index, BM25SegMeta *sg, uint32 s, BM25CollectCtx *
  * Split out of bm25_collect_matches, which had grown to 412 lines with this and
  * the per-segment evaluation inlined.  Behaviour is unchanged.
  */
+/*
+ * Exact BM25 of one pending document for the ranked scan: the index's own
+ * formula (cursor idf, k1 = 1.2, b = 0.75) over the ranked terms, with the
+ * length a v4 sidecar would store when any segment quantizes it, so a pending
+ * document scores what it will score once flushed.
+ */
+typedef struct PendingRank
+{
+	int			nterms;
+	const char **terms;
+	const int  *lens;
+	const double *idf;			/* 0 for a term absent from every segment */
+	double		avgdl;
+	bool		quantize;
+	ScoredTid  *hits;			/* matching pending docs, scored */
+	int			nhits;
+	int			caphits;
+	uint64	   *pdf;			/* count mode: pending docs holding each term */
+} PendingRank;
+
+static double
+pending_rank_score(const PendingRank *pr, FtsDoc doc)
+{
+	const double k1 = 1.2,
+				b = 0.75;
+	double		dl = (double) doc->doclen;
+	double		score = 0.0;
+	int			t;
+
+	if (pr->quantize)
+		dl = (double) fts_byte_to_doclen(fts_doclen_to_byte(doc->doclen));
+	for (t = 0; t < pr->nterms; t++)
+	{
+		FtsTermEntry *e = fts_doc_lookup(doc, pr->terms[t], pr->lens[t]);
+
+		if (e != NULL && pr->idf[t] > 0.0)
+		{
+			double		tf = (double) e->tf;
+
+			score += pr->idf[t] * (k1 + 1.0) * tf /
+				(tf + k1 * (1.0 - b) + k1 * b / pr->avgdl * dl);
+		}
+	}
+	return score;
+}
+
+static void bm25_collect_pending_ex(Relation index, const BM25MetaPageData *meta,
+									FtsQuery query, TidSet *out, PendingRank *pr);
+
 static void
 bm25_collect_pending(Relation index, const BM25MetaPageData *meta,
 					 FtsQuery query, TidSet *out)
+{
+	bm25_collect_pending_ex(index, meta, query, out, NULL);
+}
+
+/* as bm25_collect_pending; with `pr`, also score each match into pr->hits */
+static void
+bm25_collect_pending_ex(Relation index, const BM25MetaPageData *meta,
+						FtsQuery query, TidSet *out, PendingRank *pr)
 {
 	BlockNumber blk = meta->pendinghead;
 
@@ -3000,6 +3051,14 @@ bm25_collect_pending(Relation index, const BM25MetaPageData *meta,
 						 errmsg("pg_fts: skipping malformed pending document in index \"%s\" during scan",
 								RelationGetRelationName(index)),
 						 errhint("REINDEX the index to rebuild it from the heap.")));
+			else if (pr != NULL && pr->pdf != NULL)
+			{
+				int			t;
+
+				for (t = 0; t < pr->nterms; t++)
+					if (fts_doc_lookup(pdoc, pr->terms[t], pr->lens[t]) != NULL)
+						pr->pdf[t]++;
+			}
 			else if (fts_doc_matches(pdoc, query))
 			{
 				TidSet		one;
@@ -3007,12 +3066,72 @@ bm25_collect_pending(Relation index, const BM25MetaPageData *meta,
 				one.tids = &pi->tid;
 				one.n = 1;
 				*out = tidset_or(*out, one);	/* exact per-doc match */
+				if (pr != NULL)
+				{
+					if (pr->nhits >= pr->caphits)
+					{
+						pr->caphits = Max(pr->caphits * 2, 16);
+						pr->hits = pr->hits
+							? repalloc(pr->hits, (Size) pr->caphits * sizeof(ScoredTid))	/* alloc-ok: bounded by the pending list */
+							: palloc((Size) pr->caphits * sizeof(ScoredTid));
+					}
+					pr->hits[pr->nhits].tid = pi->tid;
+					pr->hits[pr->nhits].score = pending_rank_score(pr, pdoc);
+					pr->nhits++;
+				}
 			}
 			ptr += MAXALIGN(sizeof(BM25PendingItem) + pi->doclen);
 		}
 		UnlockReleaseBuffer(buffer);
 		blk = next;
 	}
+}
+
+/*
+ * Pending documents holding each ranked term (NULL if the list is empty).  The
+ * ranked scan adds them to the segments' df (1.13.0): the metapage N already
+ * counts pending documents, so with the segment df alone a term held only by
+ * pending documents had idf 0, and every other idf was off by the pending
+ * share.  With them, a ranked scan scores as it will after the next flush.
+ */
+static uint64 *
+bm25_pending_df(Relation index, const BM25MetaPageData *meta,
+				const char **terms, const int *lens, int nterms)
+{
+	PendingRank pr;
+
+	if (meta->npending == 0 || meta->pendinghead == InvalidBlockNumber)
+		return NULL;
+	memset(&pr, 0, sizeof(pr));
+	pr.nterms = nterms;
+	pr.terms = terms;
+	pr.lens = lens;
+	pr.pdf = (uint64 *) palloc0(Max(nterms, 1) * sizeof(uint64));	/* alloc-ok: nterms = query term count */
+	bm25_collect_pending_ex(index, meta, NULL, NULL, &pr);
+	return pr.pdf;
+}
+
+/* per-term ranking idf: segment df plus pending df (bm25_pending_df) */
+static double *
+bm25_rank_idf(Relation index, const BM25MetaPageData *meta,
+			  const char **terms, const int *lens, int nterms, double N)
+{
+	uint64	   *pdf = bm25_pending_df(index, meta, terms, lens, nterms);
+	double	   *idf = (double *) palloc0(Max(nterms, 1) * sizeof(double));	/* alloc-ok: nterms = query term count */
+	int			t;
+
+	for (t = 0; t < nterms; t++)
+	{
+		uint64		gdf = pdf ? pdf[t] : 0;
+		uint32		s;
+
+		for (s = 0; s < meta->nsegments; s++)
+			gdf += bm25_lookup_df(index, &meta->segs[s], terms[t], lens[t]);
+		idf[t] = gdf > 0 ? bm25_index_idf(N, (double) gdf) : 0.0;
+	}
+	if (pdf)
+		pfree(pdf);
+	return idf;
 }
 
 /*
@@ -6170,6 +6289,72 @@ bm25_lazy_phrase_ok(Relation index, FtsQuery q, PhraseGate *g)
 	return true;
 }
 
+/*
+ * Merge the pending list's matches into a segment top-k (1.13.0).  Pending
+ * documents have no WAND cursors; until 1.13.0 the ranked scan skipped them
+ * (documented), and PR #12 ranked every query with a pending document through
+ * a heap pass over the whole match set (155 ms vs 1.2 ms for a common term on
+ * 200k rows).  The pending list is small and stored verbatim, so score its
+ * matches exactly (pending_rank_score: the cursors' formula and idf) and keep
+ * the best wantk of both lists.  `cand` is sorted best-first (cmp_scored_desc);
+ * `idf` is the cursors' (bm25_rank_idf: pending documents counted in df).
+ */
+static int
+bm25_topk_add_pending(Relation index, FtsQuery q, const BM25MetaPageData *meta,
+					  const char **terms, const int *lens, int nterms,
+					  const double *idf, double avgdl, int wantk,
+					  ScoredTid *cand, int ncand, ScoredTid **out)
+{
+	PendingRank pr;
+	TidSet		ignore = {NULL, 0};
+	ScoredTid  *merged;
+	int			n;
+#ifdef USE_ASSERT_CHECKING
+	int			i;
+#endif
+	uint32		s;
+
+	memset(&pr, 0, sizeof(pr));
+	pr.nterms = nterms;
+	pr.terms = terms;
+	pr.lens = lens;
+	pr.idf = idf;
+	pr.avgdl = avgdl;
+	for (s = 0; s < meta->nsegments; s++)
+		if (meta->segs[s].doclenstart != InvalidBlockNumber)
+			pr.quantize = true;
+	bm25_collect_pending_ex(index, meta, q, &ignore, &pr);
+	if (ignore.tids)
+		pfree(ignore.tids);
+	if (pr.nhits == 0)
+	{
+		*out = cand;
+		return ncand;
+	}
+	merged = (ScoredTid *) palloc((Size) (ncand + pr.nhits) * sizeof(ScoredTid));	/* alloc-ok: wantk + pending matches */
+	if (ncand > 0)
+		memcpy(merged, cand, (Size) ncand * sizeof(ScoredTid));
+	memcpy(merged + ncand, pr.hits, (Size) pr.nhits * sizeof(ScoredTid));
+	n = ncand + pr.nhits;
+	qsort(merged, n, sizeof(ScoredTid), cmp_scored_desc);
+	/* a reused heap slot can be both a tombstoned segment posting and a live
+	 * pending doc; the cursors skip tombstoned postings, so no TID repeats */
+#ifdef USE_ASSERT_CHECKING
+	for (i = 0; i < n; i++)
+	{
+		int			j;
+
+		for (j = i + 1; j < n; j++)
+			Assert(!ItemPointerEquals(&merged[i].tid, &merged[j].tid));
+	}
+#endif
+	if (cand)
+		pfree(cand);
+	pfree(pr.hits);
+	*out = merged;
+	return Min(n, wantk);
+}
+
 static int
 bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 						   uint64 docid_lo, uint64 docid_hi, ScoredTid **out)
@@ -6196,6 +6381,8 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 	BoolGate   *gatep = NULL;
 	PhraseGate	phrase;
 	PhraseGate *pgate = NULL;
+	uint64	   *pdf;			/* pending df per term (NULL: none pending) */
+	double	   *tidf;			/* per-term idf the cursors score with */
 	int			ncand;
 	int			t,
 				nactive = 0;
@@ -6205,7 +6392,7 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 		wantk = 1;
 
 	bm25_read_meta(index, &meta);
-	if (meta.npending > 0 || fts_query_has_modifier(q))
+	if (fts_query_has_modifier(q))
 		return bm25_topk_exact(index, q, &meta, wantk,
 							   docid_lo, docid_hi, out);
 	N = meta.ndocs < 1.0 ? 1.0 : meta.ndocs;
@@ -6297,17 +6484,27 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 		filter.docids = filter_docids;
 		filter.n = matches.n;
 		filterp = &filter;
-		/* empty match set: nothing satisfies @@@, so no candidates */
+		/* empty match set: no segment row satisfies @@@ (pending rows may) */
 		if (matches.n == 0)
 		{
 			if (matches.tids)
 				pfree(matches.tids);
 			*out = NULL;
+			if (meta.npending > 0)
+			{
+				nterms = fts_query_terms(q, &terms, &lens);
+				return bm25_topk_add_pending(index, q, &meta, terms, lens, nterms,
+											 bm25_rank_idf(index, &meta, terms, lens,
+														   nterms, N),
+											 avgdl, wantk, NULL, 0, out);
+			}
 			return 0;
 		}
 	}
 
 	nterms = fts_query_terms(q, &terms, &lens);
+	pdf = bm25_pending_df(index, &meta, terms, lens, nterms);
+	tidf = (double *) palloc0(Max(nterms, 1) * sizeof(double));	/* alloc-ok: nterms = query term count */
 	/* up to one cursor per (term, segment) */
 	cursors = (WandCursor *) palloc(Max(nterms * Max((int) meta.nsegments, 1), 1) *	/* alloc-ok: query terms x <=128 segments */
 									sizeof(WandCursor));
@@ -6340,9 +6537,10 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 								 &df, &max_tf, &firstblk, &firstoff, doclendir))
 				gdf += df;
 		}
-		if (gdf == 0)
+		if (gdf == 0 && (pdf == NULL || pdf[t] == 0))
 			continue;			/* term absent in every segment */
-		idf = bm25_index_idf(N, (double) gdf);
+		idf = bm25_index_idf(N, (double) (gdf + (pdf ? pdf[t] : 0)));
+		tidf[t] = idf;
 
 		/* one cursor per segment that contains the term */
 		for (s = 0; s < meta.nsegments; s++)
@@ -6424,6 +6622,10 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 			{
 				bm25_tombstones_free(&tombs);
 				*out = NULL;
+				if (meta.npending > 0)
+					return bm25_topk_add_pending(index, q, &meta, terms, lens,
+												 nterms, tidf, avgdl, wantk,
+												 NULL, 0, out);
 				return 0;
 			}
 		}
@@ -6435,6 +6637,9 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 
 	ncand = fts_search_wand(cursors, nactive, wantk, filterp, gatep, &cand);
 	bm25_tombstones_free(&tombs);
+	if (meta.npending > 0)
+		ncand = bm25_topk_add_pending(index, q, &meta, terms, lens, nterms, tidf,
+									  avgdl, wantk, cand, ncand, &cand);
 	if (filter_docids)
 		pfree(filter_docids);
 	if (gatep != NULL)
