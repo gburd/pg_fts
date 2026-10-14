@@ -881,11 +881,14 @@ static TidSet
 bm25_lookup_pattern(Relation index, const BM25SegMeta *seg,
                     FtsQuery q, FtsQueryItem *it)
 {
-	TidSet result = {NULL, 0};
+	TidSet result;
 	BlockNumber blk = seg->dictstart;
 	const char *term = FTS_QUERY_ITEMTEXT(q, it);
 	text *pattern = it->flags & FTS_QF_REGEX ?
 		cstring_to_text_with_len(term, it->termlen) : NULL;
+	ItemPointerData *acc = NULL;
+	Size		nacc = 0,
+				capacc = 0;
 
 	while (blk != InvalidBlockNumber)
 	{
@@ -920,21 +923,21 @@ bm25_lookup_pattern(Relation index, const BM25SegMeta *seg,
 				int np = bm25_decode_term(index, de->firstposting,
 					de->firstoffset, de->df, &post, NULL, false, NULL, true,
 					seg->doclenstart == InvalidBlockNumber);
-				TidSet run;
-				TidSet merged;
 				int j;
 
-				run.n = np;
-				run.tids = FTS_ALLOC_MAYBE_HUGE((Size) Max(np, 1) * sizeof(ItemPointerData));
+				/* append; sorted once below (an OR per matching term copied
+				 * the whole set each time: quadratic in the matching terms) */
+				if ((Size) nacc + np > capacc)
+				{
+					Size		want = Max((Size) capacc * 2, (Size) nacc + np);
+
+					acc = acc ? FTS_REALLOC_MAYBE_HUGE(acc, want * sizeof(ItemPointerData))
+						: FTS_ALLOC_MAYBE_HUGE(want * sizeof(ItemPointerData));
+					capacc = want;
+				}
 				for (j = 0; j < np; j++)
-					run.tids[j] = post[j].tid;
-				tidset_sort_uniq(&run);
-				merged = tidset_or(result, run);
-				if (result.tids)
-					pfree(result.tids);
-				pfree(run.tids);
+					acc[nacc++] = post[j].tid;
 				pfree(post);
-				result = merged;
 			}
 			ptr += MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
 		}
@@ -943,6 +946,9 @@ bm25_lookup_pattern(Relation index, const BM25SegMeta *seg,
 	}
 	if (pattern)
 		pfree(pattern);
+	result.tids = acc;
+	result.n = (int) nacc;
+	tidset_sort_uniq(&result);
 	return result;
 }
 

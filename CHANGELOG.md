@@ -62,6 +62,14 @@ SQL objects (`pg_fts--1.12.1--1.13.0.sql` is a no-op).
   posting list could also be bounded by the next term's block header.  No query found
   a wrong top-k on 1.12.1, whose best-first paths already avoid both cases.  The PR's
   regression blocks for both pass on 1.12.1 and on this release.
+- **A long pending list made scans quadratic.**  Each matching pending document was
+  ORed into the result set by copying the whole set, so a bitmap count with 32k pending
+  matches took 2.6 s and 3 GB in one backend (1.12.0, Debian EC2 c6id.4xlarge).  Once
+  ranked scans read the pending list too, `t/012`'s readers grew to 16 GB each and were
+  OOM-killed.  Matches are now appended and sorted once: 5.4 ms, and 4.0 ms for a
+  ranked top-10, at 32k pending (single runs, same host).  The fuzzy/regex dictionary
+  walk (`bm25_lookup_pattern`, from the PR) had the same shape per matching term and was
+  changed the same way.
 - **`term:LABEL` under a NOT under-counted through the index**: `apple & !cherry:A`
   returned one of the two matching rows.  This is a sibling of #8, reported in the PR
   and still present in 1.12.1.
