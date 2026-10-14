@@ -1,0 +1,14 @@
+1.12.1 gate, tree bfd8ec2 (local x86_64, nix)
+installcheck-pg17: 16 ok lines; exit 0
+pg_fts-installcheck> # All 14 tests passed.
+installcheck-pg18: 16 ok lines; exit 0
+pg_fts-installcheck> # All 14 tests passed.
+tap-pg17: 9 ok lines; exit 0
+pg_fts-tap> Result: PASS
+tap-pg18: 9 ok lines; exit 0
+pg_fts-tap> Result: PASS
+CI run 38610883340 on bfd8ec2: fuzz sanitizers coverage test(17) test(18) test(19) hegel all success
+ci/check-alloc.sh: clean; make check-ascii: clean; test/fuzz/run.sh: == ALL CLEAN ==
+docs rendered: doc/html/pg_fts.html
+normal-form ranked results (WHERE == ORDER BY), 12 queries x 4 index states, 1.12.0 vs 1.12.1: IDENTICAL (f121gate.sh)
+upgrade 1.12.0 (PGXN zip sha256 8c5a66dc...) -> 1.12.1 in place: ok=113 bad=0
