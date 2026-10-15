@@ -139,6 +139,10 @@ jobs:
           make install >/dev/null
       - name: Build + install pg_fts with AddressSanitizer
         run: |
+          # the ASan-built pg_config leaks small buffers on exit and would abort
+          # under default leak detection, making PGXS's $(pg_config ...) return
+          # empty (postgres.h not found); silence it for every ASan-built tool.
+          export ASAN_OPTIONS=detect_leaks=0
           make CC=clang PG_CONFIG="$PFX/bin/pg_config" with_llvm=no \
             COPT="-fsanitize=address -fno-omit-frame-pointer -g -O1 -DUSE_ASSERT_CHECKING" \
             SHLIB_LINK="-fsanitize=address"
