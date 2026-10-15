@@ -203,3 +203,32 @@ Four metal hosts:
 Hosts are launched with `owner=gburd-agent` tags in the kiwi account and terminated, with
 their security groups and key pairs, as soon as their data is copied off.  Teardown is
 checked with a describe call that returns 0.
+
+## Amendments from the smoke test (before any metal run)
+
+The harness was smoke-tested on one Fedora 44 c6id.2xlarge with 50,000 rows of the same
+corpus, then destroyed.  The smoke results are not reported as measurements.  They
+changed the method as follows:
+
+1. **The positions index lives on its own copy of the table** (`docs_pos`), because the
+   planner chose the `positions = on` index for non-phrase bands once both indexes
+   were on one table.  That made rare k10 20.7 ms instead of 0.1 ms.  Phrase bands
+   query `docs_pos`, and its size is reported separately.
+2. **pg_textsearch's filtered ranked bands are also run in a second form,** a
+   `MATERIALIZED` CTE that applies the `@@` filter through the bm25 index and then
+   scores and sorts the matches.  In the documented single-query form
+   (`WHERE content @@ ... ORDER BY <@> ... LIMIT`) the planner chooses a sequential scan
+   even with `enable_seqscan = off`.  In the smoke test that took 30 s for
+   `slovakia & hungary` at 50k rows, against 0.3 s for the CTE form.  Both forms are
+   reported (`*_k10` and `*_k10_cte`); the faster one is pg_textsearch's number for the
+   band, and that is stated.
+3. **pg_fts common k1000 is measured as shipped.**  At 50k rows the planner chooses
+   bitmap + Sort for LIMIT >= 250 on an expression index, and the query takes 21.6 s
+   (4-7 ms on the ordering scan).  This is a pg_fts planner-costing defect, ROADMAP
+   I11, present in every release.  It is reported as measured, with the
+   `enable_bitmapscan = off` time alongside as a labelled diagnostic, not as pg_fts's
+   number.
+4. **Write band inserts use a sequence** (a `random()`-based id overflowed `int` in
+   pgbench), and each arm starts with the previous arm's write-band rows deleted.
+5. **Latency timing takes the first 8 `Time:` lines** after `\timing on`; an earlier
+   filter dropped sub-millisecond values.
