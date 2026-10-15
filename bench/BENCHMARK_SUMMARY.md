@@ -92,8 +92,11 @@ Other dimensions:
   vs 1,887 MiB).
 - **pg_textsearch is better on:**
   - cold single-term first query, by 19-36 ms;
-  - ranked queries under 8 concurrent inserters: 819-1,602 vs 56-221 tps (ROADMAP
-    I12), although pg_fts takes 2.6-6.3x the insert rate.
+  - ranked queries under 8 concurrent inserters: 819-1,602 vs 56-221 tps on 1.13.0,
+    although pg_fts takes 2.6-6.3x the insert rate.  1.14.0 bounds the pending list
+    from the insert path and best-firsts a single term across segments (ROADMAP I12);
+    on a dev host mixed-load ranked reads rose 97 -> 3,223 tps at 10% fewer inserts.
+    The metal re-measurement of this band is pending.
 - **Rankings.**  Top-100 overlap is 81-92%; both use the same k1, b and IDF and differ
   in doclen quantization.  Rescored under one exact formula, pg_fts's top-100 is
   0.07-0.20% higher.

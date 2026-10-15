@@ -309,9 +309,12 @@ amendments): `bench/PROTOCOL_PGTS_METAL_2026-10-15.md`; raw data and harness:
   76-77 ms on x86 and 25-37 vs 55-60 ms on arm.  pg_fts's first query in a backend
   builds per-backend directories.
 - **Concurrent writes:** 8 clients inserting while 8 run rare k10.  pg_fts takes
-  2.6-6.3x more inserts per second, but its concurrent ranked query runs 5-25x slower
-  (56-221 vs 819-1,602 tps).  Every ranked query reads the growing pending list
-  (ROADMAP I12).
+  2.6-6.3x more inserts per second.  On 1.13.0 its concurrent ranked query ran 5-25x
+  slower here (56-221 vs 819-1,602 tps) because every ranked query read the whole
+  unflushed pending list; 1.14.0 bounds that list from the insert path
+  (`pg_fts.pending_flush_threshold`) and best-firsts a single term across the extra
+  segments, which on a dev host lifted mixed-load ranked reads from 97 to 3,223 tps at
+  10% fewer inserts.  The metal re-measurement for this table is pending.
 - **Phrases:** pg_fts needs a second `positions = on` index (an extra 2.5 GiB) to
   answer them from the index.
 
