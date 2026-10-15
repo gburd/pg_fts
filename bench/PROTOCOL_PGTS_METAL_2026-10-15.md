@@ -232,3 +232,16 @@ changed the method as follows:
    pgbench), and each arm starts with the previous arm's write-band rows deleted.
 5. **Latency timing takes the first 8 `Time:` lines** after `\timing on`; an earlier
    filter dropped sub-millisecond values.
+6. **Repetitions are bounded for bands slower than 10 s** (added during the metal run,
+   before any between-engine comparison was read).  Each band now runs once as a probe.
+   A probe over 10 s is followed by 3 timed executions, and the median of those 3 is
+   reported, instead of 8 executions and the median of the last 5.  The trigger was
+   pg_textsearch's `and_us_k10_cte`: each execution took minutes but finished just under
+   the 300 s statement timeout, so 8 per pass, times 3 passes and 3 arms, would have
+   taken many hours per host.  Rows record `reps=` and the probe time.  The 300 s
+   statement timeout is unchanged.
+7. **A band slower than 60 s is recorded from its probe alone**: one execution per pass,
+   so three across the passes.  Added after latency pass 1, before any comparison was
+   read.  Pass 1 took 2.5 h per host, almost all of it pg_textsearch's filtered bands at
+   4-5 minutes per execution.  Throughput skips any band whose pass-1 latency exceeds
+   1 s (pgbench would report under 1 tps), and says so in `tps.txt`.

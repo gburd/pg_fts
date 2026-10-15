@@ -1,0 +1,3 @@
+arm=fts insert_tps=55589.790676 failed_ins=0 query_tps=61.512730 inserted_heap=6670607 found_by_index=6670607
+arm=pgts_head insert_tps=18935.882163 failed_ins=0 query_tps=1027.586546 inserted_heap=3232100 found_by_index=3232100
+arm=pgts_rel insert_tps=19686.565744 failed_ins=0 query_tps=1068.644512 inserted_heap=3338601 found_by_index=3338601

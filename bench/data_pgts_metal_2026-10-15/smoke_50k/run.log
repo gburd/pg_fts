@@ -1,0 +1,21 @@
+[2026-10-15T01:18:28Z] cluster fts rows=50000 ext=pg_fts 1.13.0
+[2026-10-15T01:18:34Z] cluster pgts_head rows=50000 ext=pg_textsearch 1.6.0-dev
+[2026-10-15T01:18:41Z] cluster pgts_rel rows=50000 ext=pg_textsearch 1.5.1
+[2026-10-15T01:19:16Z] build pgts_rel ext=1.5.1 s=34.396174180 size=91660288 all_rels_bytes=91660288
+[2026-10-15T01:19:51Z] build pgts_head ext=1.6.0-dev s=34.724509370 size=91660288 all_rels_bytes=91660288
+[2026-10-15T01:20:08Z] build fts expr s=17.129404778 size=82051072
+[2026-10-15T01:20:08Z] fts_vacuum s=.005986641 size=82051072
+[2026-10-15T01:20:27Z] build fts positions s=19.293762266 size=134782976 all_rels_bytes=216834048
+[2026-10-15T01:21:03Z] BUILD_DONE
+[2026-10-15T01:22:15Z] hoststate lat_start: chase  4096 MiB thp : 110.0 ns/load (AnonHugePages 4194304 kB) | load 1.10 1.18 0.86 | thp always [madvise] never
+[2026-10-15T01:30:48Z] hoststate lat_start: chase  4096 MiB thp : 111.0 ns/load (AnonHugePages 4194304 kB) | load 0.75 0.77 0.81 | thp always [madvise] never
+[2026-10-15T01:47:30Z] agree N=50000 avgdl=855.2025000000000000
+[2026-10-15T01:47:39Z] AGREE_DONE
+[2026-10-15T01:49:00Z] hoststate tps_start: chase  4096 MiB thp : 135.2 ns/load (AnonHugePages 4194304 kB) | load 0.85 0.51 0.66 | thp always [madvise] never
+[2026-10-15T02:11:41Z] COLD_DONE
+[2026-10-15T02:12:27Z] WRITE_DONE
+[2026-10-15T02:17:28Z] WRITE_DONE
+[2026-10-15T02:21:22Z] hoststate lat_start: chase  4096 MiB thp : 108.9 ns/load (AnonHugePages 4194304 kB) | load 0.79 1.49 3.77 | thp always [madvise] never
+[2026-10-15T02:28:39Z] ARM pgts_rel FAILED TO START
+[2026-10-15T02:38:03Z] hoststate lat_start: chase  4096 MiB thp : 108.1 ns/load (AnonHugePages 4194304 kB) | load 1.09 1.09 1.97 | thp always [madvise] never
+[2026-10-15T02:46:34Z] WRITE_DONE

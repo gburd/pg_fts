@@ -1,0 +1,9 @@
+initdb: warning: enabling "trust" authentication for local connections
+initdb: hint: You can change this by editing pg_hba.conf or using the option -A, or --auth-local and --auth-host, the next time you run initdb.
+[2026-10-15T01:18:28Z] cluster fts rows=50000 ext=pg_fts 1.13.0
+initdb: warning: enabling "trust" authentication for local connections
+initdb: hint: You can change this by editing pg_hba.conf or using the option -A, or --auth-local and --auth-host, the next time you run initdb.
+[2026-10-15T01:18:34Z] cluster pgts_head rows=50000 ext=pg_textsearch 1.6.0-dev
+initdb: warning: enabling "trust" authentication for local connections
+initdb: hint: You can change this by editing pg_hba.conf or using the option -A, or --auth-local and --auth-host, the next time you run initdb.
+[2026-10-15T01:18:41Z] cluster pgts_rel rows=50000 ext=pg_textsearch 1.5.1

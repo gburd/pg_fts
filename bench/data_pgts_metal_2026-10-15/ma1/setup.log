@@ -1,0 +1,81 @@
+[2026-10-15T02:59:26Z] host aarch64 7.2.10-200.fc44.aarch64 Neoverse-V1 nproc=64 mem=125G
+[2026-10-15T02:59:26Z] os Fedora Linux 44 (Cloud Edition)
+[2026-10-15T03:00:29Z] hoststate start: chase  4096 MiB thp : 115.8 ns/load (AnonHugePages 4202496 kB) | load 1.02 0.43 0.16 | thp always [madvise] never
+[2026-10-15T03:01:16Z] pg postgres (PostgreSQL) 17.10
+[2026-10-15T03:01:19Z] pgts_rel fa142d04 v1.5.1 so=1aded541  pgts_head a5fdfeb1 v1.5.0-4-ga5fdfeb1 so=5627337e
+/tmp/pg_fts-1.13.0.zip: OK
+[2026-10-15T03:01:24Z] pg_fts so=8db1b7a3 postgres binaries identical: 1
+
+[notice] A new release of pip is available: 26.0.1 -> 26.2.1
+[notice] To update, run: /nvme/venv/bin/python3 -m pip install --upgrade pip
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+ROWS 2188038
+[2026-10-15T03:02:12Z] corpus md5=f5939e8559543f16e8a2365049836d63 rows=2188038
+initdb: warning: enabling "trust" authentication for local connections
+initdb: hint: You can change this by editing pg_hba.conf or using the option -A, or --auth-local and --auth-host, the next time you run initdb.
+[2026-10-15T03:04:26Z] cluster fts rows=2188038 ext=pg_fts 1.13.0
+initdb: warning: enabling "trust" authentication for local connections
+initdb: hint: You can change this by editing pg_hba.conf or using the option -A, or --auth-local and --auth-host, the next time you run initdb.
+[2026-10-15T03:06:43Z] cluster pgts_head rows=2188038 ext=pg_textsearch 1.6.0-dev
+initdb: warning: enabling "trust" authentication for local connections
+initdb: hint: You can change this by editing pg_hba.conf or using the option -A, or --auth-local and --auth-host, the next time you run initdb.
+[2026-10-15T03:09:00Z] cluster pgts_rel rows=2188038 ext=pg_textsearch 1.5.1
+[2026-10-15T03:09:04Z] SETUP_DONE
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  BM25 index build completed: 2188038 documents, avg_length=316.55
+[2026-10-15T03:13:22Z] build pgts_rel ext=1.5.1 s=258.118952836 size=1978318848 all_rels_bytes=1978318848
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  BM25 index build completed: 2188038 documents, avg_length=316.55
+[2026-10-15T03:17:43Z] build pgts_head ext=1.6.0-dev s=258.496175476 size=1978318848 all_rels_bytes=1978318848
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+[2026-10-15T03:21:25Z] build fts expr s=219.275585839 size=1435443200
+[2026-10-15T03:21:25Z] fts_vacuum s=.019311940 size=1435443200
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+[2026-10-15T03:26:06Z] build fts positions s=260.606000600 size=2696986624 all_rels_bytes_excl_docs_pos=1435443200
+[2026-10-15T03:26:23Z] BUILD_DONE
+[2026-10-15T03:27:25Z] hoststate lat_start: chase  4096 MiB thp : 115.8 ns/load (AnonHugePages 4202496 kB) | load 1.23 2.73 2.47 | thp always [madvise] never
+pass=1 arm=fts band=rare_k10 rows=10, median_last5=0.236 raw=[39.262 0.442 0.262 0.242 0.248 0.236 0.229 0.228 ]
+pass=1 arm=fts band=mid_k10 rows=10, median_last5=0.240 raw=[13.775 0.342 0.265 0.253 0.254 0.240 0.240 0.237 ]
+pass=1 arm=fts band=common_k10 rows=10, median_last5=0.341 raw=[19.618 0.476 0.369 0.346 0.341 0.347 0.329 0.326 ]
+pass=1 arm=fts band=common_k100 rows=100, median_last5=0.750 raw=[50.622 0.864 0.775 0.761 0.757 0.746 0.750 0.747 ]
+pass=1 arm=fts band=common_k1000 rows=1000, median_last5=11.527 raw=[518.396 11.947 11.643 11.527 11.557 11.576 11.466 11.502 ]
+pass=1 arm=fts band=or2_k10 rows=10, median_last5=1.267 raw=[27.069 1.362 1.285 1.279 1.267 1.263 1.269 1.264 ]
+pass=1 arm=fts band=or4_k10 rows=10, median_last5=12.467 raw=[22.522 12.622 12.516 12.476 12.493 12.410 12.412 12.467 ]
+pass=1 arm=fts band=and_k10 rows=10, median_last5=0.634 raw=[26.081 0.738 0.651 0.646 0.638 0.626 0.634 0.625 ]
+pass=1 arm=fts band=and_us_k10 rows=10, median_last5=1.876 raw=[34.221 2.042 1.923 1.906 1.893 1.874 1.876 1.867 ]
+pass=1 arm=fts band=not_k10 rows=10, median_last5=1.645 raw=[9.905 1.747 1.668 1.646 1.651 1.645 1.636 1.642 ]
+pass=1 arm=fts band=phrase_us_k10 rows=10, median_last5=2.320 raw=[59.163 2.649 2.384 2.337 2.324 2.320 2.310 2.301 ]
+pass=1 arm=fts band=phrase_ww_k10 rows=10, median_last5=5.870 raw=[28.694 5.986 5.868 5.837 5.878 5.870 5.879 5.829 ]
+pass=1 arm=fts band=count_common rows=734896, median_last5=0.155 raw=[1.988 0.231 0.176 0.162 0.154 0.160 0.154 0.155 ]
+pass=1 arm=pgts_head band=rare_k10 rows=10, median_last5=0.963 raw=[4.051 1.030 0.988 0.970 0.964 0.961 0.963 0.958 ]
+pass=1 arm=pgts_head band=mid_k10 rows=10, median_last5=1.185 raw=[3.526 1.230 1.212 1.195 1.192 1.185 1.179 1.182 ]
+pass=1 arm=pgts_head band=common_k10 rows=10, median_last5=10.482 raw=[13.722 10.580 10.510 10.494 10.480 10.500 10.477 10.482 ]
+pass=1 arm=pgts_head band=common_k100 rows=100, median_last5=12.780 raw=[16.918 12.839 12.806 12.789 12.774 12.785 12.780 12.770 ]
+pass=1 arm=pgts_head band=common_k1000 rows=1000, median_last5=14.761 raw=[24.180 15.041 14.796 14.800 14.733 14.784 14.719 14.761 ]
+pass=1 arm=pgts_head band=or2_k10 rows=10, median_last5=1.263 raw=[3.772 1.310 1.281 1.272 1.271 1.263 1.262 1.256 ]
+pass=1 arm=pgts_head band=or4_k10 rows=10, median_last5=14.052 raw=[17.490 14.160 14.078 14.046 14.068 14.078 14.038 14.052 ]
+pass=1 arm=pgts_head band=and_k10 rows=TIMEOUT(300s) median_last5= raw=[300000.129 ]
+pass=1 arm=pgts_head band=and_us_k10 rows=TIMEOUT(300s) median_last5= raw=[300000.159 ]
+pass=1 arm=pgts_head band=not_k10 rows=TIMEOUT(300s) median_last5= raw=[300000.194 ]
+pass=1 arm=pgts_head band=phrase_us_k10 rows=TIMEOUT(300s) median_last5= raw=[300000.193 ]
+pass=1 arm=pgts_head band=phrase_ww_k10 rows=TIMEOUT(300s) median_last5= raw=[300000.191 ]
+pass=1 arm=pgts_head band=and_k10_cte rows=10, median_last5=3874.044 raw=[3923.396 3873.903 3872.183 3874.044 3871.068 3870.118 3879.822 3874.167 ]
+pass=1 arm=pgts_head band=and_us_k10_cte rows=10,DETAIL:  Words longer than 2047 characters are ignored.,psql:/tmp/b.sql:10: NOTICE:  word is too long to be indexed,psql:/tmp/b.sql:3: NOTICE:  word is too long to be indexed,psql:/tmp/b.sql:4: NOTICE:  word is too long to be indexed,psql:/tmp/b.sql:5: NOTICE:  word is too long to be indexed,psql:/tmp/b.sql:6: NOTICE:  word is too long to be indexed,psql:/tmp/b.sql:7: NOTICE:  word is too long to be indexed,psql:/tmp/b.sql:8: NOTICE:  word is too long to be indexed,psql:/tmp/b.sql:9: NOTICE:  word is too long to be indexed, median_last5=266623.492 raw=[267641.093 266696.555 266615.233 266694.391 266575.147 266596.534 266656.985 266623.492 ]

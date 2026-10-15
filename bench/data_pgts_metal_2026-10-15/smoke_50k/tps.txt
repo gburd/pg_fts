@@ -1,0 +1,8 @@
+pass=1 arm=fts band=and_us_k10 c1=1219.276776 c16=5954.030232
+pass=1 arm=fts band=common_k10 c1=8277.982833 c16=36103.336763
+pass=1 arm=fts band=count_common c1=16089.113038 c16=85119.900484
+pass=1 arm=fts band=rare_k10 c1=10579.048249 c16=50902.833242
+pass=1 arm=pgts_head band=and_us_k10 c1=0.021913 c16=0.099899
+pass=1 arm=pgts_head band=common_k10 c1=2512.050875 c16=8498.303908
+pass=1 arm=pgts_head band=count_common c1=0.099799 c16=0.146254
+pass=1 arm=pgts_head band=rare_k10 c1=8570.995070 c16=35244.074404

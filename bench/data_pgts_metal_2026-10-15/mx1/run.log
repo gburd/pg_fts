@@ -1,0 +1,36 @@
+[2026-10-15T02:59:28Z] host x86_64 7.2.10-200.fc44.x86_64 Intel(R) Xeon(R) Platinum 8375C CPU @ 2.90GHz nproc=128 mem=251G
+[2026-10-15T02:59:28Z] os Fedora Linux 44 (Cloud Edition)
+available: 2 nodes (0-1)
+node 0 cpus: 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 64 65 66 67 68 69 70 71 72 73 74 75 76 77 78 79 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95
+node 0 size: 128772 MB
+[2026-10-15T03:00:27Z] hoststate start: chase  4096 MiB thp : 104.7 ns/load (AnonHugePages 4194304 kB) | load 1.28 0.72 0.35 | thp always [madvise] never
+[2026-10-15T03:01:32Z] pg postgres (PostgreSQL) 17.10
+[2026-10-15T03:01:36Z] pgts_rel fa142d04 v1.5.1 so=bf38d11f  pgts_head a5fdfeb1 v1.5.0-4-ga5fdfeb1 so=e8413b25
+[2026-10-15T03:01:41Z] pg_fts so=b8c4cfa2 postgres binaries identical: 1
+[2026-10-15T03:02:36Z] corpus md5=f5939e8559543f16e8a2365049836d63 rows=2188038
+[2026-10-15T03:04:47Z] cluster fts rows=2188038 ext=pg_fts 1.13.0
+[2026-10-15T03:06:59Z] cluster pgts_head rows=2188038 ext=pg_textsearch 1.6.0-dev
+[2026-10-15T03:09:13Z] cluster pgts_rel rows=2188038 ext=pg_textsearch 1.5.1
+[2026-10-15T03:09:16Z] SETUP_DONE
+[2026-10-15T03:13:32Z] build pgts_rel ext=1.5.1 s=254.398364079 size=1978318848 all_rels_bytes=1978318848
+[2026-10-15T03:17:44Z] build pgts_head ext=1.6.0-dev s=249.839808553 size=1978318848 all_rels_bytes=1978318848
+[2026-10-15T03:21:20Z] build fts expr s=213.512741803 size=1435443200
+[2026-10-15T03:21:20Z] fts_vacuum s=.044071073 size=1435443200
+[2026-10-15T03:26:16Z] build fts positions s=268.926291967 size=2696896512 all_rels_bytes_excl_docs_pos=1435443200
+[2026-10-15T03:26:36Z] BUILD_DONE
+[2026-10-15T03:27:33Z] hoststate lat_start: chase  4096 MiB thp : 104.4 ns/load (AnonHugePages 4194304 kB) | load 1.22 2.82 2.65 | thp always [madvise] never
+[2026-10-15T04:29:41Z] watch2: latency resumes with bounded slow bands (amendment 6)
+[2026-10-15T04:31:41Z] watch3: latency resumes (amendment 6: >10 s bands median of 3)
+[2026-10-15T04:32:38Z] hoststate lat_start: chase  4096 MiB thp : 104.0 ns/load (AnonHugePages 4194304 kB) | load 2.29 1.73 1.29 | thp always [madvise] never
+[2026-10-15T06:26:34Z] watch3: latency resumes (amendment 6: >10 s bands median of 3)
+[2026-10-15T06:27:32Z] hoststate lat_start: chase  4096 MiB thp : 104.0 ns/load (AnonHugePages 4194304 kB) | load 1.23 1.08 1.03 | thp always [madvise] never
+[2026-10-15T07:37:34Z] hoststate lat_end: chase  4096 MiB thp : 104.5 ns/load (AnonHugePages 4194304 kB) | load 1.72 1.95 1.68 | thp always [madvise] never
+[2026-10-15T07:37:34Z] LAT_DONE
+[2026-10-15T07:41:30Z] agree N=2188038 avgdl=484.8482069324207349
+[2026-10-15T07:42:15Z] AGREE_DONE
+[2026-10-15T07:43:14Z] hoststate tps_start: chase  4096 MiB thp : 103.8 ns/load (AnonHugePages 4194304 kB) | load 1.32 2.06 1.87 | thp always [madvise] never
+[2026-10-15T08:33:24Z] hoststate tps_end: chase  4096 MiB thp : 104.2 ns/load (AnonHugePages 4194304 kB) | load 68.16 93.10 82.99 | thp always [madvise] never
+[2026-10-15T08:33:24Z] TPS_DONE
+[2026-10-15T08:35:38Z] COLD_DONE
+[2026-10-15T08:47:16Z] WRITE_DONE
+[2026-10-15T08:47:16Z] ALL_DONE

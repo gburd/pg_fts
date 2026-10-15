@@ -1,0 +1,55 @@
+rep=1 arm=fts band=rare_k10 cold_ms=63.538
+rep=1 arm=fts band=common_k10 cold_ms=76.83
+rep=1 arm=fts band=and_k10 cold_ms=81.995
+rep=1 arm=pgts_head band=rare_k10 cold_ms=41.24
+rep=1 arm=pgts_head band=common_k10 cold_ms=49.196
+rep=1 arm=pgts_head band=and_k10 cold_ms=SKIPPED(timeout in latency)
+rep=1 arm=pgts_head band=and_k10_cte cold_ms=6505.453
+rep=1 arm=pgts_rel band=rare_k10 cold_ms=32.437
+rep=1 arm=pgts_rel band=common_k10 cold_ms=46.684
+rep=1 arm=pgts_rel band=and_k10 cold_ms=SKIPPED(timeout in latency)
+rep=1 arm=pgts_rel band=and_k10_cte cold_ms=6380.112
+rep=2 arm=fts band=rare_k10 cold_ms=67.075
+rep=2 arm=fts band=common_k10 cold_ms=75.665
+rep=2 arm=fts band=and_k10 cold_ms=83.518
+rep=2 arm=pgts_head band=rare_k10 cold_ms=44.21
+rep=2 arm=pgts_head band=common_k10 cold_ms=49.042
+rep=2 arm=pgts_head band=and_k10 cold_ms=SKIPPED(timeout in latency)
+rep=2 arm=pgts_head band=and_k10_cte cold_ms=6483.126
+rep=2 arm=pgts_rel band=rare_k10 cold_ms=33.169
+rep=2 arm=pgts_rel band=common_k10 cold_ms=43.093
+rep=2 arm=pgts_rel band=and_k10 cold_ms=SKIPPED(timeout in latency)
+rep=2 arm=pgts_rel band=and_k10_cte cold_ms=6457.715
+rep=3 arm=fts band=rare_k10 cold_ms=54.868
+rep=3 arm=fts band=common_k10 cold_ms=64.699
+rep=3 arm=fts band=and_k10 cold_ms=73.712
+rep=3 arm=pgts_head band=rare_k10 cold_ms=37.261
+rep=3 arm=pgts_head band=common_k10 cold_ms=41.789
+rep=3 arm=pgts_head band=and_k10 cold_ms=SKIPPED(timeout in latency)
+rep=3 arm=pgts_head band=and_k10_cte cold_ms=6340.644
+rep=3 arm=pgts_rel band=rare_k10 cold_ms=28.543
+rep=3 arm=pgts_rel band=common_k10 cold_ms=52.662
+rep=3 arm=pgts_rel band=and_k10 cold_ms=SKIPPED(timeout in latency)
+rep=3 arm=pgts_rel band=and_k10_cte cold_ms=6405.121
+rep=4 arm=fts band=rare_k10 cold_ms=61.81
+rep=4 arm=fts band=common_k10 cold_ms=94.081
+rep=4 arm=fts band=and_k10 cold_ms=81.673
+rep=4 arm=pgts_head band=rare_k10 cold_ms=35.227
+rep=4 arm=pgts_head band=common_k10 cold_ms=53.623
+rep=4 arm=pgts_head band=and_k10 cold_ms=SKIPPED(timeout in latency)
+rep=4 arm=pgts_head band=and_k10_cte cold_ms=6570.555
+rep=4 arm=pgts_rel band=rare_k10 cold_ms=31.06
+rep=4 arm=pgts_rel band=common_k10 cold_ms=49.202
+rep=4 arm=pgts_rel band=and_k10 cold_ms=SKIPPED(timeout in latency)
+rep=4 arm=pgts_rel band=and_k10_cte cold_ms=6305.207
+rep=5 arm=fts band=rare_k10 cold_ms=61.051
+rep=5 arm=fts band=common_k10 cold_ms=78.289
+rep=5 arm=fts band=and_k10 cold_ms=77.76
+rep=5 arm=pgts_head band=rare_k10 cold_ms=36.601
+rep=5 arm=pgts_head band=common_k10 cold_ms=51.789
+rep=5 arm=pgts_head band=and_k10 cold_ms=SKIPPED(timeout in latency)
+rep=5 arm=pgts_head band=and_k10_cte cold_ms=6466.57
+rep=5 arm=pgts_rel band=rare_k10 cold_ms=28.519
+rep=5 arm=pgts_rel band=common_k10 cold_ms=49.977
+rep=5 arm=pgts_rel band=and_k10 cold_ms=SKIPPED(timeout in latency)
+rep=5 arm=pgts_rel band=and_k10_cte cold_ms=6391.544

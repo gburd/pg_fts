@@ -2,6 +2,24 @@
 
 All notable changes to pg_fts are documented here.
 
+## Unreleased
+
+### Benchmarks
+
+- **pg_fts 1.13.0 vs pg_textsearch on bare metal** (`bench/RESULTS_PGTS_METAL_2026-10-15.md`):
+  - Hosts: 2x c6id.metal and 2x c7gd.metal, Fedora 44, XFS on local NVMe.
+  - Arms: pg_textsearch HEAD `a5fdfeb1` and the 1.5.1 release, alongside pg_fts.
+  - **pg_fts is faster** on 11 of 13 latency bands on x86 and 12 of 13 on arm, the
+    rest equal, with every call reproduced on both hosts.  Its throughput is 3.4-150x
+    higher.  It builds 14-15% faster and its index is 27% smaller.
+  - **pg_textsearch is faster** on a cold single-term first query (19-36 ms) and on
+    ranked reads under sustained inserts (5-25x).  pg_fts's pending list is read by
+    every ranked query (ROADMAP I12).
+- **Found by its smoke test:** a ranked `LIMIT >= 250` on an expression index takes a
+  bitmap + Sort plan that re-analyses every match: 21.6 s instead of 4-7 ms at 50k
+  rows.  The `@@@` selectivity is `tsmatchsel`'s default and `to_ftsdoc` is COST 1
+  (ROADMAP I11, every release).  At 2.19M rows the planner chose the ordering scan.
+
 ## 1.13.0 - 2026-10-15
 
 Compound proximity search, exact ranked recall, and stricter query input, from GitHub

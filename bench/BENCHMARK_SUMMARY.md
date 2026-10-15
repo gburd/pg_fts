@@ -61,7 +61,44 @@ alone.
 
 ## 2. Comparative latency
 
-### 2c. Current release: 1.13.0 vs 1.12.1 (2026-10-15, x86_64, one host)
+### 2d. pg_fts 1.13.0 vs pg_textsearch on bare metal (2026-10-15, x86_64 + aarch64, four hosts)
+
+`RESULTS_PGTS_METAL_2026-10-15.md` (protocol `PROTOCOL_PGTS_METAL_2026-10-15.md`, data
+`data_pgts_metal_2026-10-15/`).
+
+Setup:
+- Hosts: 2x c6id.metal and 2x c7gd.metal; Fedora 44; XFS on local NVMe; PG 17.10.
+- Arms: pg_fts 1.13.0, pg_textsearch HEAD `a5fdfeb1`, and 1.5.1.  Every arm ran on
+  every host, alternated per pass.
+- A difference is called only when the pass spreads separate on both hosts of an
+  architecture.
+
+Single-client latency (median ms, x86 / arm):
+
+| band | pg_fts 1.13.0 | pg_textsearch HEAD |
+|---|---|---|
+| rare top-10 | 0.32-0.50 / 0.23 | 2.03-2.09 / 0.96-1.12 |
+| common top-10 | 0.77-0.80 / 0.33-0.34 | 10.1 / 10.5-10.7 |
+| common top-1000 | 14.2-14.4 / 11.5 | 14.5-14.7 / 14.7-14.8 (x86: no difference) |
+| 4-term OR | 15.9 / 12.5 | 16.1 / 13.9-14.0 (x86: no difference) |
+| `slovakia & hungary` | 0.99-1.08 / 0.62-0.63 | >300 s seq scan; 4.1 / 3.9 s as a CTE |
+| `"united states"` | 3.37-3.38 / 2.32-2.35 | >300 s, also as a CTE |
+| exact count | 0.68-0.77 / 0.16 | 228-243 s |
+
+Other dimensions:
+- **Throughput.**  Settled rare top-10 tps is 3.4-8.1x pg_textsearch's, and common
+  top-10 26-150x, at 1-256 clients.
+- **Build and size.**  pg_fts builds 14-15% faster and its index is 27% smaller (1,369
+  vs 1,887 MiB).
+- **pg_textsearch is better on:**
+  - cold single-term first query, by 19-36 ms;
+  - ranked queries under 8 concurrent inserters: 819-1,602 vs 56-221 tps (ROADMAP
+    I12), although pg_fts takes 2.6-6.3x the insert rate.
+- **Rankings.**  Top-100 overlap is 81-92%; both use the same k1, b and IDF and differ
+  in doclen quantization.  Rescored under one exact formula, pg_fts's top-100 is
+  0.07-0.20% higher.
+
+### 2c. 1.13.0 vs 1.12.1 (2026-10-15, x86_64, one host)
 
 Setup: one Debian 13 EC2 c6id.4xlarge, PG 17.10, 2M rows, a `positions = on`
 expression index (188 MB), arms alternated over 3 rounds, median of 9 runs.  The top-10

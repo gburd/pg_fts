@@ -262,7 +262,66 @@ Example
 Performance
 -----------
 
-**1.13.0** (`bench/RESULTS_130_2026-10-15.md`) adds compound proximity (GitHub PR #12)
+### pg_fts 1.13.0 vs pg_textsearch on bare metal (2026-10-15)
+
+`bench/RESULTS_PGTS_METAL_2026-10-15.md`; protocol (written before the run, with its
+amendments): `bench/PROTOCOL_PGTS_METAL_2026-10-15.md`; raw data and harness:
+`bench/data_pgts_metal_2026-10-15/`.
+
+**Method.**
+- **Arms.**  Three: pg_fts **1.13.0** (PGXN zip, sha256-verified),
+  **pg_textsearch HEAD** `a5fdfeb1` (`v1.5.0-4`, 1.6.0-dev), and the
+  **pg_textsearch 1.5.1** release.
+- **Hosts.**  Four EC2 bare-metal hosts: **2x c6id.metal** (Intel Xeon 8375C, 2 sockets,
+  128 vCPU) and **2x c7gd.metal** (Graviton3, 64 vCPU).  Every arm ran on every host.
+  Fedora 44; XFS on one local NVMe instance-store device.
+- **PostgreSQL.**  17.10 from source; each arm had its own copy of the identical build
+  and its own data directory, with identical settings.  One cluster ran at a time, and
+  arms were rotated per pass.
+- **Data.**  The 2,188,038-article Wikipedia corpus, md5-checked on every host.  Each
+  engine used its documented English index.
+- **Correctness first.**  Every band returned k rows, and the counts of `year` agree
+  (734,896).  The top-k lists were compared, and rescored under one fixed BM25.
+- **Latency.**  The median of the last 5 of 8 runs in one session, over 3 passes.  A
+  difference is called only if the pass spreads separate on BOTH hosts of an
+  architecture.
+- **Throughput.**  Settled (CHECKPOINT, 60 s idle, prewarm) at 1-256 clients.
+- **Also measured.**  Cold first query, build time, size, and concurrent inserts.
+
+| median ms, single client (x86 / arm) | **pg_fts 1.13.0** | pg_textsearch HEAD | pg_textsearch 1.5.1 |
+|---|---|---|---|
+| rare `slovakia` top-10 | **0.32-0.50 / 0.23** | 2.03-2.09 / 0.96-1.12 | 2.06-2.11 / 0.95-0.97 |
+| common `year` (df 735k) top-10 | **0.77-0.80 / 0.33-0.34** | 10.1 / 10.5-10.7 | 9.97-9.98 / 10.5 |
+| common top-1000 | 14.2-14.4 / **11.5** | 14.5-14.7 / 14.7-14.8 | 14.3-14.5 / 14.7 |
+| 4-term OR top-10 | 15.9 / **12.5** | 16.1 / 13.9-14.0 | 16.0-16.1 / 13.9-14.0 |
+| `slovakia & hungary` top-10 | **0.99-1.08 / 0.62-0.63** | >300 s (seq scan); 4.1 s / 3.9 s as a CTE | same as HEAD |
+| `"united states"` top-10 | **3.37-3.38 / 2.32-2.35** | >300 s, also as a CTE | same |
+| exact count of `year` | **0.68-0.77 / 0.16** | 243 s / 228 s (no index count) | same |
+| settled tps, rare top-10, 64 clients | **143,628-143,726 / 148,392-149,660** | 21,428-21,754 / 18,323-20,004 | similar |
+| build, default index | **214-220 s** | 250-259 s | 252-258 s |
+| index size | **1,369 MiB** | 1,887 MiB | 1,887 MiB |
+
+**Where pg_textsearch is better, or equal.**
+- **Equal (spreads overlap):** common top-1000 and the 4-term OR on x86, and the 2-term
+  OR on arm.
+- **Cold first query on a single term:** pg_textsearch is faster.  Rare top-10 was
+  28-41 vs 61-62 ms on x86 and 13-25 vs 49-52 ms on arm; common top-10 was 49-54 vs
+  76-77 ms on x86 and 25-37 vs 55-60 ms on arm.  pg_fts's first query in a backend
+  builds per-backend directories.
+- **Concurrent writes:** 8 clients inserting while 8 run rare k10.  pg_fts takes
+  2.6-6.3x more inserts per second, but its concurrent ranked query runs 5-25x slower
+  (56-221 vs 819-1,602 tps).  Every ranked query reads the growing pending list
+  (ROADMAP I12).
+- **Phrases:** pg_fts needs a second `positions = on` index (an extra 2.5 GiB) to
+  answer them from the index.
+
+**Rankings agree.**  pg_textsearch HEAD and 1.5.1 return identical top-k.  Against
+pg_fts, top-10 overlaps are 6-8 of 10 and top-100 overlaps 81-92 of 100: both use k1
+1.2, b 0.75 and the same IDF, but quantize document length differently.  Rescored
+under one exact formula, pg_fts's top-100 is 0.07-0.20% higher on every query, so
+neither engine is mis-ranking; the differing ids are near-ties.
+
+**1.13.0 vs 1.12.1** (`bench/RESULTS_130_2026-10-15.md`) adds compound proximity (GitHub PR #12)
 and was measured against 1.12.1 on one EC2 host, 2M rows, `positions = on`, with
 identical results for every query.  Plain ranked and boolean queries are unchanged.
 A NOT over a phrase, or a phrase ORed with a term, is 20-240x faster:
@@ -274,8 +333,9 @@ slower: `"hot dog" & w7`, +8% ranked and +13% as a count.
 against 1.11.0 on the same hosts and indexes: identical results; single-client rare /
 common top-10 0.54 / 0.67 -> 0.27 / 0.36 ms; throughput at 16-64 clients rare +67-97%,
 mid +49-60%, common +74-92%, `united & states` +42-53%; `count(*)` unchanged.  The
-competitors have not been re-measured against 1.12.0, so the cross-engine table below is
-still the 1.11.0 run, and every pg_fts figure in it is 1.11.0's.
+four-engine table below has not been re-run since 1.11.0.  For pg_textsearch, the metal
+run above supersedes it.  The pg_search, VectorChord and pg_textsearch columns below are
+the 1.11.0 run, on different hardware.
 
 Numbers below are from `bench/RESULTS_111_2026-10-09.md` (summarized in
 `bench/BENCHMARK_SUMMARY.md`; if the two ever disagree, the results file is right).  They

@@ -1,0 +1,18 @@
+number of failed transactions: 0 (0.000%)
+tps = 55559.369607 (without initial connection time)
+number of failed transactions: 0 (0.000%)
+tps = 19630.189568 (without initial connection time)
+number of failed transactions: 0 (0.000%)
+tps = 21423.576910 (without initial connection time)
+7.2.10-200.fc44.aarch64
+Model name:                              Neoverse-V1
+Socket(s):                               1
+NUMA node(s):                            1
+nvme0n1 Amazon EC2 NVMe Instance Storage  1.7T
+nvme1n1 Amazon EC2 NVMe Instance Storage  1.7T
+/dev/nvme2n1p2 on / type btrfs (rw,relatime,seclabel,compress=zstd:1,ssd,space_cache=v2,subvolid=256,subvol=/root)
+/dev/nvme2n1p2 on /home type btrfs (rw,relatime,seclabel,compress=zstd:1,ssd,space_cache=v2,subvolid=258,subvol=/home)
+/dev/nvme2n1p2 on /boot type btrfs (rw,relatime,seclabel,compress=zstd:1,ssd,space_cache=v2,subvolid=257,subvol=/boot)
+/dev/nvme2n1p2 on /var type btrfs (rw,relatime,seclabel,compress=zstd:1,ssd,space_cache=v2,subvolid=259,subvol=/var)
+/dev/nvme2n1p1 on /boot/efi type vfat (rw,relatime,fmask=0077,dmask=0077,codepage=437,iocharset=ascii,shortname=winnt,errors=remount-ro)
+/dev/nvme0n1 on /nvme type xfs (rw,noatime,seclabel,inode64,logbufs=8,logbsize=32k,noquota)

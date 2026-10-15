@@ -1,0 +1,36 @@
+[2026-10-15T02:59:26Z] host aarch64 7.2.10-200.fc44.aarch64 Neoverse-V1 nproc=64 mem=125G
+[2026-10-15T02:59:26Z] os Fedora Linux 44 (Cloud Edition)
+available: 1 nodes (0)
+node 0 cpus: 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63
+node 0 size: 128514 MB
+[2026-10-15T03:00:29Z] hoststate start: chase  4096 MiB thp : 115.8 ns/load (AnonHugePages 4202496 kB) | load 1.02 0.43 0.16 | thp always [madvise] never
+[2026-10-15T03:01:16Z] pg postgres (PostgreSQL) 17.10
+[2026-10-15T03:01:19Z] pgts_rel fa142d04 v1.5.1 so=1aded541  pgts_head a5fdfeb1 v1.5.0-4-ga5fdfeb1 so=5627337e
+[2026-10-15T03:01:24Z] pg_fts so=8db1b7a3 postgres binaries identical: 1
+[2026-10-15T03:02:12Z] corpus md5=f5939e8559543f16e8a2365049836d63 rows=2188038
+[2026-10-15T03:04:26Z] cluster fts rows=2188038 ext=pg_fts 1.13.0
+[2026-10-15T03:06:43Z] cluster pgts_head rows=2188038 ext=pg_textsearch 1.6.0-dev
+[2026-10-15T03:09:00Z] cluster pgts_rel rows=2188038 ext=pg_textsearch 1.5.1
+[2026-10-15T03:09:04Z] SETUP_DONE
+[2026-10-15T03:13:22Z] build pgts_rel ext=1.5.1 s=258.118952836 size=1978318848 all_rels_bytes=1978318848
+[2026-10-15T03:17:43Z] build pgts_head ext=1.6.0-dev s=258.496175476 size=1978318848 all_rels_bytes=1978318848
+[2026-10-15T03:21:25Z] build fts expr s=219.275585839 size=1435443200
+[2026-10-15T03:21:25Z] fts_vacuum s=.019311940 size=1435443200
+[2026-10-15T03:26:06Z] build fts positions s=260.606000600 size=2696986624 all_rels_bytes_excl_docs_pos=1435443200
+[2026-10-15T03:26:23Z] BUILD_DONE
+[2026-10-15T03:27:25Z] hoststate lat_start: chase  4096 MiB thp : 115.8 ns/load (AnonHugePages 4202496 kB) | load 1.23 2.73 2.47 | thp always [madvise] never
+[2026-10-15T04:29:42Z] watch2: latency resumes with bounded slow bands (amendment 6)
+[2026-10-15T04:31:42Z] watch3: latency resumes (amendment 6: >10 s bands median of 3)
+[2026-10-15T04:32:45Z] hoststate lat_start: chase  4096 MiB thp : 115.8 ns/load (AnonHugePages 4202496 kB) | load 1.97 1.66 1.27 | thp always [madvise] never
+[2026-10-15T06:26:35Z] watch3: latency resumes (amendment 6: >10 s bands median of 3)
+[2026-10-15T06:27:38Z] hoststate lat_start: chase  4096 MiB thp : 115.8 ns/load (AnonHugePages 4202496 kB) | load 2.08 2.60 2.01 | thp always [madvise] never
+[2026-10-15T07:28:49Z] hoststate lat_end: chase  4096 MiB thp : 115.8 ns/load (AnonHugePages 4202496 kB) | load 1.66 1.91 1.68 | thp always [madvise] never
+[2026-10-15T07:28:49Z] LAT_DONE
+[2026-10-15T07:32:38Z] agree N=2188038 avgdl=484.8482069324207349
+[2026-10-15T07:33:12Z] AGREE_DONE
+[2026-10-15T07:34:15Z] hoststate tps_start: chase  4096 MiB thp : 115.8 ns/load (AnonHugePages 4202496 kB) | load 1.42 2.10 1.89 | thp always [madvise] never
+[2026-10-15T08:24:22Z] hoststate tps_end: chase  4096 MiB thp : 115.8 ns/load (AnonHugePages 4202496 kB) | load 59.90 91.21 84.89 | thp always [madvise] never
+[2026-10-15T08:24:22Z] TPS_DONE
+[2026-10-15T08:26:06Z] COLD_DONE
+[2026-10-15T08:36:59Z] WRITE_DONE
+[2026-10-15T08:36:59Z] ALL_DONE
