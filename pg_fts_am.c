@@ -2741,6 +2741,12 @@ bm25_doclendir_cache(Relation index, const BM25MetaPageData *meta)
  * registered in _PG_init (pg_fts_customscan.c). */
 int			pg_fts_doclen_cache_mb = 64;
 
+/*
+ * I12 (1.14.0): pending documents past which an insert flushes the pending list
+ * into a segment itself; 0 = never (only VACUUM / fts_merge flush, as before).
+ */
+int			pg_fts_pending_flush_threshold = 20000;
+
 /* GUC (1.10.0): serve the slot arrays from one server-wide shared copy per
  * segment (pg_fts_shdoclen.c).  Off = the 1.9 per-backend copies. */
 bool		pg_fts_shared_doclen = true;
@@ -3899,6 +3905,7 @@ static bool bm25_merge_all(Relation index, bool try_parallel);
 static inline void bm25_maintenance_lock(Relation index);
 static inline void bm25_assert_merge_serialized(Relation index);
 static inline bool bm25_maintenance_lock_conditional(Relation index);
+static bool bm25_flush_pending(Relation index);
 static inline void bm25_maintenance_unlock(Relation index);
 
 /*
@@ -6812,6 +6819,43 @@ bm25_insert_oversized_as_segment(Relation index, FtsDoc doc, ItemPointer tid)
 }
 
 /*
+ * I12 (1.14.0): bound the pending list from the insert path.
+ *
+ * Every ranked scan reads the whole pending list (1.13.0: pending documents are
+ * ranked), and only VACUUM / fts_merge used to flush it.  Under sustained inserts
+ * it grew without bound between flushes: on 2.19M Wikipedia rows a rare-term
+ * top-10 took 0.22 ms with nothing pending, 18.8 ms at 100k pending and 205 ms
+ * at 1M, while 8 inserters ran at 49-50k rows/s regardless.
+ *
+ * So the insert that sees the list at pg_fts.pending_flush_threshold flushes it,
+ * under the maintenance mutex taken CONDITIONALLY: if another backend is already
+ * flushing or merging, this insert returns at once (that flush, or the next
+ * insert past the threshold, does the work).  Other inserters never wait for a
+ * flush: the flush seals the list under the metapage lock for a few page
+ * writes (1.11.0) and folds the sealed pages without holding it, so appends
+ * continue to the fresh tail page throughout.  The level-0 compactor runs after
+ * the flush, as on the oversized-document path, so the segment directory stays
+ * bounded too.
+ */
+static void
+bm25_insert_flush_pending(Relation index)
+{
+	if (!bm25_maintenance_lock_conditional(index))
+		return;
+	PG_TRY();
+	{
+		(void) bm25_flush_pending(index);
+		if (bm25_pending_segments_worth_merging(index))
+			bm25_merge_segments(index);
+	}
+	PG_FINALLY();
+	{
+		bm25_maintenance_unlock(index);
+	}
+	PG_END_TRY();
+}
+
+/*
  * aminsert: append the new document to the pending list.
  *
  * The document is stored verbatim (its ftsdoc bytes) on a chain of pending
@@ -6949,7 +6993,14 @@ bm25_insert(Relation index, Datum *values, bool *isnull,
 	else
 		UnlockReleaseBuffer(tailbuf);
 
-	UnlockReleaseBuffer(metabuf);
+	{
+		uint32		npending = meta->npending;	/* read under the metapage lock */
+
+		UnlockReleaseBuffer(metabuf);
+		if (pg_fts_pending_flush_threshold > 0 &&
+			npending >= (uint32) pg_fts_pending_flush_threshold)
+			bm25_insert_flush_pending(index);
+	}
 	return true;
 }
 

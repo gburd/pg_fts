@@ -5571,21 +5571,55 @@ bestfirst_collect(WandCursor *c, BestFirstBlock **out)
 	return n;
 }
 
+/*
+ * Best-first top-k over ONE term in one or more segments (1.14.0, I12): the
+ * blocks of every cursor go into one max-heap on their exact bound, so the
+ * visit order is the global one and the k-th score stops all segments at once.
+ * Until 1.14.0 this path took one cursor only, and a single term with a cursor
+ * per segment fell to MaxScore: on 2.19M rows a rare-term top-10 went from
+ * 0.22 ms on one segment to 3.8 ms on seven, which is the state an index is in
+ * under continuous inserts (each flush adds a level-0 segment until the tiered
+ * merge runs).  `grp` carries the block's cursor.
+ */
 pg_noinline static int
-fts_search_bestfirst1(WandCursor *c, int k, ScoredTid **out)
+fts_search_bestfirst_n(WandCursor *cs, int ncur, int k, ScoredTid **out)
 {
-	BestFirstBlock *v;
-	int			nb,
-				bi;
+	BestFirstBlock *v = NULL;
+	int			nb = 0,
+				bi,
+				ci;
 	ScoredTid  *heap;
 	int			nheap = 0;
 	int			minpos = 0;
 	double		threshold = -1.0;
 	uint64		tfs[BM25_BLOCK_SIZE];
 
-	nb = bestfirst_collect(c, &v);
-	if (nb < 0)
-		return -1;
+	for (ci = 0; ci < ncur; ci++)
+	{
+		BestFirstBlock *one;
+		int			n1 = bestfirst_collect(&cs[ci], &one);
+
+		if (n1 < 0)
+		{
+			if (v)
+				pfree(v);
+			return -1;
+		}
+		if (n1 > 0)
+		{
+			int			j;
+
+			v = v ? (BestFirstBlock *) repalloc(v, (Size) (nb + n1) * sizeof(BestFirstBlock))	/* alloc-ok: one entry per 128 postings of ONE term */
+				: (BestFirstBlock *) palloc((Size) n1 * sizeof(BestFirstBlock));	/* alloc-ok: as above */
+			for (j = 0; j < n1; j++)
+			{
+				v[nb + j] = one[j];
+				v[nb + j].grp = (uint32) ci;
+			}
+			nb += n1;
+		}
+		pfree(one);
+	}
 	for (bi = nb / 2 - 1; bi >= 0; bi--)
 		bestfirst_siftdown(v, nb, bi);
 	heap = (ScoredTid *) palloc(Max(k, 1) * sizeof(ScoredTid));
@@ -5594,6 +5628,7 @@ fts_search_bestfirst1(WandCursor *c, int k, ScoredTid **out)
 	{
 		int			i;
 		BestFirstBlock top = v[0];
+		WandCursor *c = &cs[top.grp];
 
 		/* every remaining block is bounded by top.bound: once that cannot beat
 		 * the k-th score, nothing left can enter (strict, see above) */
@@ -5603,8 +5638,8 @@ fts_search_bestfirst1(WandCursor *c, int k, ScoredTid **out)
 		bestfirst_siftdown(v, nb, 0);
 		CHECK_FOR_INTERRUPTS();
 		/* prefetch the next block in visit order if it is on another page */
-		if (nb > 0 && v[0].blk != top.blk)
-			PrefetchBuffer(c->index, MAIN_FORKNUM, v[0].blk);
+		if (nb > 0 && (v[0].blk != top.blk || v[0].grp != top.grp))
+			PrefetchBuffer(cs[v[0].grp].index, MAIN_FORKNUM, v[0].blk);
 		/* position the cursor on this block and decode it (wand_load_block
 		 * reads the block at curblk/curoff and copies its payload) */
 		c->curblk = top.blk;
@@ -5678,17 +5713,29 @@ fts_search_bestfirst1(WandCursor *c, int k, ScoredTid **out)
 			}
 		}
 	}
-	if (c->blkbuf)
-		pfree(c->blkbuf);
-	c->blkbuf = NULL;
-	if (c->posbuf)
-		pfree(c->posbuf);
-	c->posbuf = NULL;
-	bm25_doclen_cursor_free(&c->doclenc);
-	pfree(v);
+	for (ci = 0; ci < ncur; ci++)
+	{
+		WandCursor *c = &cs[ci];
+
+		if (c->blkbuf)
+			pfree(c->blkbuf);
+		c->blkbuf = NULL;
+		if (c->posbuf)
+			pfree(c->posbuf);
+		c->posbuf = NULL;
+		bm25_doclen_cursor_free(&c->doclenc);
+	}
+	if (v)
+		pfree(v);
 	qsort(heap, nheap, sizeof(ScoredTid), cmp_scored_desc);
 	*out = heap;
 	return nheap;
+}
+
+pg_noinline static int
+fts_search_bestfirst1(WandCursor *c, int k, ScoredTid **out)
+{
+	return fts_search_bestfirst_n(c, 1, k, out);
 }
 
 /* Admit (tid, score) into the k-entry top-k heap; same rule as bestfirst1. */
@@ -6073,6 +6120,15 @@ fts_search_wand(WandCursor *cursors, int nterms, int k,
 		if (n >= 0)
 			return n;
 		/* inconsistent chain: fall through to the docid-order paths */
+	}
+	else if (nterms > 1 && filter == NULL && gate == NULL && pg_fts_bestfirst &&
+			 cursors_nq(cursors, nterms) == 1)
+	{
+		/* one term, a cursor per segment (I12) */
+		int			n = fts_search_bestfirst_n(cursors, nterms, k, out);
+
+		if (n >= 0)
+			return n;
 	}
 	if (nterms == 1 && filter == NULL && gate == NULL &&
 		pg_fts_dense_score_min_df > 0 &&

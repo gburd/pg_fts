@@ -258,6 +258,7 @@ extern bool fts_trigrams_overlap(const uint32 *a, int na,
 extern int64 bm25_count_visible_oid(Oid indexoid, FtsQuery q);
 extern int pg_fts_build_collapse_max_mb;
 extern int pg_fts_build_mem_ceiling_mb;
+extern int pg_fts_pending_flush_threshold;
 extern int pg_fts_doclen_cache_mb;
 extern bool pg_fts_shared_doclen;
 extern int pg_fts_dense_score_min_df;

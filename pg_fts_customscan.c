@@ -716,6 +716,13 @@ _PG_init(void)
 							64, 0, 1024,
 							PGC_USERSET, GUC_UNIT_MB, NULL, NULL, NULL);
 
+	DefineCustomIntVariable("pg_fts.pending_flush_threshold",
+							"Pending documents past which an insert flushes the pending list into a segment; 0 disables.",
+							"Ranked scans read every pending document, so a long pending list slows them in proportion. The insert that finds the list at this length flushes it (other inserters do not wait); 0 leaves flushing to VACUUM and fts_merge only.",
+							&pg_fts_pending_flush_threshold,
+							20000, 0, INT_MAX,
+							PGC_USERSET, 0, NULL, NULL, NULL);
+
 	DefineCustomIntVariable("pg_fts.build_mem_ceiling_mb",
 							"Per-participant build flush-budget growth ceiling (MB); 0 = 2*maintenance_work_mem.",
 							"Raise to trade RAM for fewer, larger segments on a very large build so its segment count stays under the cap. Peak build memory is about (max_parallel_maintenance_workers + 1) * this. 0 keeps the memory-safe default ceiling.",
