@@ -966,6 +966,30 @@ SELECT * FROM messages
    </varlistentry>
 
    <varlistentry>
+    <term><varname>pg_fts.pending_flush_threshold</varname> (<type>integer</type>, default 20000)</term>
+    <listitem>
+     <para>
+      When the number of documents in an index's unflushed pending list reaches
+      this many, the backend doing the insert folds the pending list into a
+      sorted segment, so a later ranked query does not have to scan it.  A
+      ranked query reads the whole pending list, so without an insert-time
+      flush its latency grows with the number of inserts since the last
+      <command>VACUUM</command> or <function>fts_merge()</function> &mdash; at a
+      million pending documents a rare-term top-10 took 205&nbsp;ms, against
+      0.22&nbsp;ms with none pending.  The flush takes the index's maintenance
+      lock only if it is free: if another backend is already flushing or
+      merging, the inserting backend returns at once and never waits, so inserts
+      do not serialize.  Set to <literal>0</literal> to disable insert-time
+      flushing (the pre-1.14 behaviour); the pending list is then flushed only
+      by <command>VACUUM</command> and <function>fts_merge()</function>.  The
+      flush costs about 7% of insert throughput at the default; raise the
+      threshold to spend less on flushing and more on reads lagging behind
+      writes, lower it to keep ranked reads fast under a heavy write load.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><varname>pg_fts.bestfirst</varname> (<type>boolean</type>, default on)</term>
     <listitem>
      <para>

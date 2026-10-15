@@ -107,6 +107,15 @@
 	 ? repalloc_huge((p), (sz)) \
 	 : repalloc((p), (sz)))
 
+/* vacuum_delay_point gained a bool is_analyze argument in PostgreSQL 18; keep
+ * one spelling for both.  Used by the bulkdelete paths so a long index scan
+ * honours autovacuum_vacuum_cost_delay (it did not before 1.14.0). */
+#if PG_VERSION_NUM >= 180000
+#define FTS_VACUUM_DELAY_POINT() vacuum_delay_point(false)
+#else
+#define FTS_VACUUM_DELAY_POINT() vacuum_delay_point()
+#endif
+
 /*
  * bm25_page_data_end -- validated end of a page's filled area.
  *
@@ -5750,6 +5759,20 @@ bm25_truncate_lock(Relation index, bool *took)
 	*took = false;
 	if (CheckRelationLockedByMe(index, AccessExclusiveLock, true))
 		return true;
+	/*
+	 * A parallel VACUUM leader runs amvacuumcleanup while IsInParallelMode().
+	 * Taking AccessExclusiveLock here would, under wal_level >= replica, log the
+	 * lock for hot standby via LogAccessExclusiveLockPrepare -> and that assigns
+	 * a transaction id, which ERRORs in parallel mode ("cannot assign
+	 * transaction IDs during a parallel operation", xact.c).  We declare
+	 * VACUUM_OPTION_NO_PARALLEL so the leader processes this index itself, but it
+	 * is still in parallel mode when it does.  Decline the truncation exactly as
+	 * when the conditional lock is unavailable: the free tail stays in the FSM
+	 * and a later non-parallel VACUUM or fts_vacuum (which holds the lock)
+	 * reclaims it.
+	 */
+	if (IsInParallelMode())
+		return false;
 	if (!ConditionalLockRelation(index, AccessExclusiveLock))
 		return false;
 	*took = true;
@@ -7343,11 +7366,31 @@ bm25_segment_docids(Relation index, const BM25SegMeta *seg)
 	uint64	   *ids = NULL;
 	int			nids = 0;
 	int			capids = 0;
+	int			batchmax;
 
 	if (seen == NULL)
 		ereport(ERROR,
 				(errcode(ERRCODE_OUT_OF_MEMORY),
 				 errmsg("out of memory building bm25 tombstone map")));
+
+	/*
+	 * Flush the collected docids into `seen` in batches of at most batchmax,
+	 * instead of collecting every posting and adding once.  A single add of the
+	 * whole posting multiset needs about 24 bytes per posting resident (the
+	 * array, sm's sorted copy, and glibc qsort's scratch), which is O(sum of
+	 * df) -- hundreds of times the document count for a high-vocabulary field,
+	 * ignores maintenance_work_mem, and took a production index to 23 GB and an
+	 * OOM for a one-row delete (CHANGELOG 1.14.0).  A bounded batch caps the
+	 * resident temporary at ~24 bytes x batchmax regardless of segment size.
+	 * The O(N^2) that one-add-per-term caused (14d84a4) does not return: each
+	 * batch is still one ordered sm_add_many_grow (sorted, cursor threaded), and
+	 * a few-million-entry batch keeps the call count small (hundreds, not one
+	 * per term).  Sized from maintenance_work_mem / 24 so the knob finally means
+	 * something; clamped to a sane window.
+	 */
+	batchmax = (int) Min((int64) INT_MAX,
+						 Max((int64) 1024 * 1024,
+							 ((int64) maintenance_work_mem * 1024L) / 24));
 
 	/* seen is a libc-malloc sparsemap: free it if the page reads / bulk add
 	 * below throw, else it would leak past transaction abort.  volatile: the
@@ -7357,14 +7400,34 @@ bm25_segment_docids(Relation index, const BM25SegMeta *seg)
 	PG_TRY();
 	{
 	/*
-	 * Collect EVERY posting's docid across all terms into one array, then do a
-	 * SINGLE bulk add.  A high-vocabulary segment has millions of low-frequency
-	 * (often single-doc) terms; adding each term's postings with its own
-	 * sm_add_many_grow call restarts the sparsemap cursor per call, so the adds
-	 * are effectively unsorted and each re-walks the chunk chain -> O(N^2) (the
-	 * CIC-validate / VACUUM spin observed at scale).  One bulk add over the full
-	 * array sorts once and threads the cursor across the whole ascending run =
-	 * true O(N).
+	 * Fast path: a v4 segment carries a doclen sidecar whose chain IS the
+	 * segment's ascending docid list (bm25_doclens_load).  That is exactly the
+	 * universe we want, at O(ndocs) memory and ZERO posting decodes -- about 3M
+	 * docids instead of ~1B postings for the reporter's segment 0.  Only the
+	 * inline-doclen case (doclen_sidecar=off, or an older v3 segment) has to
+	 * walk the dictionary and decode postings.
+	 */
+	if (seg->doclenstart != InvalidBlockNumber)
+	{
+		BM25Doclens d;
+
+		bm25_doclens_load(index, seg->doclenstart, &d);
+		if (d.n > 0 && !sm_add_many_grow(&seen, d.docids, d.n))
+		{
+			seen_v = seen;
+			bm25_doclens_free(&d);
+			ereport(ERROR,
+					(errcode(ERRCODE_OUT_OF_MEMORY),
+					 errmsg("out of memory building bm25 livedocs set")));
+		}
+		seen_v = seen;
+		bm25_doclens_free(&d);
+		blk = InvalidBlockNumber;	/* skip the posting walk below */
+	}
+
+	/*
+	 * Inline-doclen fallback: walk the dictionary, decode each term's docids,
+	 * and flush to `seen` in bounded batches.
 	 */
 	while (blk != InvalidBlockNumber)
 	{
@@ -7373,6 +7436,12 @@ bm25_segment_docids(Relation index, const BM25SegMeta *seg)
 		char	   *ptr,
 				   *end;
 		BlockNumber next;
+
+		/* a huge segment's dict chain can run for minutes; stay cancellable and
+		 * honour cost-based delay (neither was true before 1.14.0 -- cancel had
+		 * no effect until the whole segment finished). */
+		CHECK_FOR_INTERRUPTS();
+		FTS_VACUUM_DELAY_POINT();
 
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buffer);
@@ -7396,6 +7465,7 @@ bm25_segment_docids(Relation index, const BM25SegMeta *seg)
 				if (nids + np > capids)
 				{
 					capids = Max(nids + np, capids ? capids * 2 : 4096);
+					capids = Min(capids, Max(batchmax, nids + np));
 					ids = ids ? FTS_REALLOC_MAYBE_HUGE(ids, (Size) capids * sizeof(uint64))
 						: (uint64 *) FTS_ALLOC_MAYBE_HUGE((Size) capids * sizeof(uint64));
 				}
@@ -7404,6 +7474,21 @@ bm25_segment_docids(Relation index, const BM25SegMeta *seg)
 			}
 			pfree(post);
 			ptr += esize;
+
+			/* flush a full batch into the map so the resident temporary stays
+			 * bounded (~24 bytes x batchmax) no matter how large the segment is */
+			if (nids >= batchmax)
+			{
+				if (!sm_add_many_grow(&seen, ids, nids))
+				{
+					seen_v = seen;
+					ereport(ERROR,
+							(errcode(ERRCODE_OUT_OF_MEMORY),
+							 errmsg("out of memory building bm25 livedocs set")));
+				}
+				seen_v = seen;
+				nids = 0;
+			}
 		}
 		UnlockReleaseBuffer(buffer);
 		blk = next;
@@ -7590,6 +7675,16 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 				 v = sm_next_member(seen, v, &cur))
 			{
 				ItemPointerData tid;
+
+				/* a segment with millions of live docids runs this loop for a
+				 * long time; stay cancellable and cost-delayable (before 1.14.0
+				 * a cancel sat until the whole segment finished -- 18 s in the
+				 * reporter's 400k repro). */
+				if ((num_index_tuples & 0x3fff) == 0)
+				{
+					CHECK_FOR_INTERRUPTS();
+					FTS_VACUUM_DELAY_POINT();
+				}
 
 				num_index_tuples++;
 				if (sm_contains(dead, v, &ccur))

@@ -4,6 +4,75 @@ All notable changes to pg_fts are documented here.
 
 ## Unreleased
 
+## 1.14.0 - 2026-10-16
+
+Two VACUUM fixes reported from production, plus two planner and write-path fixes
+for ranked search under load (ROADMAP I11, I12).
+**No on-disk format change; no REINDEX.**  One SQL change (a new restriction
+estimator), so `pg_fts--1.13.0--1.14.0.sql` rewires the `@@@` operators; existing
+indexes keep working unchanged.
+
+### Fixed
+
+- **VACUUM could exhaust memory and OOM the server** (reported by pg.ddx.io
+  operators; present since 1.1.5).  `bm25_bulkdelete` enumerated a segment's live
+  docids by decoding every (term, document) posting into one array and adding it
+  to a sparsemap in a single call: about 24 bytes per posting resident, which is
+  the number of postings (hundreds of times the document count for a
+  high-vocabulary field), not the number of dead tuples.  A one-row delete cost
+  the same as a million, it ignored `maintenance_work_mem`, and a production index
+  with 977M postings in one segment grew a VACUUM to 13.9 GB and was OOM-killed.
+  A v4 segment (the default `doclen_sidecar=on`) now reads its ascending docid
+  list straight from the doclen sidecar at O(documents) with zero posting
+  decodes; an inline-doclen segment (`doclen_sidecar=off`, or an older v3 segment)
+  walks the dictionary but flushes to the map in batches sized from
+  `maintenance_work_mem / 24`, so the knob finally bounds the peak.  Measured on a
+  400k-document index (120M postings): a one-row `VACUUM (INDEX_CLEANUP ON)` fell
+  from 1,429 MB to 151 MB with the sidecar on, and a 5%-deleted VACUUM from 2,820
+  MB to 157 MB.  Both bulkdelete loops now call `CHECK_FOR_INTERRUPTS()` and
+  `vacuum_delay_point()`, so a long index pass is cancellable and honours
+  `autovacuum_vacuum_cost_delay`.
+- **Manual VACUUM failed with "cannot assign transaction IDs during a parallel
+  operation"** on PostgreSQL 18 (reported by pg.ddx.io operators; introduced in
+  1.11.0, ada32aa).  A manual VACUUM of a table with an fts index plus two or more
+  other large indexes uses parallel index vacuuming; the fts index's cleanup
+  truncated its free tail, taking `AccessExclusiveLock`, which under
+  `wal_level >= replica` logs the lock for hot standby and so assigns a
+  transaction id -- an ERROR in parallel mode.  The whole VACUUM rolled back, so
+  `relfrozenxid` did not advance.  `bm25_truncate_lock` now declines truncation in
+  parallel mode; the free tail stays in the FSM and a later non-parallel VACUUM or
+  `fts_vacuum()` reclaims it, exactly as when the conditional lock is unavailable.
+  Reproduced and fixed against PostgreSQL 18.6; autovacuum and
+  `VACUUM (PARALLEL 0)` were never affected.
+- **I11 -- a ranked `ORDER BY d <=> q LIMIT k` on an expression index chose a
+  bitmap scan + Sort** that re-evaluated the index expression once per matching
+  row: 21.6 s for a common term at 50k rows, against 44 ms on the ordering index
+  scan.  The `@@@` operators used `tsmatchsel`, whose fixed default estimated the
+  same row count for a term in 0.5% of the corpus and one in 45% of it.  The new
+  `fts_matchsel` reads the query's match-count bound from the index dictionary
+  (a term's df, AND/phrase the min, OR the sum), so the planner prices a common
+  term differently from a rare one.  It falls back to `tsmatchsel` for a
+  non-constant query, a column with no bm25 index, or a join clause, so no plan
+  that worked before changes.
+
+### Changed
+
+- **I12 -- ranked reads no longer collapse under sustained inserts.**  A ranked
+  query reads the whole unflushed pending list, so its latency grew with the
+  inserts since the last `VACUUM`/`fts_merge()` (0.22 ms with none pending, 205
+  ms at a million pending).  Two changes:
+  - a new GUC `pg_fts.pending_flush_threshold` (default 20000, 0 disables): the
+    insert that finds the pending list at the threshold folds it into a segment,
+    taking the maintenance lock only if free, so inserters never wait on each
+    other.  Insert-only cost is about 7%.
+  - a single term spread across many segments now runs one global best-first
+    pass instead of falling back to the slower MaxScore path, so the extra
+    segments a flush creates do not slow single-term reads: at 7 segments a rare
+    top-10 went 3.80 ms to 0.26 ms, with identical results.
+  - Mixed load (8 inserters + 8 rare-term readers, 2.19M rows): ranked reads
+    rose from 97 to 3,223 per second at 10% fewer inserts, every inserted row
+    found.
+
 ### Benchmarks
 
 - **pg_fts 1.13.0 vs pg_textsearch on bare metal** (`bench/RESULTS_PGTS_METAL_2026-10-15.md`):
@@ -12,13 +81,8 @@ All notable changes to pg_fts are documented here.
   - **pg_fts is faster** on 11 of 13 latency bands on x86 and 12 of 13 on arm, the
     rest equal, with every call reproduced on both hosts.  Its throughput is 3.4-150x
     higher.  It builds 14-15% faster and its index is 27% smaller.
-  - **pg_textsearch is faster** on a cold single-term first query (19-36 ms) and on
-    ranked reads under sustained inserts (5-25x).  pg_fts's pending list is read by
-    every ranked query (ROADMAP I12).
-- **Found by its smoke test:** a ranked `LIMIT >= 250` on an expression index takes a
-  bitmap + Sort plan that re-analyses every match: 21.6 s instead of 4-7 ms at 50k
-  rows.  The `@@@` selectivity is `tsmatchsel`'s default and `to_ftsdoc` is COST 1
-  (ROADMAP I11, every release).  At 2.19M rows the planner chose the ordering scan.
+  - **pg_textsearch is faster** on a cold single-term first query (19-36 ms) and
+    (before the I12 fix above) on ranked reads under sustained inserts.
 
 ## 1.13.0 - 2026-10-15
 
