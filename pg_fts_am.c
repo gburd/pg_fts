@@ -6905,6 +6905,10 @@ bm25_insert(Relation index, Datum *values, bool *isnull,
 	Buffer		tailbuf;
 	Page		tailpage;
 	bool		appended = false;
+	uint32		npending = 0;	/* captured from meta->npending while the metapage
+								 * pointer is live, i.e. before GenericXLogFinish;
+								 * read afterwards it is a use-after-free (the
+								 * registered page is copied back and invalidated) */
 
 	if (isnull[0])
 		return false;
@@ -6954,6 +6958,7 @@ bm25_insert(Relation index, Datum *values, bool *isnull,
 			meta->ndocs += 1.0;
 			meta->sumdoclen += doc->doclen;
 			meta->npending += 1;
+			npending = meta->npending;
 			GenericXLogFinish(state);
 			appended = true;
 		}
@@ -6997,6 +7002,7 @@ bm25_insert(Relation index, Datum *values, bool *isnull,
 			meta->ndocs += 1.0;
 			meta->sumdoclen += doc->doclen;
 			meta->npending += 1;
+			npending = meta->npending;
 			GenericXLogFinish(state);
 			UnlockReleaseBuffer(oldtail);
 		}
@@ -7009,6 +7015,7 @@ bm25_insert(Relation index, Datum *values, bool *isnull,
 			meta->ndocs += 1.0;
 			meta->sumdoclen += doc->doclen;
 			meta->npending += 1;
+			npending = meta->npending;
 			GenericXLogFinish(state);
 		}
 		UnlockReleaseBuffer(newbuf);
@@ -7017,8 +7024,6 @@ bm25_insert(Relation index, Datum *values, bool *isnull,
 		UnlockReleaseBuffer(tailbuf);
 
 	{
-		uint32		npending = meta->npending;	/* read under the metapage lock */
-
 		UnlockReleaseBuffer(metabuf);
 		if (pg_fts_pending_flush_threshold > 0 &&
 			npending >= (uint32) pg_fts_pending_flush_threshold)
