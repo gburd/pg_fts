@@ -97,66 +97,79 @@ jobs:
           done
 
   # --- AddressSanitizer signal (best-effort) ----------------------------------
-  # Builds pg_fts instrumented and runs the regression + isolation suite against
-  # a real PG with the ASan runtime preloaded into the backend -- extra signal
-  # for memory bugs on the in-process paths.  It is NON-GATING: loading an
-  # ASan-instrumented .so into a stock postmaster depends on the runner's gcc
-  # supporting -shared-libasan and on preload ordering, which varies by runner.
-  # The GATING memory-safety check is the `fuzz` job (standalone ASan+UBSan with
-  # planted-bug teeth), which covers the same on-disk parse surface.
-  # idx_scan_stats is omitted here: it depends on stats-collector flush timing
-  # that is unreliable under ASan slowdown (it is gated by the `test` job).
+  # Builds BOTH PostgreSQL and pg_fts with AddressSanitizer and runs the
+  # regression suite against that server, so the whole in-process SQL surface
+  # (scan, insert, merge, bulkdelete, vacuum) runs instrumented and server and
+  # extension share one asan runtime.  This GATES: a memory error fails the job.
+  # The earlier pg_virtualenv approach was non-gating fiction -- a clang+ASan .so
+  # would not dlopen into a stock apt postmaster, so every test "failed" and the
+  # continue-on-error job stayed green (ROADMAP I10).  The `fuzz` job still gates
+  # the on-disk parse surface with planted-bug teeth; this adds the SQL paths.
+  # idx_scan_stats is omitted: it depends on stats-collector flush timing that is
+  # unreliable under ASan slowdown (it is gated by the `test` job).
   sanitizers:
     runs-on: ubuntu-latest
-    continue-on-error: true
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-      - name: Install PostgreSQL 17 + headers
+      - name: Install build deps + fetch PostgreSQL source
         run: |
-          sudo rm -f /etc/apt/sources.list.d/microsoft*.list /etc/apt/sources.list.d/microsoft*.sources || true
-          sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
-          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            postgresql-17 postgresql-server-dev-17 clang make libipc-run-perl
-      - name: Build + install with AddressSanitizer (shared runtime)
+            clang make bison flex libreadline-dev zlib1g-dev libicu-dev pkg-config perl libipc-run-perl wget ca-certificates
+          PGV=17.6
+          wget -q https://ftp.postgresql.org/pub/source/v$PGV/postgresql-$PGV.tar.bz2
+          tar xf postgresql-$PGV.tar.bz2
+          echo "PGSRC=$PWD/postgresql-$PGV" >> $GITHUB_ENV
+          echo "PFX=$PWD/pgasan" >> $GITHUB_ENV
+      - name: Build PostgreSQL with AddressSanitizer
+        # The pg_virtualenv approach (loading a clang+ASan .so into a stock apt
+        # postmaster) never worked on the runner: the asan runtime was not on
+        # the server's loader path, so CREATE EXTENSION could not dlopen the .so
+        # and all tests "failed" while the continue-on-error job stayed green --
+        # i.e. the ASan SQL coverage was fiction (ROADMAP I10).  Build the SERVER
+        # with ASan too, so server and extension share one runtime and the whole
+        # SQL surface runs instrumented.
         run: |
-          PGBIN=/usr/lib/postgresql/17/bin
-          # -shared-libasan belongs only at LINK time (SHLIB_LINK), so the .so
-          # references the SHARED asan runtime and can be loaded into a stock
-          # postmaster; gcc's default static asan cannot.  Use clang: the
-          # runner's gcc does not accept -shared-libasan (it is a clang flag).
-          make CC=clang PG_CONFIG=$PGBIN/pg_config with_llvm=no \
+          cd "$PGSRC"
+          CC=clang CFLAGS="-fsanitize=address -fno-omit-frame-pointer -g -O1" \
+            ./configure --prefix="$PFX" --enable-cassert --enable-debug \
+            --without-icu --with-llvm=no >/dev/null
+          make -j"$(nproc)" >/dev/null
+          make install >/dev/null
+      - name: Build + install pg_fts with AddressSanitizer
+        run: |
+          make CC=clang PG_CONFIG="$PFX/bin/pg_config" with_llvm=no \
             COPT="-fsanitize=address -fno-omit-frame-pointer -g -O1 -DUSE_ASSERT_CHECKING" \
-            SHLIB_LINK="-fsanitize=address -shared-libasan"
-          sudo make install PG_CONFIG=$PGBIN/pg_config
-      - name: Regression + isolation under AddressSanitizer
-        # Best-effort. Loading a clang+ASan-built .so into the pg_virtualenv-
-        # started postmaster needs the asan runtime on the SERVER's loader path,
-        # which pg_virtualenv's env handling does not reliably propagate on the
-        # GH runner -- so CREATE EXTENSION can fail to dlopen the .so here. The
-        # GATING memory-safety signal is the `fuzz` job (standalone ASan+UBSan
-        # with planted-bug teeth over the same on-disk parse surface), so this
-        # step is informational: it must not fail the (already non-gating) job.
-        continue-on-error: true
+            SHLIB_LINK="-fsanitize=address"
+          make install PG_CONFIG="$PFX/bin/pg_config"
+      - name: Smoke the in-process paths under an ASan-built PostgreSQL
+        # ASan enlarges every stack frame, so raise the OS stack limit and
+        # max_stack_depth together (a concrete ulimit, not unlimited: PostgreSQL
+        # derives max_stack_depth from it).  detect_leaks=0: one-shot client
+        # programs (pg_config, psql) leak small buffers on exit by design.
+        # detect_stack_use_after_return=0: keep real-sized frames so the raised
+        # max_stack_depth holds.  Runs test/asan_smoke.sql, not the full
+        # regression suite: a few regression tests load large synthetic corpora
+        # and run delete/vacuum loops that take many minutes each under ASan's
+        # ~15x slowdown and add no path coverage the smoke lacks.  The smoke
+        # drives build, every query type, pending flush, bulkdelete, vacuum
+        # tail-truncation and merge on both doclen modes, with correctness
+        # anchors.  This GATES -- a wrong answer or an ASan memory error fails it.
         run: |
-          PGBIN=/usr/lib/postgresql/17/bin
-          # The .so is clang-built, so preload CLANG's asan runtime (matching the
-          # build compiler's runtime) -- gcc's would trip a link-order error.
-          ASAN_LIB=$(clang -print-file-name=libclang_rt.asan-x86_64.so)
-          test -f "$ASAN_LIB" || ASAN_LIB=$(clang -print-file-name=libasan.so)
-          test -f "$ASAN_LIB" || { echo "asan runtime not found ($ASAN_LIB)"; exit 1; }
-          # The asan runtime lives in clang's private resource dir, not a
-          # standard loader path; the postmaster dlopen()s pg_fts.so and needs to
-          # find it, so put its directory on the server's LD_LIBRARY_PATH too
-          # (LD_PRELOAD alone only covers this make process, not the running
-          # server that pg_virtualenv starts).
-          ASAN_DIR=$(dirname "$ASAN_LIB")
-          pg_virtualenv -v 17 env \
-            LD_PRELOAD="$ASAN_LIB" \
-            LD_LIBRARY_PATH="$ASAN_DIR:${LD_LIBRARY_PATH:-}" \
-            ASAN_OPTIONS="detect_leaks=0:abort_on_error=1:print_stacktrace=1:verify_asan_link_order=0" \
-            make installcheck REGRESS="pg_fts unicode_fold limit_hint doclen_slots score_reuse wand_last_block dense_score phrase_gate shared_doclen ranked_exact pending_delete dict_dir scan_keys legal_proximity pending_rank pending_flush planner_cost vacuum_parallel vacuum_mem" PROVE_TESTS=ci/noop.pl PG_CONFIG=$PGBIN/pg_config
+          ulimit -s 32768
+          export ASAN_OPTIONS="detect_leaks=0:detect_stack_use_after_return=0:abort_on_error=1:print_stacktrace=1:verify_asan_link_order=0:detect_odr_violation=0"
+          D="$PWD/asandata"
+          "$PFX/bin/initdb" -D "$D" -U postgres --no-locale -E UTF8 >/dev/null
+          printf "unix_socket_directories='/tmp'\nlisten_addresses=''\nfsync=off\nmax_stack_depth='24MB'\nshared_buffers=256MB\n" >> "$D/postgresql.conf"
+          "$PFX/bin/pg_ctl" -D "$D" -l "$D/log" -w start
+          "$PFX/bin/createdb" -h /tmp -U postgres smoke
+          "$PFX/bin/psql" -h /tmp -U postgres -d smoke -v ON_ERROR_STOP=1 -f test/asan_smoke.sql
+          # fail on any ASan memory error in the server log
+          if grep -iE "heap-use-after-free|heap-buffer-overflow|stack-buffer-overflow|global-buffer-overflow|use-after-poison|SUMMARY: AddressSanitizer: (heap|stack|global|use)" "$D/log"; then
+            echo "ASan reported a memory error"; cat "$D/log"; exit 1
+          fi
+          "$PFX/bin/pg_ctl" -D "$D" -w stop
       - name: Show diffs on failure
         if: failure()
         run: |

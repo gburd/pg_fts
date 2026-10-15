@@ -35,11 +35,25 @@ now guarded two ways:
   builds (an un-clamped count, a signed-count bypass, a corrupt width) that
   *must* abort under ASan, so a regression that removed a guard would be caught
   by the harness failing to catch it.
-- **In-process AddressSanitizer run** (best-effort signal). The regression +
-  isolation suite also runs against a real PostgreSQL with an ASan-instrumented
-  `pg_fts.so`. It is non-gating because loading an instrumented shared library
-  into a stock postmaster is runner-dependent; the fuzz gate is the hard
-  memory-safety check.
+- **In-process AddressSanitizer run** (`sanitizers` CI job, gating). The
+  memory-critical SQL paths -- index build, ranked and boolean scans, bulkdelete,
+  VACUUM compaction and tail truncation, segment merge -- run against a
+  PostgreSQL that is itself built with AddressSanitizer, with an ASan-built
+  `pg_fts.so` loaded into it, so server and extension share one runtime and the
+  in-process paths run instrumented.  An earlier version loaded the instrumented
+  `.so` into a stock `pg_virtualenv` postmaster; that never worked (the asan
+  runtime was not on the server's loader path, so `CREATE EXTENSION` could not
+  load the library) and the job was `continue-on-error`, so it reported success
+  while running nothing -- fixed by building the server with ASan too.  ASan
+  enlarges every stack frame, so the job raises the OS stack limit (`ulimit -s
+  32768`) and `max_stack_depth` (24 MB) together and runs with
+  `ASAN_OPTIONS=detect_leaks=0:detect_stack_use_after_return=0` (the one-shot
+  client programs leak small buffers on exit by design; keeping real-sized frames
+  lets the raised stack depth hold).  The job runs a focused subset, not every
+  regression test: a few tests load large synthetic high-repetition corpora whose
+  per-posting work is impractically slow under ASan's ~15x slowdown, and they add
+  no memory-path coverage the focused set lacks.  The job fails on any ASan memory
+  error in the server log.
 
 ## Property-based tests (hegel)
 
