@@ -256,6 +256,7 @@ extern bool fts_trigrams_overlap(const uint32 *a, int na,
 
 /* pg_fts_am_scan.c -- count entry point reused by the COUNT-pushdown CustomScan */
 extern int64 bm25_count_visible_oid(Oid indexoid, FtsQuery q);
+extern double bm25_estimate_matchfrac(Oid indexoid, FtsQuery q);
 extern int pg_fts_build_collapse_max_mb;
 extern int pg_fts_build_mem_ceiling_mb;
 extern int pg_fts_pending_flush_threshold;

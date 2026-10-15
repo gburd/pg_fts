@@ -7261,6 +7261,44 @@ bm25_count_visible_oid(Oid indexoid, FtsQuery q)
 	return c;
 }
 
+/*
+ * bm25_estimate_matchfrac: the planner's selectivity for `d @@@ q` on this index
+ * (fts_matchsel, pg_fts_customscan.c).  It is maxhits / N, where maxhits is the
+ * query's provable match-count bound from the dictionary df (bm25_query_maxhits:
+ * a term's df, AND/PHRASE the min, OR the sum, NOT or an expansion the corpus
+ * size) and N is the live document count.  A real estimate from the index
+ * instead of tsmatchsel's fixed default, so a common term is not priced like a
+ * rare one -- which made the planner choose a bitmap scan + Sort for an
+ * ORDER BY <=> LIMIT (I11): the Sort then re-evaluated the index expression per
+ * match.  Returns -1 if the index is not a bm25 index (the caller falls back).
+ */
+double
+bm25_estimate_matchfrac(Oid indexoid, FtsQuery q)
+{
+	Relation	index;
+	BM25MetaPageData meta;
+	double		n,
+				hits,
+				frac;
+
+	index = index_open(indexoid, AccessShareLock);
+	if (index->rd_rel->relam != get_index_am_oid("fts", true))
+	{
+		index_close(index, AccessShareLock);
+		return -1.0;
+	}
+	bm25_read_meta(index, &meta);
+	n = meta.ndocs < 1.0 ? 1.0 : meta.ndocs;
+	hits = bm25_query_maxhits(index, q, n);
+	index_close(index, AccessShareLock);
+	frac = hits / n;
+	if (frac < 0.0)
+		frac = 0.0;
+	if (frac > 1.0)
+		frac = 1.0;
+	return frac;
+}
+
 PG_FUNCTION_INFO_V1(fts_count);
 
 /* fts_count(regclass, ftsquery) -> bigint : MVCC-correct count via the index */

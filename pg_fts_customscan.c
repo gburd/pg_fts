@@ -49,6 +49,10 @@
 #include "utils/syscache.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_language.h"
+#include "catalog/pg_am.h"
+#include "utils/selfuncs.h"
+#include "optimizer/plancat.h"
+#include "access/relation.h"
 
 #include "pg_fts.h"
 #include "pg_fts_am.h"			/* bm25_init_reloptions */
@@ -299,6 +303,113 @@ fts_planner(Query *parse, const char *query_string, int cursorOptions,
 			fts_hint_walk((Plan *) lfirst(lc), ftsqueryoid, distfn);
 	}
 	return stmt;
+}
+
+/*
+ * fts_matchsel(root, operator, args, varRelid) -> selectivity for `d @@@ q`.
+ *
+ * The RESTRICT estimator of the @@@ operators (SQL, 1.14.0).  It replaces
+ * tsmatchsel, whose default (0.005, so 250 rows per 50k whatever the term) made
+ * the planner choose a bitmap scan + Sort for `ORDER BY d <=> q LIMIT k` on an
+ * expression index; the Sort then re-evaluated the index expression for every
+ * matching row (I11: 21.6 s at 50k rows against 4-7 ms on the ordering scan).
+ *
+ * For a Const ftsquery whose other side names a bm25 index on the rel, the
+ * selectivity is the query's match-count bound from the dictionary df over N
+ * (bm25_estimate_matchfrac).  Anything else -- a non-Const query, no bm25 index
+ * on that column, a join clause -- falls back to tsmatchsel, so no plan that
+ * worked before regresses.
+ */
+PG_FUNCTION_INFO_V1(fts_matchsel);
+Datum
+fts_matchsel(PG_FUNCTION_ARGS)
+{
+	PlannerInfo *root = (PlannerInfo *) PG_GETARG_POINTER(0);
+	List	   *args = (List *) PG_GETARG_POINTER(2);
+	int			varRelid = PG_GETARG_INT32(3);
+	Node	   *left,
+			   *right,
+			   *varside,
+			   *constside;
+	Const	   *qconst;
+	VariableStatData vardata;
+	Oid			indexoid = InvalidOid;
+	double		frac = -1.0;
+
+	if (list_length(args) != 2)
+		return DirectFunctionCall4(tsmatchsel, PG_GETARG_DATUM(0), PG_GETARG_DATUM(1),
+								   PG_GETARG_DATUM(2), PG_GETARG_DATUM(3));
+	left = (Node *) linitial(args);
+	right = (Node *) lsecond(args);
+
+	/* one side a plan-time Const ftsquery, the other the indexed expression */
+	if (IsA(right, Const) && !((Const *) right)->constisnull)
+	{
+		constside = right;
+		varside = left;
+	}
+	else if (IsA(left, Const) && !((Const *) left)->constisnull)
+	{
+		constside = left;
+		varside = right;
+	}
+	else
+		goto fallback;
+	qconst = (Const *) constside;
+
+	/* find a bm25 index on `rel` whose indexed expression equals varside */
+	examine_variable(root, varside, varRelid, &vardata);
+	if (vardata.rel != NULL)
+	{
+		RangeTblEntry *rte = planner_rt_fetch(vardata.rel->relid, root);
+
+		if (rte != NULL && rte->rtekind == RTE_RELATION)
+		{
+			Relation	heap = try_table_open(rte->relid, AccessShareLock);
+
+			if (heap != NULL)
+			{
+				List	   *il = RelationGetIndexList(heap);
+				ListCell   *ic;
+
+				foreach(ic, il)
+				{
+					Relation	ind = index_open(lfirst_oid(ic), AccessShareLock);
+					bool		match = false;
+
+					if (ind->rd_rel->relam == get_index_am_oid("fts", true))
+					{
+						if (ind->rd_indexprs != NIL)
+							match = equal(linitial(ind->rd_indexprs), varside);
+						else if (ind->rd_index->indnatts == 1 && IsA(varside, Var) &&
+								 ((Var *) varside)->varno == vardata.rel->relid &&
+								 ((Var *) varside)->varattno == ind->rd_index->indkey.values[0])
+							match = true;
+					}
+					if (match)
+						indexoid = RelationGetRelid(ind);
+					index_close(ind, AccessShareLock);
+					if (OidIsValid(indexoid))
+						break;
+				}
+				list_free(il);
+				table_close(heap, AccessShareLock);
+			}
+		}
+	}
+	ReleaseVariableStats(vardata);
+
+	if (OidIsValid(indexoid))
+		frac = bm25_estimate_matchfrac(indexoid,
+									   (FtsQuery) DatumGetPointer(qconst->constvalue));
+	if (frac >= 0.0)
+	{
+		CLAMP_PROBABILITY(frac);
+		PG_RETURN_FLOAT8(frac);
+	}
+fallback:
+	return DirectFunctionCall4(tsmatchsel, PG_GETARG_DATUM(0), PG_GETARG_DATUM(1),
+							   PG_GETARG_DATUM(2), PG_GETARG_DATUM(3));
 }
 
 /*

@@ -131,6 +131,16 @@ RETURNS boolean
 AS 'MODULE_PATHNAME'
 LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
+-- Restriction-selectivity estimator for @@@ (1.14.0): estimate `d @@@ q` from
+-- the bm25 index's dictionary df rather than tsmatchsel's fixed default, so the
+-- planner prices a common term differently from a rare one (fixes a bitmap+Sort
+-- plan for ORDER BY d <=> q LIMIT k on an expression index).  Falls back to
+-- tsmatchsel when the query is not a plan Const or no bm25 index matches.
+CREATE FUNCTION fts_matchsel(internal, oid, internal, integer)
+RETURNS double precision
+AS 'MODULE_PATHNAME', 'fts_matchsel'
+LANGUAGE C STRICT;
+
 CREATE FUNCTION fts_match_commutator(ftsquery, ftsdoc)
 RETURNS boolean
 AS 'MODULE_PATHNAME'
@@ -141,7 +151,7 @@ CREATE OPERATOR @@@ (
     RIGHTARG   = ftsquery,
     PROCEDURE  = fts_match,
     COMMUTATOR = @@@,
-    RESTRICT   = tsmatchsel,
+    RESTRICT   = fts_matchsel,
     JOIN       = tsmatchjoinsel
 );
 
@@ -150,7 +160,7 @@ CREATE OPERATOR @@@ (
     RIGHTARG   = ftsdoc,
     PROCEDURE  = fts_match_commutator,
     COMMUTATOR = @@@,
-    RESTRICT   = tsmatchsel,
+    RESTRICT   = fts_matchsel,
     JOIN       = tsmatchjoinsel
 );
 
