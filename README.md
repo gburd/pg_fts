@@ -262,6 +262,14 @@ Example
 Performance
 -----------
 
+**1.13.0** (`bench/RESULTS_130_2026-10-15.md`) adds compound proximity (GitHub PR #12)
+and was measured against 1.12.1 on one EC2 host, 2M rows, `positions = on`, with
+identical results for every query.  Plain ranked and boolean queries are unchanged.
+A NOT over a phrase, or a phrase ORed with a term, is 20-240x faster:
+`rare & !"hot dog"` went from 9.5 s to 0.14 s and `w5 | "hot dog"` from 1.6 s to 0.08 s
+(ranked top-10).  `common & !w3` as a count went from 2.2 s to 0.16 s.  One shape is
+slower: `"hot dog" & w7`, +8% ranked and +13% as a count.
+
 **1.12.0** (`bench/RESULTS_112_2026-10-09.md`) changes ranked queries only, measured
 against 1.11.0 on the same hosts and indexes: identical results; single-client rare /
 common top-10 0.54 / 0.67 -> 0.27 / 0.36 ms; throughput at 16-64 clients rare +67-97%,

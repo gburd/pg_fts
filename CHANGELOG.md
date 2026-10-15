@@ -87,6 +87,12 @@ SQL objects (`pg_fts--1.12.1--1.13.0.sql` is a no-op).
   `apple & !"bravo cherry"` rechecked 152,123 rows on 1.12.1 and 0 now.
 - **`a & !b` no longer decodes every posting list in the segment**: the NOT universe is
   built only for a negated final result.
+- **A NOT over a phrase no longer sends the whole segment to the recheck.**  1.12.1
+  fixed the under-count (#8) by widening the subset to the universe at the root, so
+  `w5 & !"hot dog"` handed every row to the heap recheck: 9.4 s on 2M rows.  It is now
+  widened at the first AND/OR above it, the tightest sound place: 38 ms for the ranked
+  top-10 and 48 ms for the bitmap count.  `rare & !"hot dog"` went from 9.6 s to 0.14 s.
+  This is the A/B below.
 
 ### Follow-ups found while porting (not in the PR)
 
@@ -101,8 +107,43 @@ SQL objects (`pg_fts--1.12.1--1.13.0.sql` is a no-op).
   by the pending share.  The new `pending_rank` test checks that the top-30 ids and
   distances of 7 queries are identical before and after the flush.  It fails on 1.12.1
   (4 of 7 wrong), without the df change (2 of 7), and without the merge.
-- The lazy phrase gate (1.9.1) takes only PHRASE/NEAR chains.  Exact `<N>`, `w/N` and
-  OR-anchored shapes take the collect path, which verifies them.
+- The lazy phrase gate (1.9.1) now chains exact steps too.  A quoted phrase has been an
+  exact `<->` since the PR, and the gate had accepted only PHRASE, so ranked
+  `"hot dog"` had lost it (16.5 ms to 29.8 ms); it is back to 16.5 ms.  Only left-deep
+  chains use the gate: `w/N`, OR-anchored and nested shapes take the collect path,
+  which verifies them.
+
+### Measured (1.12.1 vs 1.13.0)
+
+Setup:
+- One Debian 13 EC2 c6id.4xlarge host, PG 17.10, 2M rows on a `positions = on` index
+  (188 MB, one segment).
+- One data directory, with the two builds alternating over 3 rounds.  Each figure is
+  the median of 9 timed runs in one psql session.
+- For all 10 queries, the top-10 ids and the `@@@` count were checked identical
+  before any timing.
+- The host's memory-chase probe read 112 ns before and 121 ns after the run.
+
+Results (ranked top-10 / bitmap count, 1.12.1 -> 1.13.0, ms):
+- **Unchanged** within the rounds' spread:
+  - `rare` 4.5/72 -> 4.4/69;
+  - `common` 18.9/155 -> 18.8/158;
+  - `rare & w5` 2.2/9.2 -> 2.1/9.2;
+  - `w1 | w2 | w3 | rare` 3.2/77 -> 3.3/76;
+  - `"hot dog"` 16.9/68 -> 16.7/70;
+  - `common & !w3` ranked 6.7 -> 6.7.
+- **Faster:**
+  - `common & !w3` count 2,157 -> 162 (the universe is built only for a negated result);
+  - `rare & !"hot dog"` 9,470/9,287 -> 143/158;
+  - `w5 & !"hot dog"` 9,449/9,302 -> 40/50;
+  - `w5 | "hot dog"` 1,635/1,611 -> 83/118.
+- **Slower:** `"hot dog" & w7`, 34.3/30.2 -> 37.2/34.1 (+8% / +13%).  1.12.1 rechecks its
+  1,874 candidates on the heap; 1.13.0 decodes `w7`'s positions for the span matcher
+  instead, which costs slightly more at this size.  This was kept: the result is
+  identical, and the same path is what made the AND/NOT shapes above 20-240x faster.
+
+Data and scripts: `bench/data_130_2026-10-15/`, summarised in
+`bench/RESULTS_130_2026-10-15.md`.
 
 ### Known issues
 

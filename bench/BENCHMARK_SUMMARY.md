@@ -1,4 +1,4 @@
-# pg_fts benchmark summary — methodology and results (as of v1.12.0, 2026-10-09)
+# pg_fts benchmark summary — methodology and results (as of v1.13.0, 2026-10-15)
 
 Consolidated view of the current measurements. Every number here is traceable to a
 run recorded under `bench/`; nothing is estimated. Where a figure was previously
@@ -61,7 +61,28 @@ alone.
 
 ## 2. Comparative latency
 
-### 2b. Current release: 1.12.0 vs 1.11.0 (2026-10-09, aarch64, six hosts)
+### 2c. Current release: 1.13.0 vs 1.12.1 (2026-10-15, x86_64, one host)
+
+Setup: one Debian 13 EC2 c6id.4xlarge, PG 17.10, 2M rows, a `positions = on`
+expression index (188 MB), arms alternated over 3 rounds, median of 9 runs.  The top-10
+ids and `@@@` counts were identical for all 10 queries before timing.  Full table:
+`RESULTS_130_2026-10-15.md`.
+
+Ranked top-10 / bitmap count, ms:
+
+| query | 1.12.1 | 1.13.0 |
+|---|---|---|
+| `rare` | 4.5 / 71.5 | 4.4 / 69.4 |
+| `common` | 18.9 / 155.3 | 18.8 / 157.8 |
+| `"hot dog"` | 16.9 / 68.1 | 16.7 / 69.5 |
+| `common & !w3` | 6.7 / 2,156.9 | 6.7 / 162.4 |
+| `"hot dog" & w7` | 34.3 / 30.2 | 37.2 / 34.1 |
+| `rare & !"hot dog"` | 9,470.0 / 9,286.6 | 142.5 / 157.7 |
+| `w5 \| "hot dog"` | 1,635.3 / 1,610.6 | 83.3 / 117.6 |
+
+The cross-engine numbers (2a) are still 1.11.0's; competitors have not been re-measured.
+
+### 2b. 1.12.0 vs 1.11.0 (2026-10-09, aarch64, six hosts)
 
 `bench/RESULTS_112_2026-10-09.md`.  Same hosts and index files, alternating, identical
 results on every band.  Ranked lookups read the dictionary index from a per-backend

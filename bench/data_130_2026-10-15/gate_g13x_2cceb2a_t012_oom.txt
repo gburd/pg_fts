@@ -1,0 +1,58 @@
+== PG17 tree c927d12+wip2 default_version = '1.13.0'
+== PG17 regress+isolation
+ok 1 pg_fts 9513 ms;ok 2 unicode_fold 23 ms;ok 3 idx_scan_stats 23 ms;ok 4 limit_hint 552 ms;ok 5 doclen_slots 205 ms;ok 6 score_reuse 45 ms;ok 7 wand_last_block 48 ms;ok 8 dense_score 231 ms;ok 9 phrase_gate 353 ms;ok 10 shared_doclen 409 ms;ok 11 ranked_exact 1283 ms;ok 12 pending_delete 30 ms;ok 13 dict_dir 8195 ms;ok 14 scan_keys 45 ms;ok 15 legal_proximity 25380 ms;ok 16 pending_rank 36 ms;# All tests passed. ;ok 1 bm25_concurrency 36 ms;ok 2 bm25_cic 16 ms;# All tests passed. ;
+== PG17 query_binary
+{"passed": 49, "valid": 21, "invalid": 28}
+== PG17 tap
+t/001_crash_recovery.pl ....... ok
+t/002_replication.pl .......... ok
+t/003_corruption.pl ........... ok
+t/004_encodings.pl ............ ok
+t/005_concurrency.pl .......... ok
+t/006_concurrent_extend.pl .... ok
+t/007_segment_cap.pl .......... ok
+t/008_vacuum_reclaim.pl ....... ok
+t/009_doclen_sidecar.pl ....... ok
+t/010_vacuum_delete_heavy.pl .. ok
+t/011_shared_doclen.pl ........ ok
+t/012_concurrent_flush.pl ..... ok
+Files=12, Tests=137, 239 wallclock secs ( 0.41 usr  0.01 sys +  5.92 cusr  4.60 csys = 10.94 CPU)
+Result: PASS
+== PG18 tree c927d12+wip2 default_version = '1.13.0'
+== PG18 regress+isolation
+ok 1 pg_fts 9377 ms;ok 2 unicode_fold 22 ms;ok 3 idx_scan_stats 22 ms;ok 4 limit_hint 548 ms;ok 5 doclen_slots 200 ms;ok 6 score_reuse 46 ms;ok 7 wand_last_block 47 ms;ok 8 dense_score 226 ms;ok 9 phrase_gate 358 ms;ok 10 shared_doclen 381 ms;ok 11 ranked_exact 1181 ms;ok 12 pending_delete 29 ms;ok 13 dict_dir 8250 ms;ok 14 scan_keys 46 ms;ok 15 legal_proximity 23468 ms;ok 16 pending_rank 35 ms;# All tests passed. ;ok 1 bm25_concurrency 33 ms;ok 2 bm25_cic 14 ms;# All tests passed. ;
+== PG18 query_binary
+{"passed": 49, "valid": 21, "invalid": 28}
+== PG18 tap
+t/001_crash_recovery.pl ....... ok
+t/002_replication.pl .......... ok
+t/003_corruption.pl ........... ok
+t/004_encodings.pl ............ ok
+t/005_concurrency.pl .......... ok
+t/006_concurrent_extend.pl .... ok
+t/007_segment_cap.pl .......... ok
+t/008_vacuum_reclaim.pl ....... ok
+t/009_doclen_sidecar.pl ....... ok
+t/010_vacuum_delete_heavy.pl .. ok
+t/011_shared_doclen.pl ........ ok
+t/012_concurrent_flush.pl ..... ok
+Files=12, Tests=137, 240 wallclock secs ( 0.42 usr  0.01 sys +  6.20 cusr  4.61 csys = 11.24 CPU)
+Result: PASS
+== check-alloc: alloc-safety: no unguarded corpus/vocabulary-scale allocations
+== check-ascii: install SQL is pure ASCII (installs on any server encoding)
+== fuzz
+PASS: fuzz_for
+PASS: fuzz_docvalid
+PASS: fuzz_block
+PASS: fuzz_smblob
+PASS: fuzz_block_noclamp aborted as expected (count-clamp teeth)
+PASS: fuzz_block_signed aborted as expected (signed-count teeth)
+PASS: fuzz_block_randstream aborted as expected (corrupt-width teeth)
+PASS: fuzz_block_nosumtf aborted as expected (sumtf-vs-posbytelen teeth)
+== ALL CLEAN ==
+GATE13_MAIN_DONE
+== t012 rerun 1: Result: PASS 
+== t012 rerun 2: Result: PASS 
+== t012 rerun 3: Result: PASS 
+== oom: 0
+GATE13B_DONE
