@@ -59,6 +59,7 @@
 #include "utils/builtins.h"
 #include "commands/defrem.h"
 #include "commands/vacuum.h"
+#include "postmaster/autovacuum.h"	/* autovacuum_work_mem (bulkdelete batch) */
 #include "executor/tuptable.h"
 #include "executor/executor.h"
 #include "executor/instrument.h"
@@ -7384,6 +7385,12 @@ bm25_flush_pending(Relation index)
  * segment's docid "universe").  Used by bulkdelete to enumerate the TIDs the
  * vacuum callback must be asked about.
  */
+#ifndef BM25_BULKDELETE_BATCH_MAX
+/* entries; ~24 bytes each resident (~100 MB).  Measured at 400k docs / 120M
+ * postings: 256k/1M/4M/8M entries took 16.7/13.3/13.9/14.1 s at 76/92/163/259
+ * MB peak (CHANGELOG 1.14.1); -D overridable for that measurement. */
+#define BM25_BULKDELETE_BATCH_MAX (4 * 1024 * 1024)
+#endif
 static sm_t *
 bm25_segment_docids(Relation index, const BM25SegMeta *seg)
 {
@@ -7408,16 +7415,26 @@ bm25_segment_docids(Relation index, const BM25SegMeta *seg)
 	 * df) -- hundreds of times the document count for a high-vocabulary field,
 	 * ignores maintenance_work_mem, and took a production index to 23 GB and an
 	 * OOM for a one-row delete (CHANGELOG 1.14.0).  A bounded batch caps the
-	 * resident temporary at ~24 bytes x batchmax regardless of segment size.
+	 * resident temporary at ~24 bytes x max(batchmax, the largest term's df)
+	 * regardless of segment size: a batch is flushed before a term that would
+	 * overfill it, and one term's postings are never split.
 	 * The O(N^2) that one-add-per-term caused (14d84a4) does not return: each
 	 * batch is still one ordered sm_add_many_grow (sorted, cursor threaded), and
 	 * a few-million-entry batch keeps the call count small (hundreds, not one
-	 * per term).  Sized from maintenance_work_mem / 24 so the knob finally means
-	 * something; clamped to a sane window.
+	 * per term).  Sized from the memory budget VACUUM itself uses
+	 * (autovacuum_work_mem in an autovacuum worker when set, else
+	 * maintenance_work_mem) / 24, at least 1M entries, and AT MOST
+	 * BM25_BULKDELETE_BATCH_MAX whatever the budget.  Without that cap a large
+	 * budget (4 GB -> 178M entries) held a whole 60M-posting segment as one
+	 * batch: 1.4 GB resident and a 3-7 s uninterruptible sort, the 1.13.0
+	 * behaviour (CHANGELOG 1.14.1).  Smaller batches only lower the budget's
+	 * reach; the per-batch sort is what a cancel waits for.
 	 */
-	batchmax = (int) Min((int64) INT_MAX,
+	batchmax = (int) Min((int64) BM25_BULKDELETE_BATCH_MAX,
 						 Max((int64) 1024 * 1024,
-							 ((int64) maintenance_work_mem * 1024L) / 24));
+							 ((int64) (AmAutoVacuumWorkerProcess() && autovacuum_work_mem != -1
+									   ? autovacuum_work_mem : maintenance_work_mem)
+							  * 1024L) / 24));
 
 	/* seen is a libc-malloc sparsemap: free it if the page reads / bulk add
 	 * below throw, else it would leak past transaction abort.  volatile: the
@@ -7487,24 +7504,9 @@ bm25_segment_docids(Relation index, const BM25SegMeta *seg)
 			np = bm25_decode_term(index, de->firstposting, de->firstoffset,
 								  de->df, &post, NULL, false, NULL, true,
 								  seg->doclenstart == InvalidBlockNumber);
-			if (np > 0)
-			{
-				if (nids + np > capids)
-				{
-					capids = Max(nids + np, capids ? capids * 2 : 4096);
-					capids = Min(capids, Max(batchmax, nids + np));
-					ids = ids ? FTS_REALLOC_MAYBE_HUGE(ids, (Size) capids * sizeof(uint64))
-						: (uint64 *) FTS_ALLOC_MAYBE_HUGE((Size) capids * sizeof(uint64));
-				}
-				for (k = 0; k < np; k++)
-					ids[nids++] = bm25_tid_to_docid(&post[k].tid);
-			}
-			pfree(post);
-			ptr += esize;
-
-			/* flush a full batch into the map so the resident temporary stays
-			 * bounded (~24 bytes x batchmax) no matter how large the segment is */
-			if (nids >= batchmax)
+			/* flush BEFORE appending a term that would overfill the batch, so
+			 * a batch never exceeds max(batchmax, df) entries */
+			if (np > 0 && nids > 0 && nids + np > batchmax)
 			{
 				if (!sm_add_many_grow(&seen, ids, nids))
 				{
@@ -7516,6 +7518,21 @@ bm25_segment_docids(Relation index, const BM25SegMeta *seg)
 				seen_v = seen;
 				nids = 0;
 			}
+			if (np > 0)
+			{
+				if (nids + np > capids)
+				{
+					capids = Max(nids + np, capids ? capids * 2 : 4096);
+					capids = Min(capids, Max(batchmax, nids + np));
+					ids = ids ? FTS_REALLOC_MAYBE_HUGE(ids, (Size) capids * sizeof(uint64))
+						: (uint64 *) FTS_ALLOC_MAYBE_HUGE((Size) capids * sizeof(uint64));
+				}
+				for (k = 0; k < np; k++)
+					ids[nids++] = bm25_tid_to_docid(&post[k].tid);
+				Assert(nids <= Max(batchmax, np));
+			}
+			pfree(post);
+			ptr += esize;
 		}
 		UnlockReleaseBuffer(buffer);
 		blk = next;
