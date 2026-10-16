@@ -1,0 +1,42 @@
+Parsed test spec with 2 sessions
+
+starting permutation: v_base r_lock v_del v_vac v_vac v_vac v_held r_end v_vac v_vac v_freed v_count
+merged
+------
+t     
+(1 row)
+
+step v_base: CREATE TEMP TABLE base AS SELECT pg_relation_size('vg_fts') AS s0;
+step r_lock: BEGIN; SELECT count(*) > 0 AS found FROM vg WHERE d @@@ 'alpha'::ftsquery;
+found
+-----
+t    
+(1 row)
+
+step v_del: DELETE FROM vg WHERE id % 97 = 0;
+step v_vac: VACUUM vg;
+step v_vac: VACUUM vg;
+step v_vac: VACUUM vg;
+step v_held: SELECT pg_relation_size('vg_fts') <= s0 + 16 * 8192 AS no_growth_while_locked FROM base;
+no_growth_while_locked
+----------------------
+t                     
+(1 row)
+
+step r_end: COMMIT;
+step v_vac: VACUUM vg;
+step v_vac: VACUUM vg;
+step v_freed: SELECT pg_relation_size('vg_fts') < s0 * 3 / 4 AS reclaimed_after_unlock FROM base;
+reclaimed_after_unlock
+----------------------
+t                     
+(1 row)
+
+step v_count: SET enable_seqscan = off;
+                  SELECT (SELECT count(*) FROM vg WHERE d @@@ 'alpha'::ftsquery)
+                       = (SELECT count(*) FROM vg WHERE fts_match(d, 'alpha'::ftsquery)) AS index_matches_heap;
+index_matches_heap
+------------------
+t                 
+(1 row)
+

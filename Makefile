@@ -28,7 +28,7 @@ DATA = pg_fts--1.14.0.sql pg_fts--0.2.0--0.2.1.sql pg_fts--0.2.1--0.2.2.sql pg_f
 PGFILEDESC = "pg_fts - full-text search with BM25 ranking"
 
 REGRESS = pg_fts unicode_fold idx_scan_stats limit_hint doclen_slots score_reuse wand_last_block dense_score phrase_gate shared_doclen ranked_exact pending_delete dict_dir scan_keys legal_proximity pending_rank pending_flush planner_cost vacuum_parallel vacuum_mem planner_pending
-ISOLATION = bm25_concurrency bm25_cic
+ISOLATION = bm25_concurrency bm25_cic bm25_vacuum_growth
 TAP_TESTS = 1
 
 PG_CONFIG ?= pg_config

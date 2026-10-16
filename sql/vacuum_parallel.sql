@@ -13,8 +13,18 @@
 -- trailing pages), then VACUUM in parallel.  On PostgreSQL 17 the xid is not
 -- assigned for this lock so the bug does not fire, but the test still passes
 -- (the VACUUM completes and the counts match) -- it is a live guard only on 18.
+--
+-- 1.14.1: declining the truncation was not enough.  The cleanup's compaction
+-- then ran its extend-only "vacate" rewrite, whose growth only a truncation
+-- gives back, so every parallel VACUUM grew the fts file by about its live size
+-- and only a non-parallel VACUUM shrank it.  The vacate now runs only under
+-- AccessExclusiveLock (fts_vacuum); the size checks below fail on 1.14.0 on
+-- both PostgreSQL 17 and 18.
 SET client_min_messages = warning;
-CREATE TABLE vp (id int PRIMARY KEY, body text, a int, b text);
+-- autovacuum off: an autovacuum of vp (120k dead rows below) would compact the
+-- index before the size checks and make them vacuous
+CREATE TABLE vp (id int PRIMARY KEY, body text, a int, b text)
+  WITH (autovacuum_enabled = off);
 INSERT INTO vp
   SELECT g,
          (SELECT string_agg('w' || ((g + i * 13) % 6000), ' ')
@@ -30,6 +40,7 @@ CREATE INDEX vp_ab ON vp (a, b);
 -- cleanup will try to truncate
 DELETE FROM vp WHERE id > 30000;
 SELECT fts_merge('vp_fts') IS NOT NULL AS merged;
+CREATE TEMP TABLE vp_size AS SELECT pg_relation_size('vp_fts') AS s0;
 DELETE FROM vp WHERE id % 100 = 7;   -- a few dead TIDs so bulkdelete also runs
 
 -- force parallel index vacuuming (three indexes past min_parallel_index_scan_size,
@@ -47,10 +58,26 @@ SELECT count(*) > 0 AS has_matches FROM vp WHERE to_ftsdoc('english', body) @@@ 
 SELECT (SELECT count(*) FROM vp WHERE to_ftsdoc('english', body) @@@ 'w1'::ftsquery)
      = (SELECT count(*) FROM vp WHERE body ~ '\mw1\M') AS index_matches_heap;
 
--- a second plain VACUUM (also parallel-eligible) still succeeds
+-- two more parallel VACUUMs still succeed, and none of the three grew the fts
+-- file (1.14.0: about +10% of the file each).  The slack covers the small
+-- tombstone blobs each bulkdelete writes.
 DELETE FROM vp WHERE id % 100 = 8;
 VACUUM (PARALLEL 2) vp;
+DELETE FROM vp WHERE id % 100 = 9;
+VACUUM (PARALLEL 2) vp;
+SELECT pg_relation_size('vp_fts') <= s0 + 64 * 8192 AS parallel_no_growth FROM vp_size;
 SELECT 'vacuum_parallel ok' AS result;
+
+-- non-parallel VACUUMs still compact and truncate the space the merge freed
+-- (the first truncates the tail the parallel passes' pack left, the second
+-- packs and truncates the rest)
+DELETE FROM vp WHERE id % 100 = 10;
+VACUUM (PARALLEL 0) vp;
+DELETE FROM vp WHERE id % 100 = 11;
+VACUUM (PARALLEL 0) vp;
+SELECT pg_relation_size('vp_fts') < s0 / 2 AS serial_reclaims FROM vp_size;
+SELECT (SELECT count(*) FROM vp WHERE to_ftsdoc('english', body) @@@ 'w1'::ftsquery)
+     = (SELECT count(*) FROM vp WHERE body ~ '\mw1\M') AS index_matches_heap_after;
 
 RESET enable_seqscan;
 RESET min_parallel_index_scan_size;

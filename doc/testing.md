@@ -10,13 +10,15 @@ runs in CI on both GitHub and Codeberg on every push and pull request.
 
 The core gate is the PostgreSQL regression suite (`sql/pg_fts.sql` vs
 `expected/pg_fts.out`, plus `unicode_fold` and `idx_scan_stats`) and the
-isolation suite (`specs/bm25_concurrency.spec`, `specs/bm25_cic.spec`), run via
+isolation suite (`specs/bm25_concurrency.spec`, `specs/bm25_cic.spec`,
+`specs/bm25_vacuum_growth.spec`), run via
 `make installcheck` against PostgreSQL **17, 18, and 19**. The regression suite
 exercises the full query language (boolean, phrase, NEAR, prefix, fuzzy, regex),
 ranking (`<=>`, all five BM25 variants, BM25F), the count pushdown, the index
 build/insert/vacuum/merge lifecycle, and the type I/O round-trips. The isolation
 suite covers MVCC correctness, `CREATE INDEX CONCURRENTLY` / `REINDEX
-CONCURRENTLY`, and concurrent DML + VACUUM + merge.
+CONCURRENTLY`, concurrent DML + VACUUM + merge, and that a VACUUM which cannot
+truncate (another session holds a lock on the index) does not grow the file.
 
 ## Memory safety: AddressSanitizer + a fuzz gate
 

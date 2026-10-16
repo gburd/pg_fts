@@ -5975,7 +5975,10 @@ bm25_vacuum_compact(Relation index)
 
 	/*
 	 * Converge a bloated index to its size floor in ONE call, stably (repeated
-	 * calls do not oscillate) and NEVER returning larger than we started.
+	 * calls do not oscillate) and NEVER returning larger than we started.  That
+	 * holds under AccessExclusiveLock (fts_vacuum, a build); VACUUM's cleanup,
+	 * without it, runs only the pack-first step below and may need a later
+	 * VACUUM to truncate (CHANGELOG 1.14.1).
 	 *
 	 * The hard case (verified): after ordinary merges the single live segment
 	 * sits at the HIGH end of the file with the freed dead pages as a LOW free
@@ -6057,7 +6060,8 @@ bm25_vacuum_compact(Relation index)
 		 *
 		 * If the pack alone did not shrink the file, fall through to vacate+pack for
 		 * the case it cannot handle: too little low free space to hold the live data,
-		 * where the transient extension is genuinely required to make progress.
+		 * where the transient extension is genuinely required to make progress --
+		 * only under AccessExclusiveLock; otherwise stop here (below).
 		 */
 		{
 			BlockNumber packed;
@@ -6075,6 +6079,24 @@ bm25_vacuum_compact(Relation index)
 				continue;
 			}
 		}
+
+		/*
+		 * The vacate+pack needs AccessExclusiveLock (fts_vacuum, a build).  The
+		 * pack can reuse the pages the vacate just freed only under that lock
+		 * (bm25_page_recyclable; otherwise a page freed in this transaction is
+		 * not reusable), and without it the truncation that gives the vacate's
+		 * extension back is conditional (bm25_truncate_lock): declined in
+		 * parallel mode and whenever another session holds any lock on the
+		 * index.  So in VACUUM's cleanup the vacate was pure growth -- each
+		 * VACUUM that met a reader, and in 1.14.0 each parallel VACUUM, grew the
+		 * index by about its live size and never gave it back (1.11.0 to
+		 * 1.14.0, CHANGELOG 1.14.1).  Cleanup compacts only when older free
+		 * pages can hold the live data (bm25_have_recyclable_room), which the
+		 * pack above does alone; the next VACUUM that can truncate reclaims the
+		 * tail it left.
+		 */
+		if (!CheckRelationLockedByMe(index, AccessExclusiveLock, true))
+			break;
 
 		/* Phase 1: vacate -- push the live segment onto fresh high blocks so the
 		 * freed old pages form one contiguous low free region >= live size. */

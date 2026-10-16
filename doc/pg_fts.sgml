@@ -719,6 +719,15 @@ SELECT * FROM messages
    <function>fts_vacuum</function> remains useful for a <emphasis>one-off</emphasis>
    tighter reclaim: it always performs the full vacate-and-pack rather than waiting for
    the bloat threshold, reaching roughly 3&#215; smaller than the automatic steady state.
+   <command>VACUUM</command>'s own compaction only packs live data into older free pages
+   and does not run the extending vacate rewrite (the pack can still extend the file a
+   little when its room estimate falls short, as segment merges can).  Truncating the
+   tail it frees needs a moment when no other session holds a lock on the index, and a
+   parallel
+   <command>VACUUM</command> does not truncate at all.  Until then the space stays
+   reusable, and the next <command>VACUUM</command> that gets the lock returns it.
+   (From 1.11.0 to 1.14.0, a <command>VACUUM</command> that could not truncate
+   extended the file instead; fixed in 1.14.1.)
    Run it once after a bulk load or a mass delete if you want the index at its floor.  It
    is not needed to keep the index from growing.
   </para>
