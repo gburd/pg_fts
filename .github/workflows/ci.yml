@@ -168,7 +168,12 @@ jobs:
           printf "unix_socket_directories='/tmp'\nlisten_addresses=''\nfsync=off\nmax_stack_depth='24MB'\nshared_buffers=256MB\n" >> "$D/postgresql.conf"
           "$PFX/bin/pg_ctl" -D "$D" -l "$D/log" -w start
           "$PFX/bin/createdb" -h /tmp -U postgres smoke
-          "$PFX/bin/psql" -h /tmp -U postgres -d smoke -v ON_ERROR_STOP=1 -f test/asan_smoke.sql
+          "$PFX/bin/psql" -h /tmp -U postgres -d smoke -v ON_ERROR_STOP=1 -f test/asan_smoke.sql > smoke.out \
+            || { cat smoke.out; exit 1; }
+          cat smoke.out
+          # a false or NULL check raises inside the script (psql exits non-zero
+          # above); the last line proves it ran to the end
+          grep -q '^asan_smoke: all checks passed$' smoke.out
           # fail on any ASan memory error in the server log
           if grep -iE "heap-use-after-free|heap-buffer-overflow|stack-buffer-overflow|global-buffer-overflow|use-after-poison|SUMMARY: AddressSanitizer: (heap|stack|global|use)" "$D/log"; then
             echo "ASan reported a memory error"; cat "$D/log"; exit 1
