@@ -42,6 +42,8 @@ static void bm25_collect_matches_split(Relation index, FtsQuery query,
 									   TidSet *exact, TidSet *unsure);
 static void bm25_recheck_exact(Relation index, FtsQuery query, TidSet *set);
 static double bm25_query_maxhits(Relation index, FtsQuery q, double N);
+static double bm25_query_segdf(Relation index, FtsQuery q, BM25MetaPageData *metap,
+							   double cap, bool *noest);
 static TidSet bm25_universe_bounded(Relation index, BlockNumber dictstart,
 									double ndocs, bool has_doclen_col);
 /* forward decl: blob reader (pg_fts_trgm_index.c, included after this file) */
@@ -6152,18 +6154,40 @@ static double
 bm25_query_maxhits(Relation index, FtsQuery q, double N)
 {
 	BM25MetaPageData meta;
+
+	if (q->nitems == 0)
+		return 0;
+	bm25_read_meta(index, &meta);
+	if (meta.npending > 0)
+		return N;			/* segment df omits pending documents */
+	return bm25_query_segdf(index, q, &meta, N, NULL);
+}
+
+/*
+ * The RPN walk behind bm25_query_maxhits and bm25_estimate_matchfrac, over the
+ * SEGMENT dictionaries only (pending documents are not counted): VAL -> the
+ * term's df summed across segments; AND/PHRASE -> min; OR -> sum; NOT -> cap.
+ * A term with a modifier (prefix, fuzzy, regex, weight) has no cheap df and
+ * yields cap.  *noest (if given) is set when the walk cannot estimate the
+ * query: a modifier term, or a term in no segment while documents are pending
+ * (it may be in none of them or in all of them).
+ */
+static double
+bm25_query_segdf(Relation index, FtsQuery q, BM25MetaPageData *metap,
+				 double cap, bool *noest)
+{
 	const BM25DoclenDirCache *dc;
 	double	   *stack;
 	int			top = 0;
 	uint32		i;
 	double		result;
+	double		N = cap;
 
+	if (noest)
+		*noest = false;
 	if (q->nitems == 0)
 		return 0;
-	bm25_read_meta(index, &meta);
-	dc = bm25_doclendir_cache(index, &meta);	/* I7: cached dictionary directory */
-	if (meta.npending > 0)
-		return N;			/* segment df omits pending documents */
+	dc = bm25_doclendir_cache(index, metap);	/* I7: cached dictionary directory */
 	stack = (double *) palloc(q->nitems * sizeof(double));
 
 	for (i = 0; i < q->nitems; i++)
@@ -6173,24 +6197,30 @@ bm25_query_maxhits(Relation index, FtsQuery q, double N)
 		if (it->type == FTS_QI_VAL)
 		{
 			if (it->flags != 0)
+			{
 				stack[top++] = N;	/* over-generating: no cheap bound */
+				if (noest)
+					*noest = true;
+			}
 			else
 			{
 				uint64		gdf = 0;	/* summed across segments; uint64 (consumed as double) */
 				uint32		s;
 
-				for (s = 0; s < meta.nsegments; s++)
+				for (s = 0; s < metap->nsegments; s++)
 				{
 					uint32		df,
 								mtf;
 					BlockNumber fb;
 					uint32		fo;
 
-					if (bm25_lookup_dict(index, &meta.segs[s],
+					if (bm25_lookup_dict(index, &metap->segs[s],
 										 FTS_QUERY_ITEMTEXT(q, it), it->termlen,
 										 &df, &mtf, &fb, &fo, dc))
 						gdf += df;
 				}
+				if (gdf == 0 && metap->npending > 0 && noest)
+					*noest = true;
 				stack[top++] = (double) gdf;
 			}
 		}
@@ -7263,14 +7293,16 @@ bm25_count_visible_oid(Oid indexoid, FtsQuery q)
 
 /*
  * bm25_estimate_matchfrac: the planner's selectivity for `d @@@ q` on this index
- * (fts_matchsel, pg_fts_customscan.c).  It is maxhits / N, where maxhits is the
- * query's provable match-count bound from the dictionary df (bm25_query_maxhits:
- * a term's df, AND/PHRASE the min, OR the sum, NOT or an expansion the corpus
- * size) and N is the live document count.  A real estimate from the index
- * instead of tsmatchsel's fixed default, so a common term is not priced like a
- * rare one -- which made the planner choose a bitmap scan + Sort for an
- * ORDER BY <=> LIMIT (I11): the Sort then re-evaluated the index expression per
- * match.  Returns -1 if the index is not a bm25 index (the caller falls back).
+ * (fts_matchsel, pg_fts_customscan.c): the query's match-count bound over the
+ * segment dictionaries (bm25_query_segdf: a term's df, AND/PHRASE the min, OR
+ * the sum, NOT the segment total) divided by the segment document count.  A
+ * real estimate from the index instead of tsmatchsel's fixed default, so a
+ * common term is not priced like a rare one -- which made the planner choose a
+ * bitmap scan + Sort for an ORDER BY <=> LIMIT (I11): the Sort then
+ * re-evaluated the index expression per match.  Returns -1 -- the caller
+ * falls back to tsmatchsel -- if the index is not a bm25 index, its segments
+ * hold fewer documents than its pending list, or bm25_query_segdf cannot
+ * estimate the query (a modifier term; a term only the pending list may hold).
  */
 double
 bm25_estimate_matchfrac(Oid indexoid, FtsQuery q)
@@ -7280,6 +7312,8 @@ bm25_estimate_matchfrac(Oid indexoid, FtsQuery q)
 	double		n,
 				hits,
 				frac;
+	bool		noest;
+	uint32		s;
 
 	index = index_open(indexoid, AccessShareLock);
 	if (index->rd_rel->relam != get_index_am_oid("fts", true))
@@ -7288,9 +7322,34 @@ bm25_estimate_matchfrac(Oid indexoid, FtsQuery q)
 		return -1.0;
 	}
 	bm25_read_meta(index, &meta);
-	n = meta.ndocs < 1.0 ? 1.0 : meta.ndocs;
-	hits = bm25_query_maxhits(index, q, n);
+	/*
+	 * Estimate from the segments alone and read the pending list as a sample of
+	 * the same corpus: selectivity = segment df / segment documents (both count
+	 * tombstoned documents, so the ratio is consistent).  1.14.0 used the
+	 * ordering scan's upper bound here, which is the whole corpus whenever
+	 * anything is pending -- the steady state of an index taking inserts -- so
+	 * every @@@ looked like it matched the table and the planner chose Seq
+	 * Scans (CHANGELOG 1.14.1).  A prefix/fuzzy/regex/weighted term has
+	 * no cheap df, and a term in no segment may be in any number of pending
+	 * documents: fall back to tsmatchsel (the 1.13.0 estimate) rather than claim
+	 * the query matches everything or nothing.  So does an index whose
+	 * segments hold fewer documents than its pending list (or none): the
+	 * estimate is about segment df x (n + npending) / n and the true count is
+	 * at least segment df, so requiring n >= npending caps the overestimate
+	 * at 2x (10 indexed documents read as all-match must not mean a Seq Scan).
+	 */
+	n = 0;
+	for (s = 0; s < meta.nsegments; s++)
+		n += meta.segs[s].ndocs;
+	if (n < 1.0 || n < (double) meta.npending)
+	{
+		index_close(index, AccessShareLock);
+		return -1.0;
+	}
+	hits = bm25_query_segdf(index, q, &meta, n, &noest);
 	index_close(index, AccessShareLock);
+	if (noest)
+		return -1.0;
 	frac = hits / n;
 	if (frac < 0.0)
 		frac = 0.0;

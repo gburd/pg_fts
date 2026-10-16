@@ -1,0 +1,154 @@
+-- planner_pending (1.14.1): fts_matchsel with a non-empty pending list.
+-- 1.14.0's estimator returned "every row matches" whenever the index had
+-- unmerged pending documents -- the steady state of an index taking inserts --
+-- so every @@@ predicate was estimated at the whole table and plans flipped to
+-- Seq Scans that evaluate the index expression per row (reported by the
+-- pg.ddx.io operators).  The estimate now comes from the segment dictionaries
+-- alone (segment df / segment documents); a query the segments cannot
+-- estimate (a prefix/fuzzy/regex/weighted term, a term in no segment while
+-- documents are pending, an index with no segment) falls back to tsmatchsel,
+-- as before 1.14.0.  The pending list is held non-empty throughout: inserts
+-- never flush (threshold 0), autovacuum is off on the table, and ANALYZE does
+-- not flush.  Asserts estimates and plan nodes, never a cost number.
+SET client_min_messages = warning;
+SET pg_fts.pending_flush_threshold = 0;
+CREATE TABLE pp (id int PRIMARY KEY, body text) WITH (autovacuum_enabled = off);
+-- 'common' in every row, 'rare' in 1 row of 1000 (an odd id, so it survives
+-- the even-id delete below)
+INSERT INTO pp SELECT g,
+  'common w' || (g % 40) || CASE WHEN g % 1000 = 7 THEN ' rare' ELSE '' END
+  FROM generate_series(1, 8000) g;
+CREATE INDEX pp_fts ON pp USING fts (to_ftsdoc('simple', body));
+VACUUM ANALYZE pp;
+-- 2000 pending rows: 'fresh' is in these only, 'rare' in two of them
+INSERT INTO pp SELECT g,
+  'common fresh w' || (g % 40) || CASE WHEN g % 1000 = 7 THEN ' rare' ELSE '' END
+  FROM generate_series(8001, 10000) g;
+ANALYZE pp;
+-- the planner's row estimate for a statement (first plan line)
+CREATE FUNCTION pp_rows(stmt text) RETURNS int LANGUAGE plpgsql AS $$
+DECLARE ln text; n int;
+BEGIN
+  FOR ln IN EXECUTE 'EXPLAIN ' || stmt LOOP
+    n := (regexp_match(ln, 'rows=(\d+)'))[1]::int;
+    IF n IS NOT NULL THEN RETURN n; END IF;
+  END LOOP;
+  RETURN NULL;
+END $$;
+CREATE FUNCTION pp_est(q text) RETURNS int LANGUAGE sql AS $$
+  SELECT pp_rows(format('SELECT id FROM pp WHERE to_ftsdoc(''simple'', body) @@@ %L::ftsquery', q)) $$;
+CREATE FUNCTION pp_seqscan(q text) RETURNS bool LANGUAGE plpgsql AS $$
+DECLARE ln text;
+BEGIN
+  FOR ln IN EXECUTE format(
+    'EXPLAIN SELECT id FROM pp WHERE to_ftsdoc(''simple'', body) @@@ %L::ftsquery LIMIT 20', q)
+  LOOP
+    IF ln ~ 'Seq Scan' THEN RETURN true; END IF;
+  END LOOP;
+  RETURN false;
+END $$;
+-- the pending list is really there: no flush happened (one segment), and the
+-- index finds every pending-only row
+SET enable_seqscan = off;
+SELECT fts_index_nsegments('pp_fts') AS nseg,
+       (SELECT count(*) FROM pp WHERE to_ftsdoc('simple', body) @@@ 'fresh'::ftsquery) AS fresh_found,
+       (SELECT count(*) FROM pp WHERE to_ftsdoc('simple', body) @@@ 'rare'::ftsquery) AS rare_found;
+ nseg | fresh_found | rare_found 
+------+-------------+------------
+    1 |        2000 |         10
+(1 row)
+
+RESET enable_seqscan;
+-- a rare term is estimated from its df, not as the whole table (1.14.0: 10000)
+SELECT pp_est('rare') BETWEEN 1 AND 50 AS rare_small,
+       pp_est('common') >= 8000 AS common_large,
+       pp_est('rare & common') <= pp_est('rare') AS and_bounded,
+       pp_est('"common rare"') <= pp_est('rare') AS phrase_bounded,
+       pp_est('rare | w3') BETWEEN 100 AND 400 AS or_sums,
+       pp_est('!rare') >= 8000 AS not_large;
+ rare_small | common_large | and_bounded | phrase_bounded | or_sums | not_large 
+------------+--------------+-------------+----------------+---------+-----------
+ t          | t            | t           | t              | t       | t
+(1 row)
+
+-- the reporter's shape (a function-built query, folded at plan time)
+SELECT pp_rows($q$SELECT id FROM pp WHERE to_ftsdoc('simple', body)
+                 @@@ to_ftsquery('simple', 'rare')$q$) <= 50 AS to_ftsquery_small;
+ to_ftsquery_small 
+-------------------
+ t
+(1 row)
+
+-- and so the planner keeps the index for it (1.14.0: Seq Scan)
+SELECT pp_seqscan('rare') AS rare_seqscan;
+ rare_seqscan 
+--------------
+ f
+(1 row)
+
+-- no segment can estimate these, so they get tsmatchsel's fixed default --
+-- the same number for each, and far from the whole table
+SELECT pp_est('fresh') = pp_est('rar*') AS fresh_falls_back,
+       pp_est('nosuchterm') = pp_est('rar*') AS absent_falls_back,
+       pp_est('rare~1') = pp_est('rar*') AS fuzzy_falls_back,
+       pp_est('rare:A') = pp_est('rar*') AS weighted_falls_back,
+       pp_est('rar*') < 1000 AS default_small;
+ fresh_falls_back | absent_falls_back | fuzzy_falls_back | weighted_falls_back | default_small 
+------------------+-------------------+------------------+---------------------+---------------
+ t                | t                 | t                | t                   | t
+(1 row)
+
+-- segments with many tombstones: delete half the rows; VACUUM folds the pending
+-- list in and tombstones the deletes, then new inserts make a pending list again
+DELETE FROM pp WHERE id % 2 = 0;
+VACUUM ANALYZE pp;
+INSERT INTO pp SELECT g, 'common w' || (g % 40) FROM generate_series(10001, 11000) g;
+ANALYZE pp;
+SELECT pp_est('rare') BETWEEN 1 AND 50 AS tomb_rare_small,
+       pp_est('common') >= 5000 AS tomb_common_large,
+       pp_seqscan('rare') AS tomb_rare_seqscan;
+ tomb_rare_small | tomb_common_large | tomb_rare_seqscan 
+-----------------+-------------------+-------------------
+ t               | t                 | f
+(1 row)
+
+-- an index with no segment: every document is pending, nothing to estimate
+-- from, so fall back (1.14.0: the whole table)
+CREATE TABLE pe (id int, body text) WITH (autovacuum_enabled = off);
+CREATE INDEX pe_fts ON pe USING fts (to_ftsdoc('simple', body));
+INSERT INTO pe SELECT g, 'common w' || (g % 40) || CASE WHEN g % 1000 = 7 THEN ' rare' ELSE '' END
+  FROM generate_series(1, 4000) g;
+ANALYZE pe;
+SELECT pp_rows($q$SELECT id FROM pe WHERE to_ftsdoc('simple', body)
+                 @@@ 'rare'::ftsquery$q$) < 1000 AS empty_index_falls_back;
+ empty_index_falls_back 
+------------------------
+ t
+(1 row)
+
+-- segments far smaller than the pending list: 10 indexed rows, all with
+-- 'tiny', then 4000 pending rows, 4 of them with 'tiny'.  Segment df / segment
+-- documents is 1.0, which would price 'tiny' as every row and choose a Seq
+-- Scan; fall back instead (1.14.1, first fix: 4010)
+CREATE TABLE ps (id int, body text) WITH (autovacuum_enabled = off);
+INSERT INTO ps SELECT g, 'tiny w' || g FROM generate_series(1, 10) g;
+CREATE INDEX ps_fts ON ps USING fts (to_ftsdoc('simple', body));
+INSERT INTO ps SELECT g, 'common w' || (g % 40) || CASE WHEN g % 1000 = 7 THEN ' tiny' ELSE '' END
+  FROM generate_series(11, 4010) g;
+ANALYZE ps;
+SELECT fts_index_nsegments('ps_fts') AS ps_nseg,
+       (SELECT count(*) FROM ps WHERE to_ftsdoc('simple', body) @@@ 'tiny'::ftsquery) AS tiny_found,
+       pp_rows($q$SELECT id FROM ps WHERE to_ftsdoc('simple', body)
+                 @@@ 'tiny'::ftsquery$q$) < 1000 AS small_sample_falls_back;
+ ps_nseg | tiny_found | small_sample_falls_back 
+---------+------------+-------------------------
+       1 |         14 | t
+(1 row)
+
+DROP FUNCTION pp_est(text);
+DROP FUNCTION pp_rows(text);
+DROP FUNCTION pp_seqscan(text);
+DROP TABLE pp;
+DROP TABLE pe;
+DROP TABLE ps;
+RESET pg_fts.pending_flush_threshold;

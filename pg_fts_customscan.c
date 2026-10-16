@@ -315,10 +315,11 @@ fts_planner(Query *parse, const char *query_string, int cursorOptions,
  * matching row (I11: 21.6 s at 50k rows against 4-7 ms on the ordering scan).
  *
  * For a Const ftsquery whose other side names a bm25 index on the rel, the
- * selectivity is the query's match-count bound from the dictionary df over N
- * (bm25_estimate_matchfrac).  Anything else -- a non-Const query, no bm25 index
- * on that column, a join clause -- falls back to tsmatchsel, so no plan that
- * worked before regresses.
+ * selectivity is the query's df bound over the segment dictionaries divided by
+ * the segment document count (bm25_estimate_matchfrac).  Anything else -- a
+ * non-Const query, no bm25 index on that column, a join clause, or a query the
+ * segments cannot estimate (bm25_estimate_matchfrac returns -1) -- falls back
+ * to tsmatchsel, the estimate before 1.14.0.
  */
 PG_FUNCTION_INFO_V1(fts_matchsel);
 Datum

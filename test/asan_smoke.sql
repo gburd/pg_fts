@@ -45,6 +45,12 @@ SET pg_fts.pending_flush_threshold = 500;
 INSERT INTO a SELECT g, 'alpha delta' FROM generate_series(100001, 101200) g;
 SELECT count(*) > 0 AS pending_ok FROM a WHERE to_ftsdoc('simple', body) @@@ 'delta'::ftsquery;
 
+-- the @@@ estimator (fts_matchsel) with documents pending: plan only
+SET pg_fts.pending_flush_threshold = 0;
+INSERT INTO a SELECT g, 'alpha epsilon' FROM generate_series(101201, 101400) g;
+EXPLAIN (COSTS OFF) SELECT 1 FROM a WHERE to_ftsdoc('simple', body) @@@ 'alpha & !epsilon | delta'::ftsquery;
+EXPLAIN (COSTS OFF) SELECT 1 FROM a WHERE to_ftsdoc('simple', body) @@@ 'alph*'::ftsquery;
+
 -- bulkdelete + vacuum tail truncation + merge, both sidecar modes
 DELETE FROM a WHERE id % 4 = 0;
 VACUUM (INDEX_CLEANUP ON) a;
