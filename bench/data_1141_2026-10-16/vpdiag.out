@@ -1,0 +1,39 @@
+[fix par=1] after merge 7848 free 4074/7848 | par#1 7848 | par#2 7848 | par#3 7848 | serial#1 3085 free 2320/3085 | serial#2 755 free 1/755 | serial#3 755 free 0/755
+[fix par=0] after merge 7850 free 4076/7850 | serial#1 798 free 14/798 | serial#2 798 free 13/798 | serial#3 798 free 13/798
+ERROR:  function pg_freespace(unknown) does not exist
+LINE 1: ...*) filter (where avail>=4096)||'/'||count(*) from pg_freespa...
+                                                             ^
+HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+ERROR:  function pg_freespace(unknown) does not exist
+LINE 1: ...*) filter (where avail>=4096)||'/'||count(*) from pg_freespa...
+                                                             ^
+HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+ERROR:  function pg_freespace(unknown) does not exist
+LINE 1: ...*) filter (where avail>=4096)||'/'||count(*) from pg_freespa...
+                                                             ^
+HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+ERROR:  function pg_freespace(unknown) does not exist
+LINE 1: ...*) filter (where avail>=4096)||'/'||count(*) from pg_freespa...
+                                                             ^
+HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+[mutB par=1] after merge 7847 free  | par#1 7847 | par#2 7847 | par#3 7847 | serial#1 3085 free  | serial#2 755 free  | serial#3 755 free 
+ERROR:  function pg_freespace(unknown) does not exist
+LINE 1: ...*) filter (where avail>=4096)||'/'||count(*) from pg_freespa...
+                                                             ^
+HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+ERROR:  function pg_freespace(unknown) does not exist
+LINE 1: ...*) filter (where avail>=4096)||'/'||count(*) from pg_freespa...
+                                                             ^
+HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+ERROR:  function pg_freespace(unknown) does not exist
+LINE 1: ...*) filter (where avail>=4096)||'/'||count(*) from pg_freespa...
+                                                             ^
+HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+ERROR:  function pg_freespace(unknown) does not exist
+LINE 1: ...*) filter (where avail>=4096)||'/'||count(*) from pg_freespa...
+                                                             ^
+HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+[mutB par=0] after merge 7848 free  | serial#1 798 free  | serial#2 798 free  | serial#3 798 free 
+[v140 par=1] after merge 7846 free 4072/7846 | par#1 8629 | par#2 9412 | par#3 10195 | serial#1 766 free 1/766 | serial#2 766 free 0/766 | serial#3 767 free 1/767
+[v140 par=0] after merge 7846 free 4072/7846 | serial#1 798 free 14/798 | serial#2 798 free 13/798 | serial#3 798 free 13/798
+VPDIAG_DONE

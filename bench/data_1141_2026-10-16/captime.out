@@ -1,0 +1,14 @@
+rep1 cap256k: Time: 16563.162 ms (00:16.563) hwm=77 
+rep1 cap1m: Time: 13259.036 ms (00:13.259) hwm=93 
+rep1 fix2: Time: 13868.598 ms (00:13.869) hwm=164 
+rep1 cap8m: Time: 14196.143 ms (00:14.196) hwm=259 
+rep2 cap256k: Time: 16826.436 ms (00:16.826) hwm=76 
+rep2 cap1m: Time: 13323.172 ms (00:13.323) hwm=92 
+rep2 fix2: Time: 14268.993 ms (00:14.269) hwm=163 
+rep2 cap8m: Time: 14127.046 ms (00:14.127) hwm=259 
+rep3 cap256k: Time: 16683.727 ms (00:16.684) hwm=76 
+rep3 cap1m: Time: 13428.845 ms (00:13.429) hwm=92 
+rep3 fix2: Time: 13777.792 ms (00:13.778) hwm=163 
+rep3 cap8m: Time: 14131.453 ms (00:14.131) hwm=259 
+segments: n/a
+CAPTIME_DONE

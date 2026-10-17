@@ -1,0 +1,60 @@
+ERROR:  relation "m_b" does not exist
+LINE 1: select pg_relation_size('m_b')/1024
+                                ^
+== build v100 -> run v100: built ext 1.10.0, fts size 232 blocks, wal_level replica, sizes b=kB ab=1160kB
+   VACUUM m:  rc=0
+   relfrozenxid advanced? 5 ; fts size now 233 blocks
+   VACUUM (PARALLEL 0) m: rc=0
+   count check: idx=19200 heap=19200
+ERROR:  relation "m_b" does not exist
+LINE 1: select pg_relation_size('m_b')/1024
+                                ^
+== build v100 -> run v130: built ext 1.10.0, fts size 232 blocks, wal_level replica, sizes b=kB ab=1160kB
+   restarted on v130 binaries; ext now 1.13.0
+   VACUUM m:  rc=0
+   relfrozenxid advanced? 6 ; fts size now 233 blocks
+   VACUUM (PARALLEL 0) m: rc=0
+   count check: idx=19200 heap=19200
+ERROR:  relation "m_b" does not exist
+LINE 1: select pg_relation_size('m_b')/1024
+                                ^
+== build v100 -> run v140: built ext 1.10.0, fts size 232 blocks, wal_level replica, sizes b=kB ab=1160kB
+   restarted on v140 binaries; ext now 1.14.0
+   VACUUM m:  rc=0
+   relfrozenxid advanced? 6 ; fts size now 233 blocks
+   VACUUM (PARALLEL 0) m: rc=0
+   count check: idx=19200 heap=19200
+ERROR:  relation "m_b" does not exist
+LINE 1: select pg_relation_size('m_b')/1024
+                                ^
+== build v100 -> run fix: built ext 1.10.0, fts size 232 blocks, wal_level replica, sizes b=kB ab=1160kB
+   restarted on fix binaries; ext now 1.14.0
+   VACUUM m:  rc=0
+   relfrozenxid advanced? 6 ; fts size now 233 blocks
+   VACUUM (PARALLEL 0) m: rc=0
+   count check: idx=19200 heap=19200
+ERROR:  relation "m_b" does not exist
+LINE 1: select pg_relation_size('m_b')/1024
+                                ^
+== build v130 -> run v130: built ext 1.13.0, fts size 232 blocks, wal_level replica, sizes b=kB ab=1160kB
+   VACUUM m:  rc=0
+   relfrozenxid advanced? 5 ; fts size now 233 blocks
+   VACUUM (PARALLEL 0) m: rc=0
+   count check: idx=19200 heap=19200
+ERROR:  relation "m_b" does not exist
+LINE 1: select pg_relation_size('m_b')/1024
+                                ^
+== build v140 -> run v140: built ext 1.14.0, fts size 232 blocks, wal_level replica, sizes b=kB ab=1160kB
+   VACUUM m:  rc=0
+   relfrozenxid advanced? 5 ; fts size now 233 blocks
+   VACUUM (PARALLEL 0) m: rc=0
+   count check: idx=19200 heap=19200
+ERROR:  relation "m_b" does not exist
+LINE 1: select pg_relation_size('m_b')/1024
+                                ^
+== build fix -> run fix: built ext 1.14.0, fts size 232 blocks, wal_level replica, sizes b=kB ab=1160kB
+   VACUUM m:  rc=0
+   relfrozenxid advanced? 5 ; fts size now 233 blocks
+   VACUUM (PARALLEL 0) m: rc=0
+   count check: idx=19200 heap=19200
+BUG2_DONE

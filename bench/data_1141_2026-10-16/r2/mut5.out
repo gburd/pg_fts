@@ -1,0 +1,20 @@
+mutant marker: 1
+mutant t/003 rc=2
+#   Failed test 'the error names the impossible segment count'
+#                   'psql:<stdin>:1: server closed the connection unexpectedly
+# 	This probably means the server terminated abnormally
+# psql:<stdin>:1: error: connection to server was lost'
+#   Failed test 'VACUUM reports the same corruption'
+#                   'psql: error: connection to server on socket "/tmp/tRu57eMOvH/.s.PGSQL.24269" failed: No such file or directory
+# 	Is the server running locally and accepting connections on that socket?'
+Dubious, test returned 29 (wstat 7424, 0x1d00)
+Failed 2/29 subtests 
+t/003_corruption.pl (Wstat: 7424 (exited 29) Tests: 29 Failed: 2)
+  Failed tests:  28-29
+Result: FAIL
+2026-10-17 04:56:42.753 UTC [267951] LOG:  client backend (PID 267962) was terminated by signal 11: Segmentation fault
+[04:56:42.615](0.105s) ok 26 - metapage nsegments is 1 before corruption
+[04:56:42.753](0.138s) ok 27 - a query over a metapage listing 100000 segments ERRORS
+#     doesn't match '(?^:metapage is corrupt: it lists 100000 segments)'
+#     doesn't match '(?^:metapage is corrupt)'
+MUT5_DONE

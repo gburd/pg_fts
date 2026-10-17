@@ -1,0 +1,10 @@
+tree 863ffb5 Release 1.14.1
+pg_fts-installcheck> # All 22 tests passed.
+pg_fts-installcheck> # All 4 tests passed.
+pg_fts-installcheck> # All 22 tests passed.
+pg_fts-installcheck> # All 4 tests passed.
+pg_fts-tap> Files=9, Tests=109, 220 wallclock secs ( 0.46 usr  0.01 sys +  5.16 cusr  3.89 csys =  9.52 CPU)
+pg_fts-tap> Result: PASS
+pg_fts-tap> Files=9, Tests=109, 229 wallclock secs ( 0.46 usr  0.02 sys +  4.98 cusr  3.84 csys =  9.30 CPU)
+pg_fts-tap> Result: PASS
+nix build rc=0

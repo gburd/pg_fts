@@ -1,0 +1,4 @@
+[C v130 CIC] nseg 1 start 1507 | par#1 1507(ERR) | par#2 1507(ERR) | par#3 1507(ERR) | serial 690 | idx=57524 heap=57524
+[D v130 vacuum_parallel layout] start 7850 | par#1 7850(ERR) | par#2 7850(ERR) | par#3 7850(ERR) | serial 799 | idx=385 heap=385
+[E v130 CIC + reader] start 1507 | serial+reader#1 2742 | serial+reader#2 3417 | serial+reader#3 4085 | serial-alone 664 | idx=57524 heap=57524
+BUG2E_DONE

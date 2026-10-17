@@ -1,0 +1,59 @@
+5
+diagG so=059e616b DIAG-in-so=5
+5
+diagN so=31db1cad DIAG-in-so=5
+[diagG par=1] after merge 7848 free 4074/7848 | par#1 7848 | par#2 7848 | par#3 7848 | serial#1 798 free 12/798 | serial#2 798 free 12/798 | serial#3 798 free 12/798
+[diagG par=0] after merge 7847 free 4073/7847 | serial#1 798 free 14/798 | serial#2 798 free 13/798 | serial#3 798 free 13/798
+[diagN par=1] after merge 7844 free 4070/7844 | par#1 8627 | par#2 9410 | par#3 10193 | serial#1 766 free 1/766 | serial#2 766 free 0/766 | serial#3 767 free 1/767
+[diagN par=0] after merge 7844 free 4070/7844 | serial#1 798 free 14/798 | serial#2 798 free 13/798 | serial#3 798 free 13/798
+VPDIAG_DONE
+---- diagG par=1
+DIAG cleanup nblocks=7848 freeblks=4060
+DIAG compact pass 0 start nblocks=7848 par=1 ael=0
+DIAG pack-first -> nblocks=7848 packed=7848 prev=7848
+DIAG cleanup nblocks=7848 freeblks=7063
+DIAG compact pass 0 start nblocks=7848 par=1 ael=0
+DIAG compacted -> truncate nblocks=7848
+DIAG cleanup nblocks=7848 freeblks=7063
+DIAG compact pass 0 start nblocks=7848 par=1 ael=0
+DIAG compacted -> truncate nblocks=7848
+DIAG cleanup nblocks=798 freeblks=12
+DIAG cleanup nblocks=798 freeblks=12
+DIAG cleanup nblocks=798 freeblks=12
+---- diagG par=0
+DIAG cleanup nblocks=7847 freeblks=4059
+DIAG compact pass 0 start nblocks=7847 par=0 ael=0
+DIAG pack-first -> nblocks=798 packed=798 prev=7847
+DIAG compact pass 1 start nblocks=798 par=0 ael=0
+DIAG compacted -> truncate nblocks=798
+DIAG cleanup nblocks=798 freeblks=13
+DIAG cleanup nblocks=798 freeblks=13
+---- diagN par=1
+DIAG cleanup nblocks=7844 freeblks=4056
+DIAG compact pass 0 start nblocks=7844 par=1 ael=0
+DIAG pack-first -> nblocks=7844 packed=7844 prev=7844
+DIAG vacate+pack -> nblocks=8627 prev=7844
+DIAG cleanup nblocks=8627 freeblks=7842
+DIAG compact pass 0 start nblocks=8627 par=1 ael=0
+DIAG pack-first -> nblocks=8627 packed=8627 prev=8627
+DIAG vacate+pack -> nblocks=9410 prev=8627
+DIAG cleanup nblocks=9410 freeblks=8625
+DIAG compact pass 0 start nblocks=9410 par=1 ael=0
+DIAG pack-first -> nblocks=9410 packed=9410 prev=9410
+DIAG vacate+pack -> nblocks=10193 prev=9410
+DIAG cleanup nblocks=1581 freeblks=796
+DIAG compact pass 0 start nblocks=1581 par=0 ael=0
+DIAG pack-first -> nblocks=766 packed=766 prev=1581
+DIAG compact pass 1 start nblocks=766 par=0 ael=0
+DIAG compacted -> truncate nblocks=766
+DIAG cleanup nblocks=766 freeblks=0
+DIAG cleanup nblocks=767 freeblks=1
+---- diagN par=0
+DIAG cleanup nblocks=7844 freeblks=4056
+DIAG compact pass 0 start nblocks=7844 par=0 ael=0
+DIAG pack-first -> nblocks=798 packed=798 prev=7844
+DIAG compact pass 1 start nblocks=798 par=0 ael=0
+DIAG compacted -> truncate nblocks=798
+DIAG cleanup nblocks=798 freeblks=13
+DIAG cleanup nblocks=798 freeblks=13
+DIAG_DONE

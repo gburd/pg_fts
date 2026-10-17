@@ -1,0 +1,8 @@
+asan pg: 
+tree 26a07b9
+initdb: warning: enabling "trust" authentication for local connections
+initdb: hint: You can change this by editing pg_hba.conf or using the option -A, or --auth-local and --auth-host, the next time you run initdb.
+smoke psql rc=0
+true rows: 13; false rows: 0; ERROR lines: 0
+ASAN_CLEAN
+ASAN141_DONE

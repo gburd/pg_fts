@@ -1,0 +1,5 @@
+smoke psql rc=2
+==58625==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x5020000007c0 at pc 0x7f8aa048a206 bp 0x7ffff32d9710 sp 0x7ffff32d9708
+SUMMARY: AddressSanitizer: heap-buffer-overflow /nvme/b3/asanteeth/./pg_fts_am_scan.c:7346:41 in bm25_estimate_matchfrac
+TEETH_CAUGHT
+restored

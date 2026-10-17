@@ -1,0 +1,4 @@
+final so 571e6139 26a07b9
+[final E] nseg 1 start 14066 | reader#1 14066 (0s) | reader#2 14066 (1s) | reader#3 14066 (0s) | serial-alone 5956 | serial-alone#2 5958 | idx=341 heap=341
+[final P] nseg 1 start 14097 | par#1 14097 (1s) | par#2 14097 (0s) | par#3 14097 (0s) | serial-alone 5956 | serial-alone#2 5958 | idx=341 heap=341
+SCALE_DONE

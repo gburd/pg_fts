@@ -1,0 +1,19 @@
+== build v100 parallel_workers=0 -> run v130: heap 834 blocks, fts 232 blocks, nseg 1, fsm-free 0
+   [1.13.0] VACUUM (VERBOSE) m: INFO:  launched 1 parallel vacuum worker for index vacuuming (planned: 1) 
+   after: fts 233 blocks; idx count 19600 heap 19600
+== build v100 parallel_workers=4 -> run v130: heap 834 blocks, fts 492 blocks, nseg 1, fsm-free 260
+   [1.13.0] VACUUM (VERBOSE) m: INFO:  launched 1 parallel vacuum worker for index vacuuming (planned: 1) ERROR:  cannot assign transaction IDs during a parallel operation CONTEXT:  while scanning relation "public.m" 
+   after: fts 492 blocks; idx count 19600 heap 19600
+== build v100 parallel_workers=4 -> run v140: heap 834 blocks, fts 495 blocks, nseg 1, fsm-free 263
+   [1.14.0] VACUUM (VERBOSE) m: INFO:  launched 1 parallel vacuum worker for index vacuuming (planned: 1) 
+   after: fts 914 blocks; idx count 19600 heap 19600
+== build v100 parallel_workers=4 -> run fix: heap 834 blocks, fts 493 blocks, nseg 1, fsm-free 261
+   [1.14.0] VACUUM (VERBOSE) m: INFO:  launched 1 parallel vacuum worker for index vacuuming (planned: 1) 
+   after: fts 914 blocks; idx count 19600 heap 19600
+== build v130 parallel_workers=4 -> run v130: heap 834 blocks, fts 232 blocks, nseg 1, fsm-free 0
+   [1.13.0] VACUUM (VERBOSE) m: INFO:  launched 1 parallel vacuum worker for index vacuuming (planned: 1) 
+   after: fts 233 blocks; idx count 19600 heap 19600
+== build v140 parallel_workers=4 -> run v140: heap 834 blocks, fts 232 blocks, nseg 1, fsm-free 0
+   [1.14.0] VACUUM (VERBOSE) m: INFO:  launched 1 parallel vacuum worker for index vacuuming (planned: 1) 
+   after: fts 233 blocks; idx count 19600 heap 19600
+BUG2C_DONE

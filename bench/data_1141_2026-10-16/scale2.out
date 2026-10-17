@@ -1,0 +1,4 @@
+[final] after CIC 14085 nseg 1 | VACUUM#1 5928 | VACUUM#2 5928 | del+VACUUM#3 5940 | fts_vacuum 5940 | idx=356 heap=356
+[v140] after CIC 14062 nseg 1 | VACUUM#1 5928 | VACUUM#2 5928 | del+VACUUM#3 5940 | fts_vacuum 5940 | idx=356 heap=356
+[v130] after CIC 14078 nseg 1 | VACUUM#1 5928 | VACUUM#2 5928 | del+VACUUM#3 5940 | fts_vacuum 5940 | idx=356 heap=356
+[v100] after CIC 14117 nseg 1 | VACUUM#1 5928 | VACUUM#2 5928 | del+VACUUM#3 5940 | fts_vacuum 5940 | idx=356 heap=356

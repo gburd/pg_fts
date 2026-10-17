@@ -4,6 +4,149 @@ All notable changes to pg_fts are documented here.
 
 ## Unreleased
 
+## 1.14.1 - 2026-10-16
+
+Five fixes: one reported by the pg.ddx.io operators against 1.14.0, the others
+found while re-validating their 1.14.0 reports and reviewing the fixes.  One is a
+**wrong `count(*)` result** in every release with the count pushdown (below).
+**No on-disk format change; no REINDEX; no SQL change** (`pg_fts--1.14.0--1.14.1.sql`
+is a no-op).
+
+### Fixed
+
+- **`count(*) ... WHERE col @@@ q` could return a wrong number** (every release
+  with the count pushdown, 0.1.0 on; the first two cases below measured on
+  1.10.0, 1.13.0 and 1.14.0, the third on 1.13.0 and 1.14.0).
+  The pushdown answers `count(*)` from the index, and it chose the index from
+  the table's raw index list, which also holds indexes no query may read:
+  - a **partial** fts index (`... USING fts (d) WHERE id <= 100`): `count(*)`
+    counted only the rows the predicate admits -- 100 instead of 2,000;
+  - an index **too new for the transaction's snapshot** (`CREATE INDEX` over
+    a HOT-updated row while a `REPEATABLE READ` transaction still sees the old
+    version, `indcheckxmin`): 1 and 49 instead of 0 and 50;
+  - an index left **invalid by a cancelled `CREATE INDEX CONCURRENTLY`**,
+    which lacks the rows inserted while it was being built: 0 instead of 1;
+  - an index still in `CREATE INDEX CONCURRENTLY`'s first wait, whose file is
+    empty: `count(*)` failed ("could not read blocks 0..0"; measured on 1.13.0
+    and 1.14.0).
+
+  The `@@@` estimator (1.14.0) used the same list, so in 1.14.0 during that
+  first wait every `@@@` query on the table failed to plan, not only `count(*)`; a
+  join clause over a partitioned table failed ("could not open file"); and an
+  expression index matched only when the table was the first table in the
+  query.  Both now take the index from the planner's own list, which leaves
+  out invalid and too-new indexes, and also skip partial ones (a partial
+  index still serves the normal index scans).  `bm25_cic_planner` isolation
+  test and `planner_indexes` test; both fail on 1.14.0.
+- **`@@@` estimated every row as a match whenever the index had pending
+  documents, so plans flipped to Seq Scans** (reported by the pg.ddx.io
+  operators; 1.14.0 only).  1.14.0's `fts_matchsel` used the ordering scan's
+  upper bound, which is the whole corpus as soon as anything is pending.  That
+  is the steady state of any index taking inserts, because
+  `pg_fts.pending_flush_threshold` flushes only at 20,000.  In production a
+  96-row count was estimated at 1,651,568 rows and timed out on a Seq Scan.
+  The estimate now comes from the segment dictionaries alone (segment df over
+  segment documents), so pending documents count as a sample of the same corpus.
+  A query the segments cannot estimate falls back to `tsmatchsel`, the 1.13.0
+  estimate: a prefix, fuzzy, regex or weighted term; a term in no segment while
+  documents are pending; an index whose segments hold fewer documents than
+  its pending list (none at all, or too small a sample: 10 indexed documents
+  that all contain a term would otherwise price it as every row).  Measured at
+  100,000 segment rows + 3,000 pending (PG 18.6): `rare` (103 real matches) was
+  estimated at 103,000 rows and ran a Seq Scan (`LIMIT 20`: 20.54 ms, median of
+  7); it is now estimated at 103 and runs a Bitmap Heap Scan (0.143 ms, median
+  of 7).  Planning cost of reading the dictionary, 5-term query, 7 segments,
+  median Planning Time warm (15 in one session) / cold (first plan after a
+  restart, 11 restarts): 1.14.0 0.041 / 0.78 ms with nothing pending and
+  0.011 / 0.67 ms with documents pending (it skipped the dictionary then);
+  1.14.1 0.041 / 0.78 ms in both cases.  `planner_pending` test.
+- **VACUUM grew the index when it could not truncate** (1.11.0 to 1.14.0).
+  When an index has enough free space, VACUUM's cleanup compacts it with a
+  "pack" rewrite and then truncates the freed tail.  If that truncation was
+  declined, it went on to a "vacate" rewrite that extends the file by about the
+  live size, and only another truncation can give that back.  The truncation
+  takes `AccessExclusiveLock` conditionally (1.11.0), so it is declined whenever
+  another session holds any lock on the index, for example a reader in an open
+  transaction.  1.14.0 also declines it in a parallel VACUUM.  Each such VACUUM
+  grew the file and the next one grew it again.  Measured on PostgreSQL 18.6
+  (fts blocks; 1.14.1 rows are the same steps on the fixed build):
+  - a reader holding a lock through each of three serial VACUUMs:
+    1.13.0 and 1.14.0 went 1,507 -> 2,742 -> 3,417 -> 4,085, and to 664 only
+    once a VACUUM ran without the reader.  1.14.1 holds 1,506 -> 1,506 -> 1,506
+    -> 1,506, then 686.
+  - three parallel VACUUMs on 1.14.0: 7,848 -> 8,632 -> 9,415 -> 10,198, then
+    755 after a non-parallel one.  1.14.1: 7,845 held through all three, then 799.
+  - the reporter's steps on a 1.10.0 parallel-built index upgraded in place:
+    1.14.0 went 494 -> 923 -> 1,150 -> 1,374 -> 1,597 over four parallel
+    VACUUMs, and 1.14.1 held 494.  (1.13.0 raised the parallel-mode ERROR on
+    the same steps.)
+  - second scale, 600,000 rows (live size about 5,930 blocks): each such VACUUM
+    on 1.14.0 added 5,925 blocks (23,709 -> 41,480 over three, reader or
+    parallel); 1.14.1 held, and two VACUUMs alone reached 5,956.
+
+  The vacate now runs only under `AccessExclusiveLock` (`fts_vacuum`, a build),
+  where the truncation cannot be declined.  Without that lock, cleanup compacts
+  only when older free pages can hold the live data, and the pack alone does
+  that; the next VACUUM that can truncate removes the tail it left.
+  `fts_vacuum` is unchanged.  `bm25_vacuum_growth` isolation test (a reader
+  holds the index lock across three VACUUMs) and size checks in
+  `vacuum_parallel`; both fail on 1.14.0.
+- **bulkdelete with `doclen_sidecar=off` still held a whole segment's postings
+  when `maintenance_work_mem` was large** (the 1.14.0 fix was incomplete).  The
+  batch was `maintenance_work_mem / 24` entries, so at 4 GB (178M entries) a
+  segment with fewer postings than that was still added in one batch.  That is
+  the 1.13.0 behaviour: 24 bytes per posting resident and an uninterruptible
+  sort.  The batch is now capped at 4M entries whatever the setting, and is
+  flushed before a term that would overfill it, so it never holds more than
+  max(4M, that term's document frequency) entries.  Reporter's harness
+  (200k/400k documents, 60M/120M postings, PG 18.6, `maintenance_work_mem=4GB`):
+  peak RSS 1,430 -> 154 MB and 2,814 -> 162 MB; VACUUM time unchanged within
+  run-to-run noise.  Cancel latency (8 cancels each, 1-5 s into the index
+  pass): 3.5-7.3 s and 10.6-14.6 s -> 0.05-0.33 s and 0.00-0.06 s.
+  `bench/RESULTS_1141_2026-10-16.md`.
+- **A corrupt metapage segment count was trusted.**  Every reader walked the
+  128-entry segment directory up to the metapage's `nsegments`, so a corrupt
+  count read (and an in-place writer wrote) past it.  It is now checked first
+  and raises `index_corrupted` with a REINDEX hint (`t/003_corruption.pl`).
+
+### Test
+
+- The ASan smoke (`test/asan_smoke.sql`, CI `sanitizers` job, added after
+  1.14.0) had two checks that were false on every build, `near_ok` and
+  `fuzzy_ok`: their queries (`united <2> states`, `alpha:1`) match no row of
+  its corpus, and the job never looked at the rows, only at the ASan log.
+  The queries now match rows, and every check raises unless it is true (false
+  or NULL), so the script itself fails the job.  Known limit, measured: an
+  overflow of a `palloc`'d chunk is not an ASan report (PostgreSQL's allocator
+  is not ASan-poisoned; cassert only logs "detected write past chunk end",
+  which the job does not check); a planted overflow of a malloc'd buffer is
+  caught.
+- `make check-ascii` now also checks the C sources and isolation specs; two
+  comments had non-ASCII characters.
+
+### Retracted
+
+- 1.14.0 said `fts_matchsel` "falls back to `tsmatchsel` ... so no plan that
+  worked before changes."  That was wrong: with any pending document it
+  estimated every row as a match, and plans that worked on 1.13.0 became Seq
+  Scans.
+- 1.14.0 said the parallel-VACUUM fix leaves the free tail in the FSM "exactly
+  as when the conditional lock is unavailable."  The FSM part is true, but in
+  both cases the compaction had already extended the file before the truncation
+  was declined, so each such VACUUM grew the index (fixed above).  The
+  "conditional lock unavailable" case had done this since 1.11.0.
+- Every release since 0.1.0 described the `count(*)` pushdown as an exact,
+  MVCC-correct count.  With a partial fts index, an index too new for the
+  snapshot, or an invalid one left by a cancelled `CREATE INDEX CONCURRENTLY`,
+  it was not (fixed above).
+- 1.14.0 said a "5%-deleted VACUUM [fell] from 2,820 MB to 157 MB."  That held
+  only with the doclen sidecar on or a small `maintenance_work_mem`; with the
+  reporter's settings (`doclen_sidecar=off`, `maintenance_work_mem=4GB`) 1.14.0
+  measured 2,814 MB, unchanged from 1.13.0 (fixed above).
+- 1.14.0 said bulkdelete's batches mean "the knob finally bounds the peak."
+  The knob raised the peak: a large `maintenance_work_mem` removed the bound.
+  The cap above restores it.
+
 ## 1.14.0 - 2026-10-16
 
 Two VACUUM fixes reported from production, plus two planner and write-path fixes

@@ -1,0 +1,9 @@
+cap1m rows=200000 index=320 MB bulkdelete-VACUUM 7.39s VmHWM 151MB | cancel latency s: 0.00 0.09 0.06 0.05 0.01 0.07 0.09 0.07
+cap1m rows=400000 index=518 MB bulkdelete-VACUUM 14.37s VmHWM 158MB | cancel latency s: 0.08 0.02 0.10 0.01 0.04 0.03 0.02 0.01
+cap8m rows=200000 index=320 MB bulkdelete-VACUUM 8.04s VmHWM 248MB | cancel latency s: 0.09 0.13 0.22 0.20 0.28 0.17 0.11 0.08
+cap8m rows=400000 index=518 MB bulkdelete-VACUUM 15.31s VmHWM 259MB | cancel latency s: 0.06 0.15 0.08 0.10 0.18 0.08 0.08 0.10
+fix rows=200000 index=320 MB bulkdelete-VACUUM 8.03s VmHWM 154MB | cancel latency s: 0.05 0.11 0.18 0.28 0.33 0.11 0.12 0.11
+fix rows=400000 index=518 MB bulkdelete-VACUUM 15.32s VmHWM 166MB | cancel latency s: 0.02 0.06 0.00 0.00 0.05 0.05 0.02 0.03
+v140 rows=200000 index=320 MB bulkdelete-VACUUM 9.01s VmHWM 1428MB | cancel latency s: 7.29 6.53 5.57 4.48 3.54 6.41 6.51 6.56
+v140 rows=400000 index=518 MB bulkdelete-VACUUM 17.13s VmHWM 2813MB | cancel latency s: 0.01 14.62 13.16 11.79 10.59 14.32 13.82 13.88
+CANCEL2_DONE

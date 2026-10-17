@@ -1,0 +1,4 @@
+v140 so 5dbd16f3 
+[v140 E] nseg 1 start 23709 | reader#1 29634 (4s) | reader#2 35558 (3s) | reader#3 41480 (3s) | serial-alone 5929 | serial-alone#2 5929 | idx=341 heap=341
+[v140 P] nseg 1 start 23709 | par#1 29634 (4s) | par#2 35558 (3s) | par#3 41480 (3s) | serial-alone 5929 | serial-alone#2 5929 | idx=341 heap=341
+SCALE_DONE

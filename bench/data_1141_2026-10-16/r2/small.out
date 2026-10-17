@@ -1,0 +1,4 @@
+v130: Limit (cost=4.16..26.95 rows=20 width=4)| -> Bitmap Heap Scan on ps (cost=4.16..26.95 rows=20 width=4)| -> Bitmap Index Scan on ps_fts (cost=0.00..4.15 rows=20 width=0)|actual=14|
+v140: Limit (cost=0.00..0.41 rows=20 width=4)| -> Seq Scan on ps (cost=0.00..82.15 rows=4010 width=4)|actual=14|
+final: Limit (cost=0.00..0.41 rows=20 width=4)| -> Seq Scan on ps (cost=0.00..82.15 rows=4010 width=4)|actual=14|
+r2a: Limit (cost=4.16..26.95 rows=20 width=4)| -> Bitmap Heap Scan on ps (cost=4.16..26.95 rows=20 width=4)| -> Bitmap Index Scan on ps_fts (cost=0.00..4.15 rows=20 width=0)|actual=14|

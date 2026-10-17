@@ -1,0 +1,58 @@
+== PG17 postgres (PostgreSQL) 17.10 tree 26a07b9 default_version = '1.14.1' markers: pg_fts_am.c:4 pg_fts_am_scan.c:6 
+installed so md5 130e02d8; ext files: 2
+== PG17 regress+isolation
+installcheck rc=0
+ok 1 pg_fts;ok 2 unicode_fold;ok 3 idx_scan_stats;ok 4 limit_hint;ok 5 doclen_slots;ok 6 score_reuse;ok 7 wand_last_block;ok 8 dense_score;ok 9 phrase_gate;ok 10 shared_doclen;ok 11 ranked_exact;ok 12 pending_delete;ok 13 dict_dir;ok 14 scan_keys;ok 15 legal_proximity;ok 16 pending_rank;ok 17 pending_flush;ok 18 planner_cost;ok 19 vacuum_parallel;ok 20 vacuum_mem;ok 21 planner_pending;ok 1 bm25_concurrency;ok 2 bm25_cic;ok 3 bm25_vacuum_growth;
+summary: 24 ok, 0 not ok; # All 21 tests passed. # All 3 tests passed. 
+== PG17 query_binary: {"passed": 49, "valid": 21, "invalid": 28}
+== PG17 tap
+tap rc=0
+t/003_corruption.pl ........... ok
+t/004_encodings.pl ............ ok
+t/005_concurrency.pl .......... ok
+t/006_concurrent_extend.pl .... ok
+t/007_segment_cap.pl .......... ok
+t/008_vacuum_reclaim.pl ....... ok
+t/010_vacuum_delete_heavy.pl .. ok
+t/011_shared_doclen.pl ........ ok
+t/012_concurrent_flush.pl ..... ok
+Files=9, Tests=104, 231 wallclock secs ( 0.41 usr  0.01 sys +  4.64 cusr  3.86 csys =  8.92 CPU)
+Result: PASS
+== PG18 postgres (PostgreSQL) 18.6 tree 26a07b9 default_version = '1.14.1' markers: pg_fts_am.c:4 pg_fts_am_scan.c:6 
+installed so md5 ddb9af20; ext files: 2
+== PG18 regress+isolation
+installcheck rc=0
+ok 1 pg_fts;ok 2 unicode_fold;ok 3 idx_scan_stats;ok 4 limit_hint;ok 5 doclen_slots;ok 6 score_reuse;ok 7 wand_last_block;ok 8 dense_score;ok 9 phrase_gate;ok 10 shared_doclen;ok 11 ranked_exact;ok 12 pending_delete;ok 13 dict_dir;ok 14 scan_keys;ok 15 legal_proximity;ok 16 pending_rank;ok 17 pending_flush;ok 18 planner_cost;ok 19 vacuum_parallel;ok 20 vacuum_mem;ok 21 planner_pending;ok 1 bm25_concurrency;ok 2 bm25_cic;ok 3 bm25_vacuum_growth;
+summary: 24 ok, 0 not ok; # All 21 tests passed. # All 3 tests passed. 
+== PG18 query_binary: {"passed": 49, "valid": 21, "invalid": 28}
+== PG18 tap
+tap rc=0
+t/003_corruption.pl ........... ok
+t/004_encodings.pl ............ ok
+t/005_concurrency.pl .......... ok
+t/006_concurrent_extend.pl .... ok
+t/007_segment_cap.pl .......... ok
+t/008_vacuum_reclaim.pl ....... ok
+t/010_vacuum_delete_heavy.pl .. ok
+t/011_shared_doclen.pl ........ ok
+t/012_concurrent_flush.pl ..... ok
+Files=9, Tests=104, 228 wallclock secs ( 0.42 usr  0.00 sys +  4.91 cusr  3.83 csys =  9.16 CPU)
+Result: PASS
+== check-alloc: alloc-safety: no unguarded corpus/vocabulary-scale allocations
+== check-ascii: install SQL is pure ASCII (installs on any server encoding) rc=0
+== fuzz
+fuzz rc=0
+PASS: fuzz_for
+PASS: fuzz_docvalid
+PASS: fuzz_block
+PASS: fuzz_smblob
+PASS: fuzz_block_noclamp aborted as expected (count-clamp teeth)
+PASS: fuzz_block_signed aborted as expected (signed-count teeth)
+PASS: fuzz_block_randstream aborted as expected (corrupt-width teeth)
+PASS: fuzz_block_nosumtf aborted as expected (sumtf-vs-posbytelen teeth)
+== ALL CLEAN ==
+== t012 rerun 1 (PG17): t/012_concurrent_flush.pl .. ok Result: PASS 
+== t012 rerun 2 (PG17): t/012_concurrent_flush.pl .. ok Result: PASS 
+== t012 rerun 3 (PG17): t/012_concurrent_flush.pl .. ok Result: PASS 
+== oom: 0
+GATE141_DONE

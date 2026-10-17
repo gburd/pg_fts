@@ -1,0 +1,8 @@
+== fix2 PG18: ok 1 planner_pending;ok 1 vacuum_parallel;ok 1 bm25_vacuum_growth;
+== v140 PG18: not ok -;not ok -;not ok -;
+== mutB2 PG18: ok 1 planner_pending;not ok -;not ok -;
+== mut32 PG18: not ok -;ok 1 vacuum_parallel;ok 1 bm25_vacuum_growth;
+== fix2 PG17: ok 1 planner_pending;ok 1 vacuum_parallel;ok 1 bm25_vacuum_growth;
+== v140 PG17: not ok -;not ok -;not ok -;
+== mutB2 PG17: ok 1 planner_pending;not ok -;not ok -;
+NTALL_DONE

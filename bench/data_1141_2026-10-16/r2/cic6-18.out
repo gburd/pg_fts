@@ -1,0 +1,15 @@
+== postgres (PostgreSQL) 18.6 default_version = '1.10.0' so=51cd9fce
+partial plan: Custom Scan (FtsCount) 
+partial count(*)=100 truth=2000
+hot: 1
+BEGIN 50  Custom Scan (FtsCount) A pushdown omega, alpha: 1 49 A truth omega, alpha: 0 50 COMMIT 
+== postgres (PostgreSQL) 18.6 default_version = '1.13.0' so=15076f4e
+partial plan: Custom Scan (FtsCount) 
+partial count(*)=100 truth=2000
+hot: 1
+BEGIN 50  Custom Scan (FtsCount) A pushdown omega, alpha: 1 49 A truth omega, alpha: 0 50 COMMIT 
+== postgres (PostgreSQL) 18.6 default_version = '1.14.0' so=5dbd16f3
+partial plan: Custom Scan (FtsCount) 
+partial count(*)=100 truth=2000
+hot: 1
+BEGIN 50  Custom Scan (FtsCount) A pushdown omega, alpha: 1 49 A truth omega, alpha: 0 50 COMMIT 

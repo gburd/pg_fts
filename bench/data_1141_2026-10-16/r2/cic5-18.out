@@ -1,0 +1,79 @@
+== postgres (PostgreSQL) 18.6 default_version = '1.10.0' so=51cd9fce
+Custom Scan (FtsCount)
+partial: pushdown=2000
+partial: truth=2000
+Append  (cost=4.04..35.24 rows=13 width=4)
+  ->  Bitmap Heap Scan on pt1 pt_1  (cost=4.04..15.14 rows=5 width=4)
+        Recheck Cond: (d @@@ '(''alpha'' & ''17'')'::ftsquery)
+        ->  Bitmap Index Scan on pt1_d_idx  (cost=0.00..4.04 rows=5 width=0)
+              Index Cond: (d @@@ '(''alpha'' & ''17'')'::ftsquery)
+  ->  Bitmap Heap Scan on pt2 pt_2  (cost=4.06..20.04 rows=8 width=4)
+        Recheck Cond: (d @@@ '(''alpha'' & ''17'')'::ftsquery)
+        ->  Bitmap Index Scan on pt2_d_idx  (cost=0.00..4.06 rows=8 width=0)
+              Index Cond: (d @@@ '(''alpha'' & ''17'')'::ftsquery)
+Aggregate
+  ->  Append
+        ->  Bitmap Heap Scan on pt1 pt_1
+              Recheck Cond: (d @@@ '''alpha'''::ftsquery)
+              ->  Bitmap Index Scan on pt1_d_idx
+                    Index Cond: (d @@@ '''alpha'''::ftsquery)
+        ->  Bitmap Heap Scan on pt2 pt_2
+              Recheck Cond: (d @@@ '''alpha'''::ftsquery)
+              ->  Bitmap Index Scan on pt2_d_idx
+                    Index Cond: (d @@@ '''alpha'''::ftsquery)
+partitioned count=2500
+-- expression index, table second in a join (1 = estimated rows from the index, 100 = tsmatchsel default)
+Bitmap Heap Scan on e  (cost=4.78..132.28 rows=100 width=4)
+  Recheck Cond: (to_ftsdoc('simple'::regconfig, body) @@@ '(''doc'' & ''17'')'::ftsquery)
+  ->  Bitmap Index Scan on e_fts  (cost=0.00..4.75 rows=100 width=0)
+CIC5_DONE
+== postgres (PostgreSQL) 18.6 default_version = '1.13.0' so=15076f4e
+Custom Scan (FtsCount)
+partial: pushdown=2000
+partial: truth=2000
+Append  (cost=4.04..35.24 rows=13 width=4)
+  ->  Bitmap Heap Scan on pt1 pt_1  (cost=4.04..15.14 rows=5 width=4)
+        Recheck Cond: (d @@@ '(''alpha'' & ''17'')'::ftsquery)
+        ->  Bitmap Index Scan on pt1_d_idx  (cost=0.00..4.04 rows=5 width=0)
+              Index Cond: (d @@@ '(''alpha'' & ''17'')'::ftsquery)
+  ->  Bitmap Heap Scan on pt2 pt_2  (cost=4.06..20.04 rows=8 width=4)
+        Recheck Cond: (d @@@ '(''alpha'' & ''17'')'::ftsquery)
+        ->  Bitmap Index Scan on pt2_d_idx  (cost=0.00..4.06 rows=8 width=0)
+              Index Cond: (d @@@ '(''alpha'' & ''17'')'::ftsquery)
+Aggregate
+  ->  Append
+        ->  Bitmap Heap Scan on pt1 pt_1
+              Recheck Cond: (d @@@ '''alpha'''::ftsquery)
+              ->  Bitmap Index Scan on pt1_d_idx
+                    Index Cond: (d @@@ '''alpha'''::ftsquery)
+        ->  Bitmap Heap Scan on pt2 pt_2
+              Recheck Cond: (d @@@ '''alpha'''::ftsquery)
+              ->  Bitmap Index Scan on pt2_d_idx
+                    Index Cond: (d @@@ '''alpha'''::ftsquery)
+partitioned count=2500
+-- expression index, table second in a join (1 = estimated rows from the index, 100 = tsmatchsel default)
+Bitmap Heap Scan on e  (cost=4.78..132.28 rows=100 width=4)
+  Recheck Cond: (to_ftsdoc('simple'::regconfig, body) @@@ '(''doc'' & ''17'')'::ftsquery)
+  ->  Bitmap Index Scan on e_fts  (cost=0.00..4.75 rows=100 width=0)
+CIC5_DONE
+== postgres (PostgreSQL) 18.6 default_version = '1.14.0' so=5dbd16f3
+Custom Scan (FtsCount)
+partial: pushdown=2000
+partial: truth=2000
+Append  (cost=0.00..16.05 rows=2 width=4)
+  ->  Index Scan using pt1_d_idx on pt1 pt_1  (cost=0.00..8.02 rows=1 width=4)
+        Index Cond: (d @@@ '(''alpha'' & ''17'')'::ftsquery)
+  ->  Index Scan using pt2_d_idx on pt2 pt_2  (cost=0.00..8.02 rows=1 width=4)
+        Index Cond: (d @@@ '(''alpha'' & ''17'')'::ftsquery)
+Aggregate
+  ->  Append
+        ->  Seq Scan on pt1 pt_1
+              Filter: (d @@@ '''alpha'''::ftsquery)
+        ->  Seq Scan on pt2 pt_2
+              Filter: (d @@@ '''alpha'''::ftsquery)
+partitioned count=2500
+-- expression index, table second in a join (1 = estimated rows from the index, 100 = tsmatchsel default)
+Bitmap Heap Scan on e  (cost=4.78..132.28 rows=100 width=4)
+  Recheck Cond: (to_ftsdoc('simple'::regconfig, body) @@@ '(''doc'' & ''17'')'::ftsquery)
+  ->  Bitmap Index Scan on e_fts  (cost=0.00..4.75 rows=100 width=0)
+CIC5_DONE

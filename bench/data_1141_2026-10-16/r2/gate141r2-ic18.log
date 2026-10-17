@@ -1,0 +1,42 @@
+echo "# +++ regress install-check in  +++" && /nvme/pg18/lib/postgresql/pgxs/src/makefiles/../../src/test/regress/pg_regress --inputdir=./ --bindir='/nvme/pg18/bin'    --dbname=contrib_regression pg_fts unicode_fold idx_scan_stats limit_hint doclen_slots score_reuse wand_last_block dense_score phrase_gate shared_doclen ranked_exact pending_delete dict_dir scan_keys legal_proximity pending_rank pending_flush planner_cost vacuum_parallel vacuum_mem planner_pending planner_indexes
+# +++ regress install-check in  +++
+# using postmaster on /tmp, port 55618
+ok 1         - pg_fts                                   8569 ms
+ok 2         - unicode_fold                               22 ms
+ok 3         - idx_scan_stats                             20 ms
+ok 4         - limit_hint                                546 ms
+ok 5         - doclen_slots                              201 ms
+ok 6         - score_reuse                                45 ms
+ok 7         - wand_last_block                            46 ms
+ok 8         - dense_score                               222 ms
+ok 9         - phrase_gate                               378 ms
+ok 10        - shared_doclen                             356 ms
+ok 11        - ranked_exact                             1188 ms
+ok 12        - pending_delete                             37 ms
+ok 13        - dict_dir                                 8242 ms
+ok 14        - scan_keys                                  47 ms
+ok 15        - legal_proximity                         22857 ms
+ok 16        - pending_rank                               35 ms
+ok 17        - pending_flush                             293 ms
+ok 18        - planner_cost                               18 ms
+ok 19        - vacuum_parallel                          6537 ms
+ok 20        - vacuum_mem                                206 ms
+ok 21        - planner_pending                           173 ms
+ok 22        - planner_indexes                            85 ms
+1..22
+# All 22 tests passed.
+echo "# +++ isolation install-check in  +++" && /nvme/pg18/lib/postgresql/pgxs/src/makefiles/../../src/test/isolation/pg_isolation_regress --inputdir=./ --outputdir=output_iso --bindir='/nvme/pg18/bin'    --dbname=isolation_regression bm25_concurrency bm25_cic bm25_vacuum_growth bm25_cic_planner
+# +++ isolation install-check in  +++
+# using postmaster on /tmp, port 55618
+ok 1         - bm25_concurrency                           33 ms
+ok 2         - bm25_cic                                   14 ms
+ok 3         - bm25_vacuum_growth                        509 ms
+ok 4         - bm25_cic_planner                          125 ms
+1..4
+# All 4 tests passed.
+echo "# +++ tap install-check in  +++" && rm -rf '/nvme/b3/gtree18'/tmp_check && /usr/bin/mkdir -p '/nvme/b3/gtree18'/tmp_check && cd ./ && TESTLOGDIR='/nvme/b3/gtree18/tmp_check/log' TESTDATADIR='/nvme/b3/gtree18/tmp_check' PATH="/nvme/pg18/bin:/nvme/b3/gtree18:$PATH" PGPORT='65432' PG_REGRESS='/nvme/pg18/lib/postgresql/pgxs/src/makefiles/../../src/test/regress/pg_regress' /usr/bin/prove -I /nvme/pg18/lib/postgresql/pgxs/src/makefiles/../../src/test/perl/ -I ./  ci/noop.pl
+# +++ tap install-check in  +++
+ci/noop.pl .. ok
+All tests successful.
+Files=1, Tests=1,  0 wallclock secs ( 0.01 usr  0.01 sys +  0.02 cusr  0.00 csys =  0.04 CPU)
+Result: PASS

@@ -1,0 +1,14 @@
+segments=7 rows=140000 index=24 MB
+v140 so=5dbd16f3 nseg=7 est=rows=560 actual=0
+  pending=0: warm 0.041 ms, cold 0.782 ms
+  pending=100: nseg=7 est=rows=140000 actual=100; warm 0.011 ms, cold 0.667 ms
+r2a so=3bb11214 nseg=7 est=rows=560 actual=0
+  pending=0: warm 0.041 ms, cold 0.787 ms
+  pending=100: nseg=7 est=rows=560 actual=100; warm 0.041 ms, cold 0.780 ms
+v140 so=5dbd16f3 nseg=7 est=rows=560 actual=0
+  pending=0: warm 0.041 ms, cold 0.790 ms
+  pending=100: nseg=7 est=rows=140000 actual=100; warm 0.011 ms, cold 0.679 ms
+r2a so=3bb11214 nseg=7 est=rows=560 actual=0
+  pending=0: warm 0.041 ms, cold 0.772 ms
+  pending=100: nseg=7 est=rows=560 actual=100; warm 0.041 ms, cold 0.780 ms
+PLANTIME_DONE

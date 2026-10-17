@@ -1,0 +1,4 @@
+[C v100 CIC] nseg 1 start 1506 | par#1 686 | par#2 686 | par#3 688 | serial 690 | idx=57524 heap=57524
+[D v100 vacuum_parallel layout] start 7848 | par#1 799 | par#2 799 | par#3 799 | serial 799 | idx=385 heap=385
+[E v100 CIC + reader] start 1505 | serial+reader#1 686 | serial+reader#2 686 | serial+reader#3 688 | serial-alone 690 | idx=57524 heap=57524
+BUG2E_DONE

@@ -1,0 +1,20 @@
+== build v100 pre=vacuum -> run v130: fts 232 blocks, free(fsm) 0
+   [1.13.0] VACUUM m:   -> fts 233 blocks
+   autovacuum_count=1 after 4x2s
+== build v100 pre=autovac -> run v130: fts 232 blocks, free(fsm) 0
+   [1.13.0] VACUUM m:   -> fts 233 blocks
+== build v130 pre=vacuum -> run v130: fts 232 blocks, free(fsm) 0
+   [1.13.0] VACUUM m:   -> fts 233 blocks
+   autovacuum_count=1 after 4x2s
+== build v130 pre=autovac -> run v130: fts 232 blocks, free(fsm) 0
+   [1.13.0] VACUUM m:   -> fts 233 blocks
+   autovacuum_count=1 after 4x2s
+== build v100 pre=autovac -> run v140: fts 232 blocks, free(fsm) 0
+   [1.14.0] VACUUM m:   -> fts 233 blocks
+   autovacuum_count=1 after 4x2s
+== build v140 pre=autovac -> run v140: fts 232 blocks, free(fsm) 0
+   [1.14.0] VACUUM m:   -> fts 233 blocks
+   autovacuum_count=1 after 4x2s
+== build v100 pre=autovac -> run fix: fts 232 blocks, free(fsm) 0
+   [1.14.0] VACUUM m:   -> fts 233 blocks
+BUG2B_DONE

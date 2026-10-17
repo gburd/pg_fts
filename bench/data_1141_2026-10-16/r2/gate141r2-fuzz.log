@@ -1,0 +1,20 @@
+== building fuzzers (clang, ASan+UBSan) ==
+== running fuzzers ==
+fuzz_for: OK (unpack write-safety + pack/unpack round-trip)
+PASS: fuzz_for
+fuzz_docvalid: OK (random + structured-corrupt FtsDoc images)
+PASS: fuzz_docvalid
+fuzz_block: OK (block-header parse + count clamp holds)
+PASS: fuzz_block
+fuzz_smblob: 20000 round-trips clean (small + chunk mode)
+PASS: fuzz_smblob
+== planted-bug checks: teeth builds MUST abort under ASan ==
+test/fuzz/run.sh: line 61: 267970 Aborted                 "$out/fuzz_block_noclamp" > /dev/null 2>&1
+PASS: fuzz_block_noclamp aborted as expected (count-clamp teeth)
+test/fuzz/run.sh: line 71: 267972 Aborted                 "$out/fuzz_block_signed" > /dev/null 2>&1
+PASS: fuzz_block_signed aborted as expected (signed-count teeth)
+test/fuzz/run.sh: line 81: 267974 Aborted                 "$out/fuzz_block_randstream" > /dev/null 2>&1
+PASS: fuzz_block_randstream aborted as expected (corrupt-width teeth)
+test/fuzz/run.sh: line 92: 267976 Aborted                 "$out/fuzz_block_nosumtf" > /dev/null 2>&1
+PASS: fuzz_block_nosumtf aborted as expected (sumtf-vs-posbytelen teeth)
+== ALL CLEAN ==

@@ -1,0 +1,5 @@
+== postgres (PostgreSQL) 18.6 default_version = '1.14.0' so=5dbd16f3
+ERROR:  could not open file "pg_tblspc/0/PG_18_202506291/0/0": No such file or directory
+ERROR:  could not open file "pg_tblspc/0/PG_18_202506291/0/0": No such file or directory
+expr index, rel is varno 1: rows=1
+expr index, rel is varno 2: rows=100

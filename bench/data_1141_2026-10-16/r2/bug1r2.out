@@ -1,0 +1,25 @@
+######## repro.sh final 200000 so=571e6139
+== final: postgres (PostgreSQL) 18.6
+pg_fts 1.14.1
+load+build 104s; index 320 MB, nsegments 1
+postings: seg0 ndocs=200000 sum(df)=59995467
+control  (VACUUM, 0 dead tuples): 15 MB peak RSS (VmHWM), VmPeak 205 MB
+bulkdelete (VACUUM, 5% deleted): 151 MB peak RSS (VmHWM), VmPeak 365 MB  [7.5s]
+  victim: ERROR:  canceling statement due to user request
+  victim: CONTEXT:  while vacuuming index "docs_fts" of relation "public.docs"
+workaround VACUUM (INDEX_CLEANUP OFF), 5% deleted: 137 MB peak RSS (VmHWM), VmPeak 205 MB
+workaround reloption vacuum_index_cleanup=off, plain VACUUM: 146 MB peak RSS (VmHWM), VmPeak 205 MB
+cancel sent 2s into 'vacuuming indexes'; backend stopped 1.0s later
+######## repro.sh r2a 200000 so=3bb11214
+== r2a: postgres (PostgreSQL) 18.6
+pg_fts 1.14.1
+load+build 104s; index 320 MB, nsegments 1
+postings: seg0 ndocs=200000 sum(df)=59995587
+control  (VACUUM, 0 dead tuples): 15 MB peak RSS (VmHWM), VmPeak 205 MB
+bulkdelete (VACUUM, 5% deleted): 154 MB peak RSS (VmHWM), VmPeak 365 MB  [7.6s]
+  victim: ERROR:  canceling statement due to user request
+  victim: CONTEXT:  while vacuuming index "docs_fts" of relation "public.docs"
+workaround VACUUM (INDEX_CLEANUP OFF), 5% deleted: 137 MB peak RSS (VmHWM), VmPeak 205 MB
+workaround reloption vacuum_index_cleanup=off, plain VACUUM: 146 MB peak RSS (VmHWM), VmPeak 205 MB
+cancel sent 2s into 'vacuuming indexes'; backend stopped 0.6s later
+BUG1R2_DONE

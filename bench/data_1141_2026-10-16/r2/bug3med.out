@@ -1,0 +1,3 @@
+v140 so=5dbd16f3 plan: Seq Scan rows: rows=20; exec ms (7 after 2 warm): 20.566 20.542 20.546 20.535 20.562 20.527 20.542  median 20.542
+r2a so=3bb11214 plan: Bitmap Heap Scan rows: rows=20; exec ms (7 after 2 warm): 0.149 0.144 0.142 0.143 0.141 0.141 0.162  median 0.143
+BUG3MED_DONE

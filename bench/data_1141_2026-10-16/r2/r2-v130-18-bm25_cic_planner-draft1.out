@@ -1,0 +1,101 @@
+Parsed test spec with 4 sessions
+
+starting permutation: w1_begin b_cic r_state r_plan r_count w1_commit r_state r_plan
+step w1_begin: BEGIN; INSERT INTO cicp VALUES (3001, to_ftsdoc('simple', 'beta'));
+step b_cic: CREATE INDEX CONCURRENTLY cicp_fts ON cicp USING fts (d); <waiting ...>
+step r_state: SELECT indisready, indisvalid, pg_relation_size(indexrelid) > 0 AS has_blocks
+                   FROM pg_index WHERE indexrelid = 'cicp_fts'::regclass;
+indisready|indisvalid|has_blocks
+----------+----------+----------
+f         |f         |f         
+(1 row)
+
+step r_plan: EXPLAIN (COSTS OFF) SELECT id FROM cicp WHERE d @@@ 'doc & 17'::ftsquery;
+QUERY PLAN                                      
+------------------------------------------------
+Seq Scan on cicp                                
+  Filter: (d @@@ '(''doc'' & ''17'')'::ftsquery)
+(2 rows)
+
+step r_count: SELECT count(*) AS omega FROM cicp WHERE d @@@ 'omega'::ftsquery;
+                   SELECT count(*) AS alpha FROM cicp WHERE d @@@ 'alpha'::ftsquery;
+                   SELECT count(*) FILTER (WHERE fts_match(d, 'omega'::ftsquery)) AS omega_truth,
+                          count(*) FILTER (WHERE fts_match(d, 'alpha'::ftsquery)) AS alpha_truth
+                   FROM cicp;
+ERROR:  could not read blocks 0..0 in file "base/16384/16444": read only 0 of 8192 bytes
+step w1_commit: COMMIT;
+step b_cic: <... completed>
+step r_state: SELECT indisready, indisvalid, pg_relation_size(indexrelid) > 0 AS has_blocks
+                   FROM pg_index WHERE indexrelid = 'cicp_fts'::regclass;
+indisready|indisvalid|has_blocks
+----------+----------+----------
+t         |t         |t         
+(1 row)
+
+step r_plan: EXPLAIN (COSTS OFF) SELECT id FROM cicp WHERE d @@@ 'doc & 17'::ftsquery;
+QUERY PLAN                                                
+----------------------------------------------------------
+Bitmap Heap Scan on cicp                                  
+  Recheck Cond: (d @@@ '(''doc'' & ''17'')'::ftsquery)    
+  ->  Bitmap Index Scan on cicp_fts                       
+        Index Cond: (d @@@ '(''doc'' & ''17'')'::ftsquery)
+(4 rows)
+
+
+starting permutation: w1_begin b_cic w2_begin w1_commit r_state r_cancel w2_commit r_state r_plan r_count r_drop
+step w1_begin: BEGIN; INSERT INTO cicp VALUES (3001, to_ftsdoc('simple', 'beta'));
+step b_cic: CREATE INDEX CONCURRENTLY cicp_fts ON cicp USING fts (d); <waiting ...>
+step w2_begin: BEGIN; INSERT INTO cicp VALUES (3002, to_ftsdoc('simple', 'omega alpha'));
+step w1_commit: COMMIT;
+step r_state: SELECT indisready, indisvalid, pg_relation_size(indexrelid) > 0 AS has_blocks
+                   FROM pg_index WHERE indexrelid = 'cicp_fts'::regclass;
+indisready|indisvalid|has_blocks
+----------+----------+----------
+t         |f         |t         
+(1 row)
+
+step r_cancel: SELECT pg_cancel_backend(pid) FROM pg_stat_activity
+                   WHERE query ~ 'CREATE INDEX CONCURRENTLY cicp_fts' AND pid <> pg_backend_pid();
+pg_cancel_backend
+-----------------
+t                
+(1 row)
+
+step b_cic: <... completed>
+ERROR:  canceling statement due to user request
+step w2_commit: COMMIT;
+step r_state: SELECT indisready, indisvalid, pg_relation_size(indexrelid) > 0 AS has_blocks
+                   FROM pg_index WHERE indexrelid = 'cicp_fts'::regclass;
+indisready|indisvalid|has_blocks
+----------+----------+----------
+t         |f         |t         
+(1 row)
+
+step r_plan: EXPLAIN (COSTS OFF) SELECT id FROM cicp WHERE d @@@ 'doc & 17'::ftsquery;
+QUERY PLAN                                      
+------------------------------------------------
+Seq Scan on cicp                                
+  Filter: (d @@@ '(''doc'' & ''17'')'::ftsquery)
+(2 rows)
+
+step r_count: SELECT count(*) AS omega FROM cicp WHERE d @@@ 'omega'::ftsquery;
+                   SELECT count(*) AS alpha FROM cicp WHERE d @@@ 'alpha'::ftsquery;
+                   SELECT count(*) FILTER (WHERE fts_match(d, 'omega'::ftsquery)) AS omega_truth,
+                          count(*) FILTER (WHERE fts_match(d, 'alpha'::ftsquery)) AS alpha_truth
+                   FROM cicp;
+omega
+-----
+    0
+(1 row)
+
+alpha
+-----
+ 2000
+(1 row)
+
+omega_truth|alpha_truth
+-----------+-----------
+          1|       2001
+(1 row)
+
+step r_drop: DROP INDEX cicp_fts;

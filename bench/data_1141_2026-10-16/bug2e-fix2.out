@@ -1,0 +1,4 @@
+[C fix2 CIC] nseg 1 start 1505 | par#1 1505 | par#2 1505 | par#3 1505 | serial 686 | idx=57524 heap=57524
+[D fix2 vacuum_parallel layout] start 7845 | par#1 7845 | par#2 7845 | par#3 7845 | serial 799 | idx=385 heap=385
+[E fix2 CIC + reader] start 1506 | serial+reader#1 1506 | serial+reader#2 1506 | serial+reader#3 1506 | serial-alone 686 | idx=57524 heap=57524
+BUG2E_DONE

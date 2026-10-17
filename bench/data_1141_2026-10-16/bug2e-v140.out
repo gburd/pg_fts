@@ -1,0 +1,4 @@
+[C v140 CIC] nseg 1 start 1508 | par#1 2742 | par#2 3417 | par#3 4085 | serial 664 | idx=57524 heap=57524
+[D v140 vacuum_parallel layout] start 7848 | par#1 8632 | par#2 9415 | par#3 10198 | serial 755 | idx=385 heap=385
+[E v140 CIC + reader] start 1506 | serial+reader#1 2742 | serial+reader#2 3417 | serial+reader#3 4085 | serial-alone 664 | idx=57524 heap=57524
+BUG2E_DONE
