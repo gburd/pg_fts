@@ -306,6 +306,42 @@ fts_planner(Query *parse, const char *query_string, int cursorOptions,
 }
 
 /*
+ * The bm25 index on `rel` whose indexed expression is `expr`, or InvalidOid.
+ * Taken from the planner's own list (rel->indexlist), which leaves out every
+ * index a query must not read: one not yet valid (CREATE INDEX CONCURRENTLY in
+ * progress -- its file can be empty -- or cancelled, so missing rows) and one
+ * too new for this transaction's snapshot (indcheckxmin); its indexprs carry
+ * rel's varno, so an expression index matches whatever RTE the table is.  Also
+ * skipped: a partial index (it holds only the rows its predicate admits), a
+ * hypothetical one, and one with no blocks (a partitioned index has no
+ * storage).  1.14.0 and earlier walked RelationGetIndexList, which includes
+ * all of these: wrong counts and planning errors (CHANGELOG 1.14.1).
+ */
+static Oid
+fts_rel_bm25_index(RelOptInfo *rel, Node *expr)
+{
+	Oid			ftsam = get_index_am_oid("fts", true);
+	ListCell   *lc;
+
+	if (!OidIsValid(ftsam))
+		return InvalidOid;
+	foreach(lc, rel->indexlist)
+	{
+		IndexOptInfo *info = (IndexOptInfo *) lfirst(lc);
+
+		if (info->relam != ftsam || info->indpred != NIL || info->hypothetical ||
+			info->pages == 0 || info->ncolumns != 1)
+			continue;
+		if (info->indexkeys[0] != 0
+			? (IsA(expr, Var) && ((Var *) expr)->varno == rel->relid &&
+			   ((Var *) expr)->varattno == info->indexkeys[0])
+			: (info->indexprs != NIL && equal(linitial(info->indexprs), expr)))
+			return info->indexoid;
+	}
+	return InvalidOid;
+}
+
+/*
  * fts_matchsel(root, operator, args, varRelid) -> selectivity for `d @@@ q`.
  *
  * The RESTRICT estimator of the @@@ operators (SQL, 1.14.0).  It replaces
@@ -358,46 +394,12 @@ fts_matchsel(PG_FUNCTION_ARGS)
 		goto fallback;
 	qconst = (Const *) constside;
 
-	/* find a bm25 index on `rel` whose indexed expression equals varside */
+	/* a bm25 index on vardata.rel whose indexed expression is varside; a
+	 * join rel (examine_variable with varRelid 0 over two rels) has none */
 	examine_variable(root, varside, varRelid, &vardata);
-	if (vardata.rel != NULL)
-	{
-		RangeTblEntry *rte = planner_rt_fetch(vardata.rel->relid, root);
-
-		if (rte != NULL && rte->rtekind == RTE_RELATION)
-		{
-			Relation	heap = try_table_open(rte->relid, AccessShareLock);
-
-			if (heap != NULL)
-			{
-				List	   *il = RelationGetIndexList(heap);
-				ListCell   *ic;
-
-				foreach(ic, il)
-				{
-					Relation	ind = index_open(lfirst_oid(ic), AccessShareLock);
-					bool		match = false;
-
-					if (ind->rd_rel->relam == get_index_am_oid("fts", true))
-					{
-						if (ind->rd_indexprs != NIL)
-							match = equal(linitial(ind->rd_indexprs), varside);
-						else if (ind->rd_index->indnatts == 1 && IsA(varside, Var) &&
-								 ((Var *) varside)->varno == vardata.rel->relid &&
-								 ((Var *) varside)->varattno == ind->rd_index->indkey.values[0])
-							match = true;
-					}
-					if (match)
-						indexoid = RelationGetRelid(ind);
-					index_close(ind, AccessShareLock);
-					if (OidIsValid(indexoid))
-						break;
-				}
-				list_free(il);
-				table_close(heap, AccessShareLock);
-			}
-		}
-	}
+	if (vardata.rel != NULL && IS_SIMPLE_REL(vardata.rel) &&
+		vardata.rel->rtekind == RTE_RELATION)
+		indexoid = fts_rel_bm25_index(vardata.rel, varside);
 	ReleaseVariableStats(vardata);
 
 	if (OidIsValid(indexoid))
@@ -493,8 +495,6 @@ fts_find_pushdown_index(PlannerInfo *root, RelOptInfo *rel,
 						List *baserestrictinfo, FtsQuery *query_out)
 {
 	Oid			matchop = fts_lookup_match_op();
-	RangeTblEntry *rte;
-	Relation	heap;
 	ListCell   *lc;
 	OpExpr	   *matchclause = NULL;
 	int			nquals = 0;
@@ -530,52 +530,8 @@ fts_find_pushdown_index(PlannerInfo *root, RelOptInfo *rel,
 		*query_out = (FtsQuery) DatumGetPointer(((Const *) rhs)->constvalue);
 	}
 
-	/* find a bm25 index on this rel whose expression matches the LHS */
-	rte = planner_rt_fetch(rel->relid, root);
-	if (rte->rtekind != RTE_RELATION)
-		return InvalidOid;
-	heap = table_open(rte->relid, AccessShareLock);
-	{
-		List	   *indexoidlist = RelationGetIndexList(heap);
-		ListCell   *ic;
-		Oid			found = InvalidOid;
-		Node	   *lhs = (Node *) linitial(matchclause->args);
-
-		foreach(ic, indexoidlist)
-		{
-			Oid			indexoid = lfirst_oid(ic);
-			Relation	ind = index_open(indexoid, AccessShareLock);
-
-			if (ind->rd_rel->relam == get_index_am_oid("fts", true))
-			{
-				if (ind->rd_indexprs != NIL)
-				{
-					/* expression index (e.g. USING fts (to_ftsdoc(body))):
-					 * the LHS must equal the index expression. */
-					if (equal(linitial(ind->rd_indexprs), lhs))
-						found = indexoid;
-				}
-				else if (ind->rd_index->indnatts == 1 &&
-						 IsA(lhs, Var) &&
-						 ((Var *) lhs)->varno == rel->relid &&
-						 ((Var *) lhs)->varattno == ind->rd_index->indkey.values[0])
-				{
-					/* plain-column index (USING fts (d)): the LHS must be the
-					 * Var for that single indexed column.  This is the stored-
-					 * ftsdoc-column form the docs recommend; without this the
-					 * count pushdown only fired for expression indexes and a
-					 * stored-column count(*) fell back to a slow bitmap scan. */
-					found = indexoid;
-				}
-			}
-			index_close(ind, AccessShareLock);
-			if (OidIsValid(found))
-				break;
-		}
-		list_free(indexoidlist);
-		table_close(heap, AccessShareLock);
-		return found;
-	}
+	/* a bm25 index on this rel whose expression is the LHS */
+	return fts_rel_bm25_index(rel, (Node *) linitial(matchclause->args));
 }
 
 /*
