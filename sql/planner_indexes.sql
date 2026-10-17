@@ -21,6 +21,7 @@ EXPLAIN (COSTS OFF) SELECT count(*) FROM pi WHERE d @@@ 'alpha'::ftsquery;
 SELECT count(*) AS alpha FROM pi WHERE d @@@ 'alpha'::ftsquery;
 -- a query the predicate covers still uses the index, through the normal paths
 SET enable_seqscan = off;
+EXPLAIN (COSTS OFF) SELECT count(*) FROM pi WHERE d @@@ 'alpha'::ftsquery AND id <= 100;
 SELECT count(*) AS alpha_le_100 FROM pi WHERE d @@@ 'alpha'::ftsquery AND id <= 100;
 RESET enable_seqscan;
 

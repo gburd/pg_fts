@@ -169,7 +169,7 @@ jobs:
           "$PFX/bin/pg_ctl" -D "$D" -l "$D/log" -w start
           "$PFX/bin/createdb" -h /tmp -U postgres smoke
           "$PFX/bin/psql" -h /tmp -U postgres -d smoke -v ON_ERROR_STOP=1 -f test/asan_smoke.sql > smoke.out \
-            || { cat smoke.out; exit 1; }
+            || { cat smoke.out; cat "$D/log"; exit 1; }
           cat smoke.out
           # a false or NULL check raises inside the script (psql exits non-zero
           # above); the last line proves it ran to the end

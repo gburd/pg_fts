@@ -4,7 +4,9 @@
  * estimates every row when the index has pending documents; VACUUM's cleanup
  * no longer grows the index when it cannot truncate (parallel VACUUM, or a
  * concurrent reader holding a lock on the index); bulkdelete's docid batch is
- * capped whatever maintenance_work_mem is.
+ * capped whatever maintenance_work_mem is; count(*) pushdown and fts_matchsel
+ * read only indexes the planner may use (no invalid, too-new or partial
+ * index); a corrupt metapage segment count is rejected.
  *
  * No on-disk index format change (BM25_VERSION unchanged): no REINDEX.
  */

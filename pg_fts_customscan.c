@@ -315,7 +315,9 @@ fts_planner(Query *parse, const char *query_string, int cursorOptions,
  * skipped: a partial index (it holds only the rows its predicate admits), a
  * hypothetical one, and one with no blocks (a partitioned index has no
  * storage).  1.14.0 and earlier walked RelationGetIndexList, which includes
- * all of these: wrong counts and planning errors (CHANGELOG 1.14.1).
+ * all of these: wrong counts and planning errors (CHANGELOG 1.14.1).  A
+ * get_relation_info_hook that prunes rel->indexlist (pg_hint_plan) therefore
+ * disables the count pushdown and the df estimate for that rel: safe fallback.
  */
 static Oid
 fts_rel_bm25_index(RelOptInfo *rel, Node *expr)

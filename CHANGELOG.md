@@ -8,15 +8,18 @@ All notable changes to pg_fts are documented here.
 
 Five fixes: one reported by the pg.ddx.io operators against 1.14.0, the others
 found while re-validating their 1.14.0 reports and reviewing the fixes.  One is a
-**wrong `count(*)` result** in every release with the count pushdown (below).
+**wrong `count(*)` result** that goes back to 0.1.0 (below).
 **No on-disk format change; no REINDEX; no SQL change** (`pg_fts--1.14.0--1.14.1.sql`
 is a no-op).
 
 ### Fixed
 
-- **`count(*) ... WHERE col @@@ q` could return a wrong number** (every release
-  with the count pushdown, 0.1.0 on; the first two cases below measured on
-  1.10.0, 1.13.0 and 1.14.0, the third on 1.13.0 and 1.14.0).
+- **`count(*) ... WHERE col @@@ q` could return a wrong number.**  Releases
+  affected, from the code: the partial-index case since 0.1.0; the other cases
+  since 1.3.0 for an index on a stored `ftsdoc` column (1.3.0 added that match),
+  and for an expression index only in a backend that had already loaded the
+  index's expressions.  Measured on 1.10.0, 1.13.0 and 1.14.0 (first two cases)
+  and on 1.13.0 and 1.14.0 (the others), stored-column index.
   The pushdown answers `count(*)` from the index, and it chose the index from
   the table's raw index list, which also holds indexes no query may read:
   - a **partial** fts index (`... USING fts (d) WHERE id <= 100`): `count(*)`
@@ -71,7 +74,7 @@ is a no-op).
   grew the file and the next one grew it again.  Measured on PostgreSQL 18.6
   (fts blocks; 1.14.1 rows are the same steps on the fixed build):
   - a reader holding a lock through each of three serial VACUUMs:
-    1.13.0 and 1.14.0 went 1,507 -> 2,742 -> 3,417 -> 4,085, and to 664 only
+    1.13.0 went 1,507 and 1.14.0 1,506 -> 2,742 -> 3,417 -> 4,085, and to 664 only
     once a VACUUM ran without the reader.  1.14.1 holds 1,506 -> 1,506 -> 1,506
     -> 1,506, then 686.
   - three parallel VACUUMs on 1.14.0: 7,848 -> 8,632 -> 9,415 -> 10,198, then
@@ -100,9 +103,9 @@ is a no-op).
   flushed before a term that would overfill it, so it never holds more than
   max(4M, that term's document frequency) entries.  Reporter's harness
   (200k/400k documents, 60M/120M postings, PG 18.6, `maintenance_work_mem=4GB`):
-  peak RSS 1,430 -> 154 MB and 2,814 -> 162 MB; VACUUM time unchanged within
+  peak RSS 1,430 -> 155 MB and 2,814 -> 169 MB; VACUUM time unchanged within
   run-to-run noise.  Cancel latency (8 cancels each, 1-5 s into the index
-  pass): 3.5-7.3 s and 10.6-14.6 s -> 0.05-0.33 s and 0.00-0.06 s.
+  pass): 3.5-7.3 s and 10.6-14.6 s -> 0.03-0.24 s and 0.00-0.43 s.
   `bench/RESULTS_1141_2026-10-16.md`.
 - **A corrupt metapage segment count was trusted.**  Every reader walked the
   128-entry segment directory up to the metapage's `nsegments`, so a corrupt
@@ -135,10 +138,10 @@ is a no-op).
   both cases the compaction had already extended the file before the truncation
   was declined, so each such VACUUM grew the index (fixed above).  The
   "conditional lock unavailable" case had done this since 1.11.0.
-- Every release since 0.1.0 described the `count(*)` pushdown as an exact,
-  MVCC-correct count.  With a partial fts index, an index too new for the
-  snapshot, or an invalid one left by a cancelled `CREATE INDEX CONCURRENTLY`,
-  it was not (fixed above).
+- Every release described the `count(*)` pushdown as an exact, MVCC-correct
+  count.  With a partial fts index (since 0.1.0), or (since 1.3.0, for a stored
+  `ftsdoc` column) an index too new for the snapshot or an invalid one left by a
+  cancelled `CREATE INDEX CONCURRENTLY`, it was not (fixed above).
 - 1.14.0 said a "5%-deleted VACUUM [fell] from 2,820 MB to 157 MB."  That held
   only with the doclen sidecar on or a small `maintenance_work_mem`; with the
   reporter's settings (`doclen_sidecar=off`, `maintenance_work_mem=4GB`) 1.14.0

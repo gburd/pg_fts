@@ -1,0 +1,5 @@
+final so=4be5d159 default_version = '1.14.1'
+flush-before-append marker count: 1
+final rows=200000 index=320 MB bulkdelete-VACUUM 7.79s VmHWM 155MB | cancel latency s: 0.03 0.12 0.12 0.18 0.24 0.10 0.10 0.08
+final rows=400000 index=518 MB bulkdelete-VACUUM 14.16s VmHWM 169MB | cancel latency s: 0.00 0.40 0.36 0.34 0.29 0.43 0.42 0.39
+FINAL_CANCEL_DONE
