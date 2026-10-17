@@ -54,6 +54,9 @@ use constant {
 	BM25_POSTING      => (1 << 2),
 	BM25_PENDING      => (1 << 3),
 	BM25_BLOCK_SIZE   => 128,
+	# block 0 metapage: contents at 24, then magic, version (uint32), ndocs,
+	# sumdoclen (double), nsegments (uint32)
+	META_NSEGMENTS_OFF => 24 + 24,
 };
 
 # Corrupt the on-disk index file (server must be DOWN).  Walks every 8 KB page,
@@ -320,6 +323,39 @@ $node->safe_psql('postgres', 'REINDEX INDEX docs_fts');
 my $live_after = $node->safe_psql('postgres',
 	"$q SELECT count(*) FROM docs WHERE to_ftsdoc('simple', body) \@\@\@ 'common'::ftsquery");
 is($live_after, 2000, 'REINDEX restores the correct 2000 after tombstone corruption');
+
+# ---------------------------------------------------------------------------
+# A metapage that lists more segments than its directory holds (128) must be a
+# clean ERRCODE_INDEX_CORRUPTED error, raised before any reader indexes segs[]
+# with it (1.14.1).  Before, every reader looped `s < nsegments` over the
+# fixed-size array: an out-of-bounds read of whatever followed it.
+# ---------------------------------------------------------------------------
+my $relpath3 = $node->safe_psql('postgres', "SELECT pg_relation_filepath('docs_fts')");
+my $abs3 = $node->data_dir . '/' . $relpath3;
+$node->stop;
+{
+	open(my $fh, '+<:raw', $abs3) or die "open $abs3: $!";
+	my $buf;
+	sysseek($fh, META_NSEGMENTS_OFF, 0) or die;
+	sysread($fh, $buf, 4) == 4 or die;
+	my $nseg = unpack('V', $buf);
+	ok($nseg >= 1 && $nseg <= 128, "metapage nsegments is $nseg before corruption");
+	sysseek($fh, META_NSEGMENTS_OFF, 0) or die;
+	syswrite($fh, pack('V', 100000)) == 4 or die;
+	close $fh;
+}
+$node->start;
+my ($mrc, $mout, $merr) = $node->psql('postgres',
+	"$q SELECT count(*) FROM docs WHERE to_ftsdoc('simple', body) \@\@\@ 'common'::ftsquery");
+isnt($mrc, 0, 'a query over a metapage listing 100000 segments ERRORS');
+like($merr, qr/metapage is corrupt: it lists 100000 segments/,
+	 'the error names the impossible segment count');
+my ($vrc, $vout, $verr) = $node->psql('postgres', 'VACUUM docs');
+like($verr, qr/metapage is corrupt/, 'VACUUM reports the same corruption');
+$node->safe_psql('postgres', 'REINDEX INDEX docs_fts');
+is($node->safe_psql('postgres',
+	"$q SELECT count(*) FROM docs WHERE to_ftsdoc('simple', body) \@\@\@ 'common'::ftsquery"),
+	2000, 'REINDEX restores the correct 2000 after metapage corruption');
 
 $node->stop;
 done_testing();

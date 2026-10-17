@@ -1509,6 +1509,23 @@ typedef struct BM25MetaPageDataV3
 	uint32		generation;
 } BM25MetaPageDataV3;
 
+/*
+ * A metapage listing more segments than segs[] holds is corrupt: every reader
+ * loops `s < nsegments` over segs[], so reject it here, in the integer domain,
+ * before any of them indexes the array.  Called by bm25_meta_from_page (every
+ * copy of the metapage) and bm25_meta_upcast_page (every in-place writer).
+ */
+static void
+bm25_check_nsegments(uint32 nsegments)
+{
+	if (nsegments > BM25_MAX_SEGMENTS)
+		ereport(ERROR,
+				(errcode(ERRCODE_INDEX_CORRUPTED),
+				 errmsg("pg_fts index metapage is corrupt: it lists %u segments, more than the %d it can hold",
+						nsegments, BM25_MAX_SEGMENTS),
+				 errhint("REINDEX the index.")));
+}
+
 static void
 bm25_meta_from_page(Page page, BM25MetaPageData *out)
 {
@@ -1526,6 +1543,7 @@ bm25_meta_from_page(Page page, BM25MetaPageData *out)
 					 "v3/v4 metapage head layout diverged");
 	StaticAssertStmt(offsetof(BM25SegMetaV3, dictindexstart) == offsetof(BM25SegMeta, dictindexstart),
 					 "v3/v4 segmeta head layout diverged");
+	bm25_check_nsegments(raw->nsegments);	/* same offset in v3 and v4 */
 
 	if (raw->version >= BM25_VERSION_DOCLEN_SIDECAR)
 	{
@@ -1577,6 +1595,7 @@ bm25_meta_upcast_page(Page page)
 	BM25MetaPageData tmp;
 	BM25MetaPageData *m;
 
+	bm25_check_nsegments(BM25PageGetMeta(page)->nsegments);
 	if (BM25PageGetMeta(page)->version >= BM25_VERSION_DOCLEN_SIDECAR)
 		return;
 
