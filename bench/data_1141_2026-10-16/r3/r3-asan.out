@@ -1,0 +1,9 @@
+ext so=fb8253ea
+planted diffs: false=1 null=1
+== real: step rc=0; asan_smoke: all checks passed 
+   asan reports in log: 0
+== false: step rc=1; psql:test/asan_smoke.sql:36: ERROR:  asan_smoke: check or_ok is false 2026-10-17 06:32:22.801 UTC [277772] ERROR:  asan_smoke: check or_ok is false 
+   asan reports in log: 0
+== null: step rc=1; psql:test/asan_smoke.sql:49: ERROR:  asan_smoke: check count_ok is NULL 2026-10-17 06:32:24.334 UTC [277827] ERROR:  asan_smoke: check count_ok is NULL 
+   asan reports in log: 0
+ASANCI2_DONE

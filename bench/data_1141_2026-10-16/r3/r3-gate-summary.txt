@@ -1,0 +1,22 @@
+== PG17 postgres (PostgreSQL) 17.10 tree cad8cba default_version = '1.14.1' markers: pg_fts_am.c:7 pg_fts_am_scan.c:7 pg_fts_customscan.c:3 
+== PG17 regress+isolation
+installcheck rc=0
+== PG17 query_binary: {"passed": 49, "valid": 21, "invalid": 28}
+== PG17 tap
+tap rc=0
+== PG18 postgres (PostgreSQL) 18.6 tree cad8cba default_version = '1.14.1' markers: pg_fts_am.c:7 pg_fts_am_scan.c:7 pg_fts_customscan.c:3 
+== PG18 regress+isolation
+installcheck rc=0
+== PG18 query_binary: {"passed": 49, "valid": 21, "invalid": 28}
+== PG18 tap
+tap rc=0
+== check-alloc: alloc-safety: no unguarded corpus/vocabulary-scale allocations
+== check-ascii: install SQL, C sources and specs are pure ASCII rc=0
+== fuzz
+fuzz rc=0
+== ALL CLEAN ==
+== t012 rerun 1 (PG17): t/012_concurrent_flush.pl .. ok Result: PASS 
+== t012 rerun 2 (PG17): t/012_concurrent_flush.pl .. ok Result: PASS 
+== t012 rerun 3 (PG17): t/012_concurrent_flush.pl .. ok Result: PASS 
+== oom: 0
+GATE141_DONE
