@@ -63,7 +63,9 @@ dist:
 # A non-ASCII byte anywhere in an install/upgrade .sql (e.g. a UTF-8 default
 # like ellipsis '\u2026') makes CREATE EXTENSION FAIL on a non-UTF-8 server
 # database (LATIN1, EUC_JP, ...) with "invalid byte sequence for encoding".
-# This guard keeps the shipped SQL installable on every server encoding.
+# This guard keeps the shipped SQL installable on every server encoding.  It
+# also covers the C sources and isolation specs (AGENTS.md rule 22); the
+# regression SQL under sql/ is exempt because it tests Unicode input.
 # Run standalone (`make check-ascii`); also runnable in CI.
 .PHONY: check-ascii
 check-ascii:
@@ -73,7 +75,13 @@ check-ascii:
 		for f in $$bad; do echo "  $$f:"; grep -nP '[^\x00-\x7F]' "$$f" | head; done >&2; \
 		exit 1; \
 	fi; \
-	echo "install SQL is pure ASCII (installs on any server encoding)"
+	bad=$$(grep -lP '[^\x00-\x7F]' *.c *.h vendor/*.c vendor/*.h test/fuzz/*.c test/hegel/*.c specs/*.spec 2>/dev/null); \
+	if [ -n "$$bad" ]; then \
+		echo "ERROR: non-ASCII bytes in C source or isolation specs (AGENTS.md rule 22):" >&2; \
+		for f in $$bad; do echo "  $$f:"; grep -nP '[^\x00-\x7F]' "$$f" | head; done >&2; \
+		exit 1; \
+	fi; \
+	echo "install SQL, C sources and specs are pure ASCII"
 
 # Allocation-safety lint: flag any palloc/repalloc sized from a corpus/
 # vocabulary-scale quantity that is not huge-safe (the class behind the

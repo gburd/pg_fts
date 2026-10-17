@@ -69,7 +69,7 @@ is_token_byte(unsigned char c)
  * An ASCII-only token takes the length-preserving byte fast path.  In a UTF-8
  * database, a token containing any byte >= 0x80 is lowercased per Unicode code
  * point via unicode_lowercase_simple(), so 'E'+U+0301 style caseful pairs like
- * 'É'/'é' fold together and a query for one matches the other.
+ * U+00C9/U+00E9 fold together and a query for one matches the other.
  *
  * *outlen - receives the folded byte length.
  */

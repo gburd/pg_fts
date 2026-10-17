@@ -1642,7 +1642,7 @@ bm25_init_metapage(Relation index)
  * Validate a metapage's magic and format version before trusting its contents.
  * Guards against a pg_fts shared library reading an index written by an
  * incompatible on-disk format (e.g. a .so upgraded/downgraded out of step with
- * the physical index) — the classic ".so vs catalog/on-disk skew".  Callers
+ * the physical index) -- the classic ".so vs catalog/on-disk skew".  Callers
  * pass the metapage of an index being opened for scan/insert/maintenance; a
  * mismatch raises a clear, actionable error rather than silently misreading
  * bytes.
