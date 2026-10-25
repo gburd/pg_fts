@@ -10,6 +10,8 @@
 -- below -- this test proves the check reports the false rows when they exist).
 SET client_min_messages = warning;
 CREATE TABLE pr (id int, message text) WITH (autovacuum_enabled = off);
+-- keep the base small next to the 400-row batch: under 2% of pages with dead items
+-- VACUUM may skip the index pass (BYPASS_THRESHOLD_PAGES) and the slots stay dead
 INSERT INTO pr SELECT g, 'base row ' || g FROM generate_series(1, 5000) g;
 CREATE INDEX pr_fts ON pr USING fts (to_ftsdoc('english', message));
 CREATE TEMP TABLE batch AS

@@ -535,9 +535,10 @@ Upgrading
 
 Install the new build, then `ALTER EXTENSION pg_fts UPDATE`; no release since
 1.5.0 needs a REINDEX for a format change.  **But an index that took writes under
-1.10.0 or earlier must be rebuilt** (`REINDEX INDEX CONCURRENTLY`): it can return
-rows that do not match and miss rows that do, and the upgrade does not repair
-either.  CHANGELOG 1.14.2 has the cause and a SQL check.
+1.10.0 or earlier must be rebuilt** (`REINDEX INDEX`, or `REINDEX INDEX CONCURRENTLY`
+to keep it online): it can return rows that do not match and miss rows that do, and
+the upgrade does not repair either.  Rebuild it whatever a check says; CHANGELOG
+1.14.2 has the cause and the SQL checks (run them with bitmap scans off).
 
 Backward compatibility
 -----------------------

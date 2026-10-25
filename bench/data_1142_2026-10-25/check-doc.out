@@ -1,0 +1,113 @@
+### C1 (pg18-upgC) ext 1.14.1
+--- plan of check 1 (one term)
+SET
+SET
+                                         QUERY PLAN                                          
+---------------------------------------------------------------------------------------------
+ Index Scan using idx_ag_msg_fts on ag
+   Index Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+   Filter: (NOT fts_match(to_ftsdoc('english'::regconfig, message), '''vacuum'''::ftsquery))
+(3 rows)
+
+--- check 1
+Timing is on.
+SET
+Time: 0.063 ms
+SET
+Time: 0.024 ms
+        q         | false_rows 
+------------------+------------
+ vacuum           |       1424
+ visibility & map |        214
+ freeze           |        429
+ fix              |      15833
+(4 rows)
+Time: 114539.170 ms (01:54.539)
+RESET
+Time: 0.051 ms
+RESET
+Time: 0.022 ms
+--- check 2
+Timing is on.
+BEGIN
+Time: 0.062 ms
+SET
+Time: 0.036 ms
+SET
+Time: 0.021 ms
+ index_count 
+-------------
+       72110
+(1 row)
+Time: 70.999 ms
+ false_rows 
+------------
+       1424
+(1 row)
+Time: 7805.261 ms (00:07.805)
+SET
+Time: 0.052 ms
+ heap_count 
+------------
+      75390
+(1 row)
+Time: 68739.795 ms (01:08.740)
+COMMIT
+Time: 0.069 ms
+### A (pg18-v1141) ext 1.14.1
+--- plan of check 1 (one term)
+SET
+SET
+                                         QUERY PLAN                                          
+---------------------------------------------------------------------------------------------
+ Index Scan using idx_ag_msg_fts on ag
+   Index Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+   Filter: (NOT fts_match(to_ftsdoc('english'::regconfig, message), '''vacuum'''::ftsquery))
+(3 rows)
+
+--- check 1
+Timing is on.
+SET
+Time: 0.068 ms
+SET
+Time: 0.024 ms
+        q         | false_rows 
+------------------+------------
+ vacuum           |          0
+ visibility & map |          0
+ freeze           |          0
+ fix              |          0
+(4 rows)
+Time: 121673.138 ms (02:01.673)
+RESET
+Time: 0.051 ms
+RESET
+Time: 0.022 ms
+--- check 2
+Timing is on.
+BEGIN
+Time: 0.067 ms
+SET
+Time: 0.037 ms
+SET
+Time: 0.022 ms
+ index_count 
+-------------
+       75390
+(1 row)
+Time: 50.440 ms
+ false_rows 
+------------
+          0
+(1 row)
+Time: 8207.473 ms (00:08.207)
+SET
+Time: 0.052 ms
+ heap_count 
+------------
+      75390
+(1 row)
+Time: 68889.603 ms (01:08.890)
+COMMIT
+Time: 0.068 ms
+DOCCHECK_DONE

@@ -1,0 +1,31 @@
+== pg18-v1100 1.10.0 18.6
+abort     truth 50 | bitmap 249 false 199 | idxscan 249 false 199 | fts_count 350 | reused_slots 300
+conflict  truth 50 | bitmap 50 false 0 | idxscan 50 false 0 | fts_count 50 | reused_slots 301
+delete    truth 50 | bitmap 249 false 199 | idxscan 249 false 199 | fts_count 350 | reused_slots 300
+psql:/tmp/mech.sql:23: ERROR:  duplicate key value violates unique constraint "mx_pkey"
+DETAIL:  Key (id)=(1) already exists.
+uniqfail  truth 50 | bitmap 249 false 199 | idxscan 249 false 199 | fts_count 349 | reused_slots 300
+psql:/tmp/mech.sql:25: ERROR:  invalid input syntax for type integer: "bad"
+CONTEXT:  COPY mx, line 3000, column id: "bad"
+copyfail  truth 50 | bitmap 249 false 199 | idxscan 249 false 199 | fts_count 2050 | reused_slots 300
+== pg18-v1141 1.14.1 18.6
+abort     truth 50 | bitmap 50 false 0 | idxscan 50 false 0 | fts_count 50 | reused_slots 300
+conflict  truth 50 | bitmap 50 false 0 | idxscan 50 false 0 | fts_count 50 | reused_slots 301
+delete    truth 50 | bitmap 50 false 0 | idxscan 50 false 0 | fts_count 50 | reused_slots 300
+psql:/tmp/mech.sql:23: ERROR:  duplicate key value violates unique constraint "mx_pkey"
+DETAIL:  Key (id)=(1) already exists.
+uniqfail  truth 50 | bitmap 50 false 0 | idxscan 50 false 0 | fts_count 50 | reused_slots 300
+psql:/tmp/mech.sql:25: ERROR:  invalid input syntax for type integer: "bad"
+CONTEXT:  COPY mx, line 3000, column id: "bad"
+copyfail  truth 50 | bitmap 50 false 0 | idxscan 50 false 0 | fts_count 50 | reused_slots 300
+== pg17-v1141 1.14.1 17.10
+abort     truth 50 | bitmap 50 false 0 | idxscan 50 false 0 | fts_count 50 | reused_slots 300
+conflict  truth 50 | bitmap 50 false 0 | idxscan 50 false 0 | fts_count 50 | reused_slots 301
+delete    truth 50 | bitmap 50 false 0 | idxscan 50 false 0 | fts_count 50 | reused_slots 300
+psql:/tmp/mech.sql:23: ERROR:  duplicate key value violates unique constraint "mx_pkey"
+DETAIL:  Key (id)=(1) already exists.
+uniqfail  truth 50 | bitmap 50 false 0 | idxscan 50 false 0 | fts_count 50 | reused_slots 300
+psql:/tmp/mech.sql:25: ERROR:  invalid input syntax for type integer: "bad"
+CONTEXT:  COPY mx, line 3000, column id: "bad"
+copyfail  truth 50 | bitmap 50 false 0 | idxscan 50 false 0 | fts_count 50 | reused_slots 300
+MECH_DONE

@@ -1,0 +1,37 @@
+== pg18-v1141 1.14.1
+ truth | bitmap_rows | bitmap_false | fts_count 
+-------+-------------+--------------+-----------
+   200 |         200 |            0 |       200
+(1 row)
+
+   tid    |                 message                  | rowpred 
+----------+------------------------------------------+---------
+ (31,119) | Move visibility map memory ordering comm | t
+ (31,121) | Move visibility map memory ordering comm | t
+ (31,123) | Move visibility map memory ordering comm | t
+ (31,125) | Move visibility map memory ordering comm | t
+(4 rows)
+
+== pg18-v1100 1.10.0
+ truth | bitmap_rows | bitmap_false | fts_count 
+-------+-------------+--------------+-----------
+   200 |         399 |          199 |       399
+(1 row)
+
+   tid    |                 message                  | rowpred 
+----------+------------------------------------------+---------
+ (31,119) | Move visibility map memory ordering comm | t
+ (31,120) | Clean up usage of hash_any() 3           | f
+ (31,121) | Move visibility map memory ordering comm | t
+ (31,122) | Clean up usage of hash_any() 5           | f
+(4 rows)
+
+== upgraded in place: 1.14.1; then VACUUM + fts_merge
+SET
+SET
+bitmap_rows 399 bitmap_false 199
+== after REINDEX
+SET
+SET
+bitmap_rows 200 bitmap_false 0
+SHIFT_DONE

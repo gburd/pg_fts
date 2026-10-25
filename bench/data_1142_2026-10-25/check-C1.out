@@ -1,0 +1,20 @@
+### C1 (pg18-upgC) ext 1.14.1
+SET
+                                            QUERY PLAN                                             
+---------------------------------------------------------------------------------------------------
+ Gather
+   Workers Planned: 2
+   ->  Parallel Bitmap Heap Scan on ag
+         Recheck Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+         Filter: (NOT fts_match(to_ftsdoc('english'::regconfig, message), '''vacuum'''::ftsquery))
+SET
+        q         | false_rows 
+------------------+------------
+ vacuum           |       1424
+ visibility & map |        214
+ hash & index     |        441
+ freeze           |        429
+(4 rows)
+
+RESET
+check_terms 24.827918075 s
