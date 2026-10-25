@@ -4,6 +4,127 @@ All notable changes to pg_fts are documented here.
 
 ## Unreleased
 
+## 1.14.2 - 2026-10-25
+
+A documentation and safety release.  **No code change, no on-disk format change, no SQL
+change** (`pg_fts--1.14.1--1.14.2.sql` is a no-op).  It exists because **an index that
+took writes under 1.10.0 or earlier can still be wrong after an in-place upgrade, and
+needs `REINDEX`.**  1.11.0 fixed the two bugs that cause this but said no REINDEX was
+needed (retracted below).  Reported by the pg.ddx.io operators: on 1.14.1 (PostgreSQL
+18.6), an index scan returned rows whose own `@@@` is false, and their production ran
+1.10.0 until it was upgraded in place.
+
+### Upgrade notice: REINDEX an index that took writes under 1.10.0 or earlier
+
+For an index created on, or written to by, any release up to and including 1.10.0
+(from the code: both bugs are in every release before 1.11.0; measured on 1.10.0):
+
+- **False matches.**  A row whose index entry was still in the pending list when the row
+  died kept that entry through VACUUM.  That covers a rolled-back insert, a batch or COPY
+  that failed part-way, a duplicate-key error, and a row deleted before the next VACUUM.
+  VACUUM freed the heap slot, and the next row stored in it inherited the dead row's
+  terms.  An index scan, a bitmap scan and `count(*)` return that row as a definite
+  match, so no recheck removes it.  An importer that retries a failed batch puts each
+  row one slot below its aborted copy.  So the false row sits one slot after a true
+  match, as in the report: `(226563,6)` matches, `(226563,7)` does not, and both are
+  returned.
+- **Missing matches.**  A row inserted while the pending list was being flushed was
+  dropped from the index (1.11.0, "Rows inserted while the pending list was being
+  flushed were lost").  It is missing from every scan and count.
+
+Neither is repaired by `ALTER EXTENSION pg_fts UPDATE`, VACUUM, `fts_merge` or
+`fts_vacuum`.  They only rewrite the postings they find.  **`REINDEX INDEX CONCURRENTLY
+<index>`** rebuilds the index from the heap and clears both.  An index built by 1.11.0
+or later and never written by an earlier release is not affected.  So is an index that
+only ever took committed inserts and never ran a flush concurrently with an insert.
+But neither is easy to establish after the fact, so check first.
+
+Measured on PostgreSQL 18.6, `bench/RESULTS_1142_2026-10-25.md`:
+
+- Minimal case.  A 400-row batch is rolled back, VACUUM runs, and the batch is retried
+  without its first row (test `pending_reuse`).  On 1.10.0, 399 rows came back of
+  200 true matches, 199 of them false.  Each true match `(31,119)` was followed by a
+  false `(31,120)`.  After an in-place upgrade to 1.14.1, VACUUM and `fts_merge`, it
+  was still 399 / 199.  After REINDEX it was 200 / 0.  1.14.1 run from the start: 200 / 0.
+- The PostgreSQL commit history: 105,850 messages loaded 35 times (3.70M rows) after
+  CREATE INDEX, by 4-8 concurrent sessions using COPY, `\copy`, INSERT ... SELECT and
+  multi-row VALUES, with autovacuum and a VACUUM every 30 s.  On 1.10.0 with 10% of
+  the batches rolled back and retried, then upgraded in place to 1.14.1, `vacuum` had
+  1,424 false and 4,704 missing rows of 75,390.  `visibility & map` had 214 false and
+  445 missing of 7,070.  383 of `vacuum`'s false rows were inserted after the
+  upgrade, into slots that a 1.10.0-era entry still pointed at: such an index keeps
+  producing new false rows for as long as those slots are reused.  Without rollbacks,
+  1.10.0 had no false rows but was missing 28% of the matches (`vacuum` 27,735 of
+  38,772), and the upgrade left that unchanged.
+- 1.14.1, all from the start: 0 false and 0 missing on every term compared (10-12 per
+  run, 4-5 in the races below).  The runs were the same loads, with and without
+  rollbacks; 2-5% oversized documents; `pending_flush_threshold` 50, 200, 2,000 and
+  20,000; `positions=on` with `doclen_sidecar=off`; and PostgreSQL 17.10 and 18.6.
+  Also clean: a duplicate-key failure, a COPY failing at row 3,000, `ON CONFLICT DO
+  NOTHING`, a DELETE of pending rows, and 20-minute races of all of these against
+  autovacuum, a VACUUM every 3 s, `fts_merge` and inline flushes.  Those races ran a
+  REPEATABLE READ check every second comparing the index scan with the heap: 286
+  checks, 0 mismatches, 5.8-5.9M rows per run.
+
+### How to check an index
+
+Replace `t`, `body` and `'english'` with the table, the indexed text column and the text
+search configuration of the index (for an index on a stored `ftsdoc` column `d`, use
+`d` in place of `to_ftsdoc('english', body)`).
+
+1. **False matches.**  This reads only the rows the index returns.  With sequential
+   scans off, the `@@@` runs through the index and `fts_match` re-tests each row it
+   returns:
+
+   ```sql
+   SET enable_seqscan = off;
+   SELECT t.q, (SELECT count(*) FROM (
+            SELECT 1 FROM t
+             WHERE to_ftsdoc('english', body) @@@ to_ftsquery('english', t.q)
+               AND NOT fts_match(to_ftsdoc('english', body), to_ftsquery('english', t.q))
+            OFFSET 0) s) AS false_rows
+   FROM unnest(ARRAY['vacuum', 'visibility & map', 'freeze']) AS t(q);
+   RESET enable_seqscan;
+   ```
+
+   Use common terms of your data.  `EXPLAIN` it once and look for a `Bitmap Index
+   Scan` or `Index Scan` on the fts index.  Any `false_rows` above 0 means the index
+   needs REINDEX.  On the 3.70M-row index above it reported 1,424 / 214 / 429 for these
+   terms, the same numbers as a full TID comparison.  It took 25 s for four terms, and
+   reported 0 on the 1.14.1-built index.
+2. **Missing matches.**  Compare the index count with the heap count for a common
+   term.  The second query reads the whole table:
+
+   ```sql
+   SET enable_seqscan = off;
+   SELECT count(*) FROM (SELECT 1 FROM t WHERE to_ftsdoc('english', body)
+                            @@@ to_ftsquery('english', 'vacuum') OFFSET 0) s;
+   RESET enable_seqscan;
+   SELECT count(*) FROM t WHERE fts_match(to_ftsdoc('english', body),
+                                          to_ftsquery('english', 'vacuum'));
+   ```
+
+   Subtract check 1's `false_rows` from the first count.  If the result is below the
+   second count, matching rows are missing.  REINDEX.
+
+### Test
+
+- New regression test `pending_reuse`: the minimal case above.  It passes on 1.14.1.  On
+  1.10.0, and on 1.14.1 with the 1.11.0 fix removed (no pending flush at the start of
+  `bm25_bulkdelete`), it returns 199 false rows, and the check above reports all 199.
+
+### Retracted
+
+- 1.11.0 said "**no REINDEX required** to upgrade (a REINDEX does clear entries the
+  VACUUM bug already left)."  That was wrong.  Any index that saw a rolled-back or failed
+  insert, or a delete of a row still pending, before the upgrade is wrong after it: rows
+  that do not match are returned as matches, and a VACUUM or merge after the upgrade
+  does not remove them.  REINDEX is required, not optional.
+- 1.11.0's fix for rows lost during a pending flush did not say the lost rows stay lost.
+  They are not in the index after the upgrade either; REINDEX restores them.
+- The project describes its results as MVCC-correct and its `count(*)` as exact.  Neither
+  holds on an index carrying the entries above until it is rebuilt.
+
 ## 1.14.1 - 2026-10-16
 
 Five fixes: one reported by the pg.ddx.io operators against 1.14.0, the others
