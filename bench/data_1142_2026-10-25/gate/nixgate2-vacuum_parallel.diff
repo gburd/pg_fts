@@ -1,0 +1,13 @@
+pg_fts-installcheck> diff -U3 /build/q26m7597fwfgiv9fsjrhhqwa11cqr13w-source/expected/vacuum_parallel.out /build/q26m7597fwfgiv9fsjrhhqwa11cqr13w-source/results/vacuum_parallel.out
+pg_fts-installcheck> --- /build/q26m7597fwfgiv9fsjrhhqwa11cqr13w-source/expected/vacuum_parallel.out    1970-01-01 00:00:01.000000000 +0000
+pg_fts-installcheck> +++ /build/q26m7597fwfgiv9fsjrhhqwa11cqr13w-source/results/vacuum_parallel.out     2026-10-25 16:26:08.934573285 +0000
+pg_fts-installcheck> @@ -98,7 +98,7 @@
+pg_fts-installcheck>  SELECT pg_relation_size('vp_fts') < s0 / 2 AS serial_reclaims FROM vp_size;
+pg_fts-installcheck>   serial_reclaims
+pg_fts-installcheck>  -----------------
+pg_fts-installcheck> - t
+pg_fts-installcheck> + f
+pg_fts-installcheck>  (1 row)
+pg_fts-installcheck> 
+pg_fts-installcheck>  SELECT (SELECT count(*) FROM vp WHERE to_ftsdoc('english', body) @@@ 'w1'::ftsquery)
+postgresql> clang -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Werror=unguarded-availability-new -Wendif-labels -Wmissing-format-attribute -Wcast-function-type -Wformat-security -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-unused-command-line-argument -Wno-compound-token-split-by-macro -Wno-format-truncation -Wno-cast-function-type-strict -g -fdata-sections -ffunction-sections -flto -I../../../../src/include -D_GNU_SOURCE  -I/nix/store/35wfzwiy77ab9dhzjblb4kmdnckss40i-libxml2-2.15.3-dev/include/libxml2 -I/nix/store/ian1yhyjb7vwm688wmz5gbj2s0lkk7mp-lz4-1.10.0-dev/include -I/nix/store/901v08c2caadg21jidzpy00d3lzjgrdc-zstd-1.5.7-dev/include -I/nix/store/4frdj7794qnfzk7vjawqyq3d5jx6iyav-icu4c-76.1-dev/include  -c -o sinval.o sinval.c

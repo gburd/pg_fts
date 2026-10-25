@@ -1,0 +1,9 @@
+start 15:38:04 ext 1.14.1 thr=50 W=6 secs=1200
+load done 15:59:33
+checker snapshots 93 mismatching 0
+rows 5867407 heap_pages 63555 n_dead 0 autovac 4 vac 34 nseg 8
+visibility & map  truth 1614884 | idxscan 1614884 FP 0 FN 0 | bitmap 1614884 FP 0 FN 0 | fts_count 1614884
+hash & extended   truth 1612985 | idxscan 1612985 FP 0 FN 0 | bitmap 1612985 FP 0 FN 0 | fts_count 1612985
+memory            truth 1614884 | idxscan 1614884 FP 0 FN 0 | bitmap 1614884 FP 0 FN 0 | fts_count 1614884
+clean             truth 1612985 | idxscan 1612985 FP 0 FN 0 | bitmap 1612985 FP 0 FN 0 | fts_count 1612985
+qqfiller          truth 2619538 | idxscan 2619538 FP 0 FN 0 | bitmap 2619538 FP 0 FN 0 | fts_count 2619538

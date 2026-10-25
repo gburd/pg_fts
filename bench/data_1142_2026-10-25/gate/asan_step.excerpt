@@ -1,0 +1,3 @@
+   Recheck Cond: (to_ftsdoc('simple'::regconfig, body) @@@ '((''alpha'' & !''epsilon'') | ''delta'')'::ftsquery)
+   Recheck Cond: (to_ftsdoc('simple'::regconfig, body) @@@ '''alph''*'::ftsquery)
+asan_smoke: all checks passed

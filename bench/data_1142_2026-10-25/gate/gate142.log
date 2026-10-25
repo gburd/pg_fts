@@ -1,0 +1,58 @@
+== PG17 postgres (PostgreSQL) 17.10 tree d87b210 Release 1.14.2 default_version = '1.14.2' pending_reuse in REGRESS: 1 sql+out: 2
+installed so md5 b84fe3f9; ext files: 2
+== PG17 regress+isolation
+installcheck rc=0
+ok 1 pg_fts;ok 2 unicode_fold;ok 3 idx_scan_stats;ok 4 limit_hint;ok 5 doclen_slots;ok 6 score_reuse;ok 7 wand_last_block;ok 8 dense_score;ok 9 phrase_gate;ok 10 shared_doclen;ok 11 ranked_exact;ok 12 pending_delete;ok 13 pending_reuse;ok 14 dict_dir;ok 15 scan_keys;ok 16 legal_proximity;ok 17 pending_rank;ok 18 pending_flush;ok 19 planner_cost;ok 20 vacuum_parallel;ok 21 vacuum_mem;ok 22 planner_pending;ok 23 planner_indexes;ok 1 bm25_concurrency;ok 2 bm25_cic;ok 3 bm25_vacuum_growth;ok 4 bm25_cic_planner;
+summary: 27 ok, 0 not ok; # All 23 tests passed. # All 4 tests passed. 
+== PG17 query_binary: {"passed": 49, "valid": 21, "invalid": 28}
+== PG17 tap
+tap rc=0
+t/003_corruption.pl ........... ok
+t/004_encodings.pl ............ ok
+t/005_concurrency.pl .......... ok
+t/006_concurrent_extend.pl .... ok
+t/007_segment_cap.pl .......... ok
+t/008_vacuum_reclaim.pl ....... ok
+t/010_vacuum_delete_heavy.pl .. ok
+t/011_shared_doclen.pl ........ ok
+t/012_concurrent_flush.pl ..... ok
+Files=9, Tests=109, 220 wallclock secs ( 0.41 usr  0.00 sys +  4.52 cusr  3.67 csys =  8.60 CPU)
+Result: PASS
+== PG18 postgres (PostgreSQL) 18.6 tree d87b210 Release 1.14.2 default_version = '1.14.2' pending_reuse in REGRESS: 1 sql+out: 2
+installed so md5 11b136f1; ext files: 2
+== PG18 regress+isolation
+installcheck rc=0
+ok 1 pg_fts;ok 2 unicode_fold;ok 3 idx_scan_stats;ok 4 limit_hint;ok 5 doclen_slots;ok 6 score_reuse;ok 7 wand_last_block;ok 8 dense_score;ok 9 phrase_gate;ok 10 shared_doclen;ok 11 ranked_exact;ok 12 pending_delete;ok 13 pending_reuse;ok 14 dict_dir;ok 15 scan_keys;ok 16 legal_proximity;ok 17 pending_rank;ok 18 pending_flush;ok 19 planner_cost;ok 20 vacuum_parallel;ok 21 vacuum_mem;ok 22 planner_pending;ok 23 planner_indexes;ok 1 bm25_concurrency;ok 2 bm25_cic;ok 3 bm25_vacuum_growth;ok 4 bm25_cic_planner;
+summary: 27 ok, 0 not ok; # All 23 tests passed. # All 4 tests passed. 
+== PG18 query_binary: {"passed": 49, "valid": 21, "invalid": 28}
+== PG18 tap
+tap rc=0
+t/003_corruption.pl ........... ok
+t/004_encodings.pl ............ ok
+t/005_concurrency.pl .......... ok
+t/006_concurrent_extend.pl .... ok
+t/007_segment_cap.pl .......... ok
+t/008_vacuum_reclaim.pl ....... ok
+t/010_vacuum_delete_heavy.pl .. ok
+t/011_shared_doclen.pl ........ ok
+t/012_concurrent_flush.pl ..... ok
+Files=9, Tests=109, 219 wallclock secs ( 0.42 usr  0.01 sys +  4.87 cusr  3.59 csys =  8.89 CPU)
+Result: PASS
+== check-alloc: alloc-safety: no unguarded corpus/vocabulary-scale allocations rc=0
+== check-ascii: install SQL, C sources and specs are pure ASCII rc=0
+== fuzz
+fuzz rc=0
+PASS: fuzz_for
+PASS: fuzz_docvalid
+PASS: fuzz_block
+PASS: fuzz_smblob
+PASS: fuzz_block_noclamp aborted as expected (count-clamp teeth)
+PASS: fuzz_block_signed aborted as expected (signed-count teeth)
+PASS: fuzz_block_randstream aborted as expected (corrupt-width teeth)
+PASS: fuzz_block_nosumtf aborted as expected (sumtf-vs-posbytelen teeth)
+== ALL CLEAN ==
+== t012 rerun 1 (PG17): t/012_concurrent_flush.pl .. ok Result: PASS 
+== t012 rerun 2 (PG17): t/012_concurrent_flush.pl .. ok Result: PASS 
+== t012 rerun 3 (PG17): t/012_concurrent_flush.pl .. ok Result: PASS 
+== oom: 0
+GATE142_DONE

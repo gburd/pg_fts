@@ -1,0 +1,15 @@
+PG17 old so 2af75879 new so 58399add; new edge: /nvme/fp/gate/upg-new17/share/postgresql/extension/pg_fts--1.14.1--1.14.2.sql; stale base 1.14.1 in tree: 0
+  at 1.14.1: ext 1.14.1 count(rare)=1015
+  after UPDATE: ext 1.14.2 count(rare) stored=1015 expr=1015 heap=1015; check-query false rows=0
+  after VACUUM + fts_vacuum on 1.14.2: count 923 heap 923; top20 unchanged across upgrade: yes
+  fresh 1.14.1 -> 1.14.2
+  update path 1.0.0 -> 1.14.2: 69 sources reach 1.14.2; unreachable: none
+  PG17 UPGRADE OK
+PG18 old so 2e88fa6a new so d3383fc5; new edge: /nvme/fp/gate/upg-new18/share/postgresql/extension/pg_fts--1.14.1--1.14.2.sql; stale base 1.14.1 in tree: 0
+  at 1.14.1: ext 1.14.1 count(rare)=1015
+  after UPDATE: ext 1.14.2 count(rare) stored=1015 expr=1015 heap=1015; check-query false rows=0
+  after VACUUM + fts_vacuum on 1.14.2: count 923 heap 923; top20 unchanged across upgrade: yes
+  fresh 1.14.1 -> 1.14.2
+  update path 1.0.0 -> 1.14.2: 69 sources reach 1.14.2; unreachable: none
+  PG18 UPGRADE OK
+UPG142_DONE

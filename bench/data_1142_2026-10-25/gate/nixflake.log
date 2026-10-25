@@ -1,0 +1,12 @@
+round 1 main 69c299a rc=0 # All 22 tests passed. notok:  load 27.49
+round 1 fix1142 0e9ab50 rc=0 # All 23 tests passed. notok:  load 34.09
+round 2 main 69c299a rc=0 # All 22 tests passed. notok:  load 34.82
+round 2 fix1142 0e9ab50 rc=0 # All 23 tests passed. notok:  load 35.28
+round 3 main 69c299a rc=0 # All 22 tests passed. notok:  load 35.16
+round 3 fix1142 0e9ab50 rc=0 # All 23 tests passed. notok:  load 34.55
+round 4 main 69c299a rc=0 # All 22 tests passed. notok:  load 34.33
+round 4 fix1142 0e9ab50 rc=0 # All 23 tests passed. notok:  load 33.77
+round 5 main 69c299a rc=0 # All 22 tests passed. notok:  load 34.10
+round 5 fix1142 0e9ab50 rc=0 # All 23 tests passed. notok:  load 34.71
+NIXFLAKE_DONE
+ 17:17:09 up  3:48,  1 user,  load average: 6.54, 23.63, 20.63

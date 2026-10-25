@@ -1,0 +1,425 @@
+built 15:09:51 ext 1.10.0
+loaded passes 1-17 15:12:02
+=== DIFF B on-1.10.0 2026-10-25T15:12:02Z
+ext 1.10.0
+rows 1905300 heap_pages 126429 index_MB 2034 nseg 1
+n_dead_tup 0 autovac 2 vac 1
+NOTICE:  table "truthdoc" does not exist, skipping
+SET
+SET
+Bitmap Heap Scan on ag
+  Recheck Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+  ->  Bitmap Index Scan on idx_ag_msg_fts
+        Index Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+SET
+SET
+Bitmap Heap Scan on ag
+  Disabled: true
+  Recheck Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+  ->  Bitmap Index Scan on idx_ag_msg_fts
+        Index Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+SET
+SET
+SET
+SELECT 27735
+SET
+SET
+SELECT 27735
+RESET
+RESET
+RESET
+SELECT 38772
+SELECT 0
+vacuum             truth 38772 | bitmap 27735 FP 0 FN 11037 | idxscan 27735 FP 0 FN 11037 | fts_count 27735
+SET
+SET
+SET
+SELECT 12421
+SET
+SET
+SELECT 12421
+RESET
+RESET
+RESET
+SELECT 17604
+SELECT 0
+autovacuum         truth 17604 | bitmap 12421 FP 0 FN 5183 | idxscan 12421 FP 0 FN 5183 | fts_count 12421
+SET
+SET
+SET
+SELECT 2666
+SET
+SET
+SELECT 2666
+RESET
+RESET
+RESET
+SELECT 3636
+SELECT 0
+visibility & map   truth 3636 | bitmap 2666 FP 0 FN 970 | idxscan 2666 FP 0 FN 970 | fts_count 2666
+SET
+SET
+SET
+SELECT 4987
+SET
+SET
+SELECT 4987
+RESET
+RESET
+RESET
+SELECT 7146
+SELECT 0
+hash & index       truth 7146 | bitmap 4987 FP 0 FN 2159 | idxscan 4987 FP 0 FN 2159 | fts_count 4987
+SET
+SET
+SET
+SELECT 5707
+SET
+SET
+SELECT 5707
+RESET
+RESET
+RESET
+SELECT 8010
+SELECT 0
+freeze             truth 8010 | bitmap 5707 FP 0 FN 2303 | idxscan 5707 FP 0 FN 2303 | fts_count 5707
+SET
+SET
+SET
+SELECT 75138
+SET
+SET
+SELECT 75138
+RESET
+RESET
+RESET
+SELECT 105732
+SELECT 0
+index              truth 105732 | bitmap 75138 FP 0 FN 30594 | idxscan 75138 FP 0 FN 30594 | fts_count 75138
+SET
+SET
+SET
+SELECT 28155
+SET
+SET
+SELECT 28155
+RESET
+RESET
+RESET
+SELECT 39366
+SELECT 0
+replication        truth 39366 | bitmap 28155 FP 0 FN 11211 | idxscan 28155 FP 0 FN 11211 | fts_count 28155
+SET
+SET
+SET
+SELECT 20082
+SET
+SET
+SELECT 20082
+RESET
+RESET
+RESET
+SELECT 28350
+SELECT 0
+planner            truth 28350 | bitmap 20082 FP 0 FN 8268 | idxscan 20082 FP 0 FN 8268 | fts_count 20082
+SET
+SET
+SET
+SELECT 42557
+SET
+SET
+SELECT 42557
+RESET
+RESET
+RESET
+SELECT 59400
+SELECT 0
+wal                truth 59400 | bitmap 42557 FP 0 FN 16843 | idxscan 42557 FP 0 FN 16843 | fts_count 42557
+SET
+SET
+SET
+SELECT 41244
+SET
+SET
+SELECT 41244
+RESET
+RESET
+RESET
+SELECT 57546
+SELECT 0
+lock               truth 57546 | bitmap 41244 FP 0 FN 16302 | idxscan 41244 FP 0 FN 16302 | fts_count 41244
+SET
+SET
+SET
+SELECT 502903
+SET
+SET
+SELECT 502124
+RESET
+RESET
+RESET
+SELECT 704106
+SELECT 0
+fix                truth 704106 | bitmap 502903 FP 0 FN 201203 | idxscan 502124 FP 0 FN 201982 | fts_count 502124
+SET
+SET
+SET
+SELECT 162976
+SET
+SET
+SELECT 162976
+RESET
+RESET
+RESET
+SELECT 228852
+SELECT 0
+bug                truth 228852 | bitmap 162976 FP 0 FN 65876 | idxscan 162976 FP 0 FN 65876 | fts_count 162976
+=== END B on-1.10.0 2026-10-25T15:14:53Z
+=== DIFF B upgraded-to-1.14.1 2026-10-25T15:14:56Z
+ext 1.14.1
+rows 1905300 heap_pages 126429 index_MB 2034 nseg 1
+n_dead_tup 0 autovac 2 vac 1
+SET
+SET
+Bitmap Heap Scan on ag
+  Recheck Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+  ->  Bitmap Index Scan on idx_ag_msg_fts
+        Index Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+SET
+SET
+Bitmap Heap Scan on ag
+  Disabled: true
+  Recheck Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+  ->  Bitmap Index Scan on idx_ag_msg_fts
+        Index Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+SET
+SET
+SET
+SELECT 27735
+SET
+SET
+SELECT 27735
+RESET
+RESET
+RESET
+SELECT 38772
+SELECT 0
+vacuum             truth 38772 | bitmap 27735 FP 0 FN 11037 | idxscan 27735 FP 0 FN 11037 | fts_count 27735
+SET
+SET
+SET
+SELECT 12421
+SET
+SET
+SELECT 12421
+RESET
+RESET
+RESET
+SELECT 17604
+SELECT 0
+autovacuum         truth 17604 | bitmap 12421 FP 0 FN 5183 | idxscan 12421 FP 0 FN 5183 | fts_count 12421
+SET
+SET
+SET
+SELECT 2666
+SET
+SET
+SELECT 2666
+RESET
+RESET
+RESET
+SELECT 3636
+SELECT 0
+visibility & map   truth 3636 | bitmap 2666 FP 0 FN 970 | idxscan 2666 FP 0 FN 970 | fts_count 2666
+SET
+SET
+SET
+SELECT 4987
+SET
+SET
+SELECT 4987
+RESET
+RESET
+RESET
+SELECT 7146
+SELECT 0
+hash & index       truth 7146 | bitmap 4987 FP 0 FN 2159 | idxscan 4987 FP 0 FN 2159 | fts_count 4987
+SET
+SET
+SET
+SELECT 5707
+SET
+SET
+SELECT 5707
+RESET
+RESET
+RESET
+SELECT 8010
+SELECT 0
+freeze             truth 8010 | bitmap 5707 FP 0 FN 2303 | idxscan 5707 FP 0 FN 2303 | fts_count 5707
+SET
+SET
+SET
+SELECT 75138
+SET
+SET
+SELECT 75138
+RESET
+RESET
+RESET
+SELECT 105732
+SELECT 0
+index              truth 105732 | bitmap 75138 FP 0 FN 30594 | idxscan 75138 FP 0 FN 30594 | fts_count 75138
+SET
+SET
+SET
+SELECT 28155
+SET
+SET
+SELECT 28155
+RESET
+RESET
+RESET
+SELECT 39366
+SELECT 0
+replication        truth 39366 | bitmap 28155 FP 0 FN 11211 | idxscan 28155 FP 0 FN 11211 | fts_count 28155
+SET
+SET
+SET
+SELECT 20082
+SET
+SET
+SELECT 20082
+RESET
+RESET
+RESET
+SELECT 28350
+SELECT 0
+planner            truth 28350 | bitmap 20082 FP 0 FN 8268 | idxscan 20082 FP 0 FN 8268 | fts_count 20082
+SET
+SET
+SET
+SELECT 42557
+SET
+SET
+SELECT 42557
+RESET
+RESET
+RESET
+SELECT 59400
+SELECT 0
+wal                truth 59400 | bitmap 42557 FP 0 FN 16843 | idxscan 42557 FP 0 FN 16843 | fts_count 42557
+SET
+SET
+SET
+SELECT 41244
+SET
+SET
+SELECT 41244
+RESET
+RESET
+RESET
+SELECT 57546
+SELECT 0
+lock               truth 57546 | bitmap 41244 FP 0 FN 16302 | idxscan 41244 FP 0 FN 16302 | fts_count 41244
+SET
+SET
+SET
+SELECT 502903
+SET
+SET
+SELECT 502124
+RESET
+RESET
+RESET
+SELECT 704106
+SELECT 0
+fix                truth 704106 | bitmap 502903 FP 0 FN 201203 | idxscan 502124 FP 0 FN 201982 | fts_count 502124
+SET
+SET
+SET
+SELECT 162976
+SET
+SET
+SELECT 162976
+RESET
+RESET
+RESET
+SELECT 228852
+SELECT 0
+bug                truth 228852 | bitmap 162976 FP 0 FN 65876 | idxscan 162976 FP 0 FN 65876 | fts_count 162976
+=== END B upgraded-to-1.14.1 2026-10-25T15:17:47Z
+loaded passes 18-34 15:18:40
+=== DIFF B final 2026-10-25T15:19:40Z
+ext 1.14.1
+rows 3704750 heap_pages 245848 index_MB 3939 nseg 1
+n_dead_tup 0 autovac 2 vac 2
+SET
+SET
+Gather
+  Workers Planned: 2
+  ->  Parallel Bitmap Heap Scan on ag
+        Recheck Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+        ->  Bitmap Index Scan on idx_ag_msg_fts
+              Index Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+SET
+SET
+Gather
+  Workers Planned: 2
+  ->  Parallel Bitmap Heap Scan on ag
+        Disabled: true
+        Recheck Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+        ->  Bitmap Index Scan on idx_ag_msg_fts
+              Index Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+SET
+SET
+SET
+SELECT 64353
+SET
+SET
+SELECT 64353
+RESET
+RESET
+RESET
+SELECT 75390
+SELECT 0
+vacuum             truth 75390 | bitmap 64353 FP 0 FN 11037 | idxscan 64353 FP 0 FN 11037 | fts_count 64353
+SET
+SET
+SET
+SELECT 29047
+SET
+SET
+SELECT 29047
+RESET
+RESET
+RESET
+SELECT 34230
+SELECT 0
+autovacuum         truth 34230 | bitmap 29047 FP 0 FN 5183 | idxscan 29047 FP 0 FN 5183 | fts_count 29047
+SET
+SET
+SET
+SELECT 6100
+SET
+SET
+SELECT 6100
+RESET
+RESET
+RESET
+psql:/tmp/diff1.sql:8: FATAL:  terminating connection due to administrator command
+psql:/tmp/diff1.sql:8: server closed the connection unexpectedly
+	This probably means the server terminated abnormally
+	before or while processing the request.
+psql:/tmp/diff1.sql:8: error: connection to server was lost
+psql: error: connection to server on socket "/tmp/.s.PGSQL.5491" failed: FATAL:  the database system is shutting down
+psql: error: connection to server on socket "/tmp/.s.PGSQL.5491" failed: FATAL:  the database system is shutting down
+psql: error: connection to server on socket "/tmp/.s.PGSQL.5491" failed: FATAL:  the database system is shutting down
+psql: error: connection to server on socket "/tmp/.s.PGSQL.5491" failed: FATAL:  the database system is shutting down
+psql: error: connection to server on socket "/tmp/.s.PGSQL.5491" failed: FATAL:  the database system is shutting down
+psql: error: connection to server on socket "/tmp/.s.PGSQL.5491" failed: FATAL:  the database system is shutting down
+psql: error: connection to server on socket "/tmp/.s.PGSQL.5491" failed: FATAL:  the database system is shutting down
+psql: error: connection to server on socket "/tmp/.s.PGSQL.5491" failed: FATAL:  the database system is shutting down
+psql: error: connection to server on socket "/tmp/.s.PGSQL.5491" failed: FATAL:  the database system is shutting down
+=== END B final 2026-10-25T15:23:42Z
+ARM_DONE

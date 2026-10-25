@@ -1,0 +1,23 @@
+tree 0e9ab50 Release 1.14.2
+Sun Oct 25 16:24:58 UTC 2026
+installcheck> # All 23 tests passed.
+installcheck> # All 4 tests passed.
+installcheck> not ok 20    - vacuum_parallel                          9077 ms
+installcheck> # 1 of 23 tests failed.
+tap> Result: PASS
+tap> Result: PASS
+error: Cannot build '/nix/store/p5yz3kxr1sq3sp00sbibcyxmvn6r6gfb-pg_fts-installcheck-17.10.drv'.
+nix build rc=1
+Sun Oct 25 16:35:56 UTC 2026
+
+tree 0e9ab50 Release 1.14.2
+Sun Oct 25 16:48:05 UTC 2026
+installcheck> # All 23 tests passed.
+installcheck> # All 4 tests passed.
+installcheck> # All 23 tests passed.
+installcheck> # All 4 tests passed.
+tap> Result: PASS
+tap> Result: PASS
+nix build rc=0
+Sun Oct 25 16:51:44 UTC 2026
+

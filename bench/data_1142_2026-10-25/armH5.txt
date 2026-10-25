@@ -1,0 +1,528 @@
+built 15:23:47 ext 1.14.1 W=8 abort=10 np=10 vac=20 ovs=2 thr=20000 ro='WITH (positions=on, doclen_sidecar=off)' cycles=3
+cycle 1 loaded 15:25:41
+=== DIFF H5 cycle 1 2026-10-25T15:25:43Z
+ext 1.14.1
+rows 1278500 heap_pages 74103 index_MB 547 nseg 4
+n_dead_tup 0 autovac 0 vac 5
+NOTICE:  table "truthdoc" does not exist, skipping
+SET
+SET
+Bitmap Heap Scan on ag
+  Recheck Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+  ->  Bitmap Index Scan on idx_ag_msg_fts
+        Index Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+SET
+SET
+Bitmap Heap Scan on ag
+  Disabled: true
+  Recheck Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+  ->  Bitmap Index Scan on idx_ag_msg_fts
+        Index Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+SET
+SET
+SET
+SELECT 22093
+SET
+SET
+SELECT 22093
+RESET
+RESET
+RESET
+SELECT 22093
+SELECT 0
+vacuum             truth 22093 | bitmap 22093 FP 0 FN 0 | idxscan 22093 FP 0 FN 0 | fts_count 22093
+SET
+SET
+SET
+SELECT 10007
+SET
+SET
+SELECT 10007
+RESET
+RESET
+RESET
+SELECT 10007
+SELECT 0
+autovacuum         truth 10007 | bitmap 10007 FP 0 FN 0 | idxscan 10007 FP 0 FN 0 | fts_count 10007
+SET
+SET
+SET
+SELECT 2114
+SET
+SET
+SELECT 2114
+RESET
+RESET
+RESET
+SELECT 2114
+SELECT 0
+visibility & map   truth 2114 | bitmap 2114 FP 0 FN 0 | idxscan 2114 FP 0 FN 0 | fts_count 2114
+SET
+SET
+SET
+SELECT 4080
+SET
+SET
+SELECT 4080
+RESET
+RESET
+RESET
+SELECT 4080
+SELECT 0
+hash & index       truth 4080 | bitmap 4080 FP 0 FN 0 | idxscan 4080 FP 0 FN 0 | fts_count 4080
+SET
+SET
+SET
+SELECT 4583
+SET
+SET
+SELECT 4583
+RESET
+RESET
+RESET
+SELECT 4583
+SELECT 0
+freeze             truth 4583 | bitmap 4583 FP 0 FN 0 | idxscan 4583 FP 0 FN 0 | fts_count 4583
+SET
+SET
+SET
+SELECT 60311
+SET
+SET
+SELECT 60311
+RESET
+RESET
+RESET
+SELECT 60311
+SELECT 0
+index              truth 60311 | bitmap 60311 FP 0 FN 0 | idxscan 60311 FP 0 FN 0 | fts_count 60311
+SET
+SET
+SET
+SELECT 22599
+SET
+SET
+SELECT 22599
+RESET
+RESET
+RESET
+SELECT 22599
+SELECT 0
+replication        truth 22599 | bitmap 22599 FP 0 FN 0 | idxscan 22599 FP 0 FN 0 | fts_count 22599
+SET
+SET
+SET
+SELECT 16142
+SET
+SET
+SELECT 16142
+RESET
+RESET
+RESET
+SELECT 16142
+SELECT 0
+planner            truth 16142 | bitmap 16142 FP 0 FN 0 | idxscan 16142 FP 0 FN 0 | fts_count 16142
+SET
+SET
+SET
+SELECT 33978
+SET
+SET
+SELECT 33978
+RESET
+RESET
+RESET
+SELECT 33978
+SELECT 0
+wal                truth 33978 | bitmap 33978 FP 0 FN 0 | idxscan 33978 FP 0 FN 0 | fts_count 33978
+SET
+SET
+SET
+SELECT 32839
+SET
+SET
+SELECT 32839
+RESET
+RESET
+RESET
+SELECT 32839
+SELECT 0
+lock               truth 32839 | bitmap 32839 FP 0 FN 0 | idxscan 32839 FP 0 FN 0 | fts_count 32839
+SET
+SET
+SET
+SELECT 400542
+SET
+SET
+SELECT 400542
+RESET
+RESET
+RESET
+SELECT 400542
+SELECT 0
+fix                truth 400542 | bitmap 400542 FP 0 FN 0 | idxscan 400542 FP 0 FN 0 | fts_count 400542
+SET
+SET
+SET
+SELECT 129745
+SET
+SET
+SELECT 129745
+RESET
+RESET
+RESET
+SELECT 129745
+SELECT 0
+bug                truth 129745 | bitmap 129745 FP 0 FN 0 | idxscan 129745 FP 0 FN 0 | fts_count 129745
+=== END H5 cycle 1 2026-10-25T15:28:28Z
+cycle 2 loaded 15:30:38
+=== DIFF H5 cycle 2 2026-10-25T15:31:14Z
+ext 1.14.1
+rows 2537000 heap_pages 147573 index_MB 1401 nseg 4
+n_dead_tup 0 autovac 0 vac 10
+SET
+SET
+Bitmap Heap Scan on ag
+  Recheck Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+  ->  Bitmap Index Scan on idx_ag_msg_fts
+        Index Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+SET
+SET
+Bitmap Heap Scan on ag
+  Disabled: true
+  Recheck Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+  ->  Bitmap Index Scan on idx_ag_msg_fts
+        Index Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+SET
+SET
+SET
+SELECT 43633
+SET
+SET
+SELECT 43633
+RESET
+RESET
+RESET
+SELECT 43633
+SELECT 0
+vacuum             truth 43633 | bitmap 43633 FP 0 FN 0 | idxscan 43633 FP 0 FN 0 | fts_count 43633
+SET
+SET
+SET
+SELECT 19787
+SET
+SET
+SELECT 19787
+RESET
+RESET
+RESET
+SELECT 19787
+SELECT 0
+autovacuum         truth 19787 | bitmap 19787 FP 0 FN 0 | idxscan 19787 FP 0 FN 0 | fts_count 19787
+SET
+SET
+SET
+SELECT 4134
+SET
+SET
+SELECT 4134
+RESET
+RESET
+RESET
+SELECT 4134
+SELECT 0
+visibility & map   truth 4134 | bitmap 4134 FP 0 FN 0 | idxscan 4134 FP 0 FN 0 | fts_count 4134
+SET
+SET
+SET
+SELECT 8050
+SET
+SET
+SELECT 8050
+RESET
+RESET
+RESET
+SELECT 8050
+SELECT 0
+hash & index       truth 8050 | bitmap 8050 FP 0 FN 0 | idxscan 8050 FP 0 FN 0 | fts_count 8050
+SET
+SET
+SET
+SELECT 9033
+SET
+SET
+SELECT 9033
+RESET
+RESET
+RESET
+SELECT 9033
+SELECT 0
+freeze             truth 9033 | bitmap 9033 FP 0 FN 0 | idxscan 9033 FP 0 FN 0 | fts_count 9033
+SET
+SET
+SET
+SELECT 119051
+SET
+SET
+SELECT 119051
+RESET
+RESET
+RESET
+SELECT 119051
+SELECT 0
+index              truth 119051 | bitmap 119051 FP 0 FN 0 | idxscan 119051 FP 0 FN 0 | fts_count 119051
+SET
+SET
+SET
+SELECT 44469
+SET
+SET
+SELECT 44469
+RESET
+RESET
+RESET
+SELECT 44469
+SELECT 0
+replication        truth 44469 | bitmap 44469 FP 0 FN 0 | idxscan 44469 FP 0 FN 0 | fts_count 44469
+SET
+SET
+SET
+SELECT 31892
+SET
+SET
+SELECT 31892
+RESET
+RESET
+RESET
+SELECT 31892
+SELECT 0
+planner            truth 31892 | bitmap 31892 FP 0 FN 0 | idxscan 31892 FP 0 FN 0 | fts_count 31892
+SET
+SET
+SET
+SELECT 66978
+SET
+SET
+SELECT 66978
+RESET
+RESET
+RESET
+SELECT 66978
+SELECT 0
+wal                truth 66978 | bitmap 66978 FP 0 FN 0 | idxscan 66978 FP 0 FN 0 | fts_count 66978
+SET
+SET
+SET
+SELECT 64809
+SET
+SET
+SELECT 64809
+RESET
+RESET
+RESET
+SELECT 64809
+SELECT 0
+lock               truth 64809 | bitmap 64809 FP 0 FN 0 | idxscan 64809 FP 0 FN 0 | fts_count 64809
+SET
+SET
+SET
+SELECT 791712
+SET
+SET
+SELECT 791712
+RESET
+RESET
+RESET
+SELECT 791712
+SELECT 0
+fix                truth 791712 | bitmap 791712 FP 0 FN 0 | idxscan 791712 FP 0 FN 0 | fts_count 791712
+SET
+SET
+SET
+SELECT 256885
+SET
+SET
+SELECT 256885
+RESET
+RESET
+RESET
+SELECT 256885
+SELECT 0
+bug                truth 256885 | bitmap 256885 FP 0 FN 0 | idxscan 256885 FP 0 FN 0 | fts_count 256885
+=== END H5 cycle 2 2026-10-25T15:38:04Z
+cycle 3 loaded 15:43:07
+=== DIFF H5 cycle 3 2026-10-25T15:43:13Z
+ext 1.14.1
+rows 3795500 heap_pages 218694 index_MB 775 nseg 4
+n_dead_tup 0 autovac 0 vac 16
+SET
+SET
+Bitmap Heap Scan on ag
+  Recheck Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+  ->  Bitmap Index Scan on idx_ag_msg_fts
+        Index Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+SET
+SET
+Bitmap Heap Scan on ag
+  Disabled: true
+  Recheck Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+  ->  Bitmap Index Scan on idx_ag_msg_fts
+        Index Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+SET
+SET
+SET
+SELECT 65173
+SET
+SET
+SELECT 65173
+RESET
+RESET
+RESET
+SELECT 65173
+SELECT 0
+vacuum             truth 65173 | bitmap 65173 FP 0 FN 0 | idxscan 65173 FP 0 FN 0 | fts_count 65173
+SET
+SET
+SET
+SELECT 29567
+SET
+SET
+SELECT 29567
+RESET
+RESET
+RESET
+SELECT 29567
+SELECT 0
+autovacuum         truth 29567 | bitmap 29567 FP 0 FN 0 | idxscan 29567 FP 0 FN 0 | fts_count 29567
+SET
+SET
+SET
+SELECT 6154
+SET
+SET
+SELECT 6154
+RESET
+RESET
+RESET
+SELECT 6154
+SELECT 0
+visibility & map   truth 6154 | bitmap 6154 FP 0 FN 0 | idxscan 6154 FP 0 FN 0 | fts_count 6154
+SET
+SET
+SET
+SELECT 12020
+SET
+SET
+SELECT 12020
+RESET
+RESET
+RESET
+SELECT 12020
+SELECT 0
+hash & index       truth 12020 | bitmap 12020 FP 0 FN 0 | idxscan 12020 FP 0 FN 0 | fts_count 12020
+SET
+SET
+SET
+SELECT 13483
+SET
+SET
+SELECT 13483
+RESET
+RESET
+RESET
+SELECT 13483
+SELECT 0
+freeze             truth 13483 | bitmap 13483 FP 0 FN 0 | idxscan 13483 FP 0 FN 0 | fts_count 13483
+SET
+SET
+SET
+SELECT 177791
+SET
+SET
+SELECT 177791
+RESET
+RESET
+RESET
+SELECT 177791
+SELECT 0
+index              truth 177791 | bitmap 177791 FP 0 FN 0 | idxscan 177791 FP 0 FN 0 | fts_count 177791
+SET
+SET
+SET
+SELECT 66339
+SET
+SET
+SELECT 66339
+RESET
+RESET
+RESET
+SELECT 66339
+SELECT 0
+replication        truth 66339 | bitmap 66339 FP 0 FN 0 | idxscan 66339 FP 0 FN 0 | fts_count 66339
+SET
+SET
+SET
+SELECT 47642
+SET
+SET
+SELECT 47642
+RESET
+RESET
+RESET
+SELECT 47642
+SELECT 0
+planner            truth 47642 | bitmap 47642 FP 0 FN 0 | idxscan 47642 FP 0 FN 0 | fts_count 47642
+SET
+SET
+SET
+SELECT 99978
+SET
+SET
+SELECT 99978
+RESET
+RESET
+RESET
+SELECT 99978
+SELECT 0
+wal                truth 99978 | bitmap 99978 FP 0 FN 0 | idxscan 99978 FP 0 FN 0 | fts_count 99978
+SET
+SET
+SET
+SELECT 96779
+SET
+SET
+SELECT 96779
+RESET
+RESET
+RESET
+SELECT 96779
+SELECT 0
+lock               truth 96779 | bitmap 96779 FP 0 FN 0 | idxscan 96779 FP 0 FN 0 | fts_count 96779
+SET
+SET
+SET
+SELECT 1182882
+SET
+SET
+SELECT 1182882
+RESET
+RESET
+RESET
+SELECT 1182882
+SELECT 0
+fix                truth 1182882 | bitmap 1182882 FP 0 FN 0 | idxscan 1182882 FP 0 FN 0 | fts_count 1182882
+SET
+SET
+SET
+SELECT 384025
+SET
+SET
+SELECT 384025
+RESET
+RESET
+RESET
+SELECT 384025
+SELECT 0
+bug                truth 384025 | bitmap 384025 FP 0 FN 0 | idxscan 384025 FP 0 FN 0 | fts_count 384025
+=== END H5 cycle 3 2026-10-25T16:01:06Z
+ARM_DONE

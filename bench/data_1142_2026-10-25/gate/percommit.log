@@ -1,0 +1,5 @@
+67857b8 (67857b8 test: pending_reuse -- aborted batch, VACUUM, shifted retry (pg.ddx.io 2026-10-24)) rc=2 27 ok 0 not-ok: 
+df49e96 (df49e96 doc: an index written by <= 1.10.0 needs REINDEX after upgrading) rc=2 27 ok 0 not-ok: 
+45529d2 (45529d2 bench: 1.14.2 reproduction record (pg.ddx.io 2026-10-24)) rc=2 27 ok 0 not-ok: 
+d87b210 (d87b210 Release 1.14.2) rc=2 27 ok 0 not-ok: 
+PERCOMMIT_DONE

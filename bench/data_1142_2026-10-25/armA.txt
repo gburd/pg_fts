@@ -1,0 +1,178 @@
+built 15:09:50 ext 1.14.1
+loaded passes 1-34 15:11:39
+=== DIFF A final 2026-10-25T15:12:39Z
+ext 1.14.1
+rows 3704750 heap_pages 245792 index_MB 2839 nseg 1
+n_dead_tup 0 autovac 2 vac 2
+NOTICE:  table "truthdoc" does not exist, skipping
+SET
+SET
+Bitmap Heap Scan on ag
+  Recheck Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+  ->  Bitmap Index Scan on idx_ag_msg_fts
+        Index Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+SET
+SET
+Bitmap Heap Scan on ag
+  Disabled: true
+  Recheck Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+  ->  Bitmap Index Scan on idx_ag_msg_fts
+        Index Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+SET
+SET
+SET
+SELECT 75390
+SET
+SET
+SELECT 75390
+RESET
+RESET
+RESET
+SELECT 75390
+SELECT 0
+vacuum             truth 75390 | bitmap 75390 FP 0 FN 0 | idxscan 75390 FP 0 FN 0 | fts_count 75390
+SET
+SET
+SET
+SELECT 34230
+SET
+SET
+SELECT 34230
+RESET
+RESET
+RESET
+SELECT 34230
+SELECT 0
+autovacuum         truth 34230 | bitmap 34230 FP 0 FN 0 | idxscan 34230 FP 0 FN 0 | fts_count 34230
+SET
+SET
+SET
+SELECT 7070
+SET
+SET
+SELECT 7070
+RESET
+RESET
+RESET
+SELECT 7070
+SELECT 0
+visibility & map   truth 7070 | bitmap 7070 FP 0 FN 0 | idxscan 7070 FP 0 FN 0 | fts_count 7070
+SET
+SET
+SET
+SELECT 13895
+SET
+SET
+SELECT 13895
+RESET
+RESET
+RESET
+SELECT 13895
+SELECT 0
+hash & index       truth 13895 | bitmap 13895 FP 0 FN 0 | idxscan 13895 FP 0 FN 0 | fts_count 13895
+SET
+SET
+SET
+SELECT 15575
+SET
+SET
+SELECT 15575
+RESET
+RESET
+RESET
+SELECT 15575
+SELECT 0
+freeze             truth 15575 | bitmap 15575 FP 0 FN 0 | idxscan 15575 FP 0 FN 0 | fts_count 15575
+SET
+SET
+SET
+SELECT 205590
+SET
+SET
+SELECT 205590
+RESET
+RESET
+RESET
+SELECT 205590
+SELECT 0
+index              truth 205590 | bitmap 205590 FP 0 FN 0 | idxscan 205590 FP 0 FN 0 | fts_count 205590
+SET
+SET
+SET
+SELECT 76545
+SET
+SET
+SELECT 76545
+RESET
+RESET
+RESET
+SELECT 76545
+SELECT 0
+replication        truth 76545 | bitmap 76545 FP 0 FN 0 | idxscan 76545 FP 0 FN 0 | fts_count 76545
+SET
+SET
+SET
+SELECT 55125
+SET
+SET
+SELECT 55125
+RESET
+RESET
+RESET
+SELECT 55125
+SELECT 0
+planner            truth 55125 | bitmap 55125 FP 0 FN 0 | idxscan 55125 FP 0 FN 0 | fts_count 55125
+SET
+SET
+SET
+SELECT 115500
+SET
+SET
+SELECT 115500
+RESET
+RESET
+RESET
+SELECT 115500
+SELECT 0
+wal                truth 115500 | bitmap 115500 FP 0 FN 0 | idxscan 115500 FP 0 FN 0 | fts_count 115500
+SET
+SET
+SET
+SELECT 111895
+SET
+SET
+SELECT 111895
+RESET
+RESET
+RESET
+SELECT 111895
+SELECT 0
+lock               truth 111895 | bitmap 111895 FP 0 FN 0 | idxscan 111895 FP 0 FN 0 | fts_count 111895
+SET
+SET
+SET
+SELECT 1369095
+SET
+SET
+SELECT 1369095
+RESET
+RESET
+RESET
+SELECT 1369095
+SELECT 0
+fix                truth 1369095 | bitmap 1369095 FP 0 FN 0 | idxscan 1369095 FP 0 FN 0 | fts_count 1369095
+SET
+SET
+SET
+SELECT 444990
+SET
+SET
+SELECT 444990
+RESET
+RESET
+RESET
+SELECT 444990
+SELECT 0
+bug                truth 444990 | bitmap 444990 FP 0 FN 0 | idxscan 444990 FP 0 FN 0 | fts_count 444990
+=== END A final 2026-10-25T15:21:39Z
+ARM_DONE

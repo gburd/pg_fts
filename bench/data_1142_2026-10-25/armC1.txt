@@ -1,0 +1,786 @@
+built 15:09:51 ext 1.10.0
+loaded passes 1-17 15:14:28
+=== DIFF C1 on-1.10.0 2026-10-25T15:14:28Z
+ext 1.10.0
+rows 1905300 heap_pages 131286 index_MB 1242 nseg 1
+n_dead_tup 0 autovac 2 vac 2
+NOTICE:  table "truthdoc" does not exist, skipping
+SET
+SET
+Bitmap Heap Scan on ag
+  Recheck Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+  ->  Bitmap Index Scan on idx_ag_msg_fts
+        Index Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+SET
+SET
+Bitmap Heap Scan on ag
+  Disabled: true
+  Recheck Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+  ->  Bitmap Index Scan on idx_ag_msg_fts
+        Index Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+SET
+SET
+SET
+SELECT 35109
+SET
+SET
+SELECT 35109
+RESET
+RESET
+RESET
+SELECT 38772
+SELECT 1041
+vacuum             truth 38772 | bitmap 35109 FP 1041 FN 4704 | idxscan 35109 FP 1041 FN 4704 | fts_count 35905
+  FP (9550,6) n=32129 prev_true=f next_true=f rowpred=f
+  FP (9553,10) n=32130 prev_true=f next_true=f rowpred=f
+  FP (10156,14) n=32131 prev_true=t next_true=f rowpred=f
+  FP (10159,9) n=32132 prev_true=f next_true=f rowpred=f
+  FP (10213,9) n=13924 prev_true=f next_true=f rowpred=f
+  FP (10252,14) n=83154 prev_true=f next_true=f rowpred=f
+  FP (10275,1) n=3464 prev_true=f next_true=f rowpred=f
+  FP (10275,2) n=3465 prev_true=f next_true=f rowpred=f
+SET
+SET
+SET
+SELECT 15820
+SET
+SET
+SELECT 15820
+RESET
+RESET
+RESET
+SELECT 17604
+SELECT 435
+autovacuum         truth 17604 | bitmap 15820 FP 435 FN 2219 | idxscan 15820 FP 435 FN 2219 | fts_count 16197
+  FP (10252,14) n=83154 prev_true=f next_true=f rowpred=f
+  FP (10275,1) n=3464 prev_true=f next_true=f rowpred=f
+  FP (10275,2) n=3465 prev_true=f next_true=f rowpred=f
+  FP (10275,3) n=3466 prev_true=f next_true=f rowpred=f
+  FP (10275,5) n=3468 prev_true=f next_true=f rowpred=f
+  FP (10275,6) n=3469 prev_true=f next_true=f rowpred=f
+  FP (10319,5) n=3507 prev_true=f next_true=f rowpred=f
+  FP (10319,6) n=3508 prev_true=f next_true=f rowpred=f
+SET
+SET
+SET
+SELECT 3367
+SET
+SET
+SELECT 3367
+RESET
+RESET
+RESET
+SELECT 3636
+SELECT 176
+visibility & map   truth 3636 | bitmap 3367 FP 176 FN 445 | idxscan 3367 FP 176 FN 445 | fts_count 3427
+  FP (11985,3) n=17838 prev_true=f next_true=f rowpred=f
+  FP (13997,17) n=64201 prev_true=f next_true=f rowpred=f
+  FP (14064,5) n=21028 prev_true=f next_true=f rowpred=f
+  FP (14064,6) n=21029 prev_true=f next_true=f rowpred=f
+  FP (14065,1) n=21032 prev_true=f next_true=f rowpred=f
+  FP (15040,4) n=21238 prev_true=f next_true=f rowpred=f
+  FP (15107,1) n=7629 prev_true=f next_true=f rowpred=f
+  FP (15175,14) n=7749 prev_true=f next_true=f rowpred=f
+SET
+SET
+SET
+SELECT 6641
+SET
+SET
+SELECT 6641
+RESET
+RESET
+RESET
+SELECT 7146
+SELECT 332
+hash & index       truth 7146 | bitmap 6641 FP 332 FN 837 | idxscan 6641 FP 332 FN 837 | fts_count 6804
+  FP (10275,5) n=3468 prev_true=f next_true=f rowpred=f
+  FP (10625,1) n=3542 prev_true=f next_true=f rowpred=f
+  FP (10625,2) n=3543 prev_true=f next_true=f rowpred=f
+  FP (10625,3) n=3544 prev_true=f next_true=f rowpred=f
+  FP (10764,5) n=83636 prev_true=f next_true=f rowpred=f
+  FP (10764,6) n=83637 prev_true=f next_true=f rowpred=f
+  FP (10774,1) n=3613 prev_true=f next_true=f rowpred=f
+  FP (10778,4) n=83660 prev_true=f next_true=f rowpred=f
+SET
+SET
+SET
+SELECT 7349
+SET
+SET
+SELECT 7349
+RESET
+RESET
+RESET
+SELECT 8010
+SELECT 306
+freeze             truth 8010 | bitmap 7349 FP 306 FN 967 | idxscan 7349 FP 306 FN 967 | fts_count 7561
+  FP (10720,3) n=3598 prev_true=f next_true=f rowpred=f
+  FP (10784,5) n=83693 prev_true=f next_true=f rowpred=f
+  FP (10784,6) n=83694 prev_true=f next_true=f rowpred=f
+  FP (10810,2) n=83759 prev_true=f next_true=f rowpred=f
+  FP (11619,2) n=17507 prev_true=f next_true=f rowpred=f
+  FP (11619,3) n=17508 prev_true=f next_true=f rowpred=f
+  FP (11619,4) n=17509 prev_true=f next_true=f rowpred=f
+  FP (11619,5) n=17510 prev_true=f next_true=f rowpred=f
+SET
+SET
+SET
+SELECT 95831
+SET
+SET
+SELECT 95831
+RESET
+RESET
+RESET
+SELECT 105732
+SELECT 2661
+index              truth 105732 | bitmap 95831 FP 2661 FN 12562 | idxscan 95831 FP 2661 FN 12562 | fts_count 98034
+  FP (8056,9) n=59672 prev_true=f next_true=f rowpred=f
+  FP (9506,9) n=75009 prev_true=f next_true=f rowpred=f
+  FP (9512,13) n=75435 prev_true=f next_true=f rowpred=f
+  FP (9550,6) n=32129 prev_true=f next_true=f rowpred=f
+  FP (9553,10) n=32130 prev_true=f next_true=f rowpred=f
+  FP (9684,13) n=59596 prev_true=f next_true=f rowpred=f
+  FP (9685,9) n=59597 prev_true=f next_true=f rowpred=f
+  FP (10156,14) n=32131 prev_true=f next_true=f rowpred=f
+SET
+SET
+SET
+SELECT 35775
+SET
+SET
+SELECT 35775
+RESET
+RESET
+RESET
+SELECT 39366
+SELECT 1280
+replication        truth 39366 | bitmap 35775 FP 1280 FN 4871 | idxscan 35775 FP 1280 FN 4871 | fts_count 36639
+  FP (7930,8) n=19617 prev_true=f next_true=f rowpred=f
+  FP (9204,31) n=32128 prev_true=f next_true=f rowpred=f
+  FP (9307,12) n=100242 prev_true=f next_true=f rowpred=f
+  FP (10216,12) n=13960 prev_true=f next_true=f rowpred=f
+  FP (10315,1) n=83239 prev_true=f next_true=f rowpred=f
+  FP (10315,2) n=83240 prev_true=f next_true=f rowpred=f
+  FP (10315,3) n=83241 prev_true=f next_true=f rowpred=f
+  FP (10315,4) n=83242 prev_true=f next_true=f rowpred=f
+SET
+SET
+SET
+SELECT 25948
+SET
+SET
+SELECT 25948
+RESET
+RESET
+RESET
+SELECT 28350
+SELECT 838
+planner            truth 28350 | bitmap 25948 FP 838 FN 3240 | idxscan 25948 FP 838 FN 3240 | fts_count 26479
+  FP (10314,6) n=3491 prev_true=f next_true=f rowpred=f
+  FP (10314,7) n=3492 prev_true=f next_true=f rowpred=f
+  FP (10314,8) n=3493 prev_true=f next_true=f rowpred=f
+  FP (10314,10) n=42337 prev_true=f next_true=f rowpred=f
+  FP (10396,3) n=649 prev_true=f next_true=f rowpred=f
+  FP (10396,4) n=650 prev_true=f next_true=f rowpred=f
+  FP (10396,5) n=651 prev_true=f next_true=f rowpred=f
+  FP (10396,6) n=652 prev_true=f next_true=f rowpred=f
+SET
+SET
+SET
+SELECT 54181
+SET
+SET
+SELECT 54181
+RESET
+RESET
+RESET
+SELECT 59400
+SELECT 1825
+wal                truth 59400 | bitmap 54181 FP 1825 FN 7044 | idxscan 54181 FP 1825 FN 7044 | fts_count 55580
+  FP (3662,9) n=75803 prev_true=f next_true=f rowpred=f
+  FP (3789,15) n=75806 prev_true=f next_true=f rowpred=f
+  FP (3934,11) n=75809 prev_true=f next_true=f rowpred=f
+  FP (7930,8) n=19617 prev_true=f next_true=f rowpred=f
+  FP (10216,3) n=13951 prev_true=f next_true=f rowpred=f
+  FP (10216,12) n=13960 prev_true=f next_true=f rowpred=f
+  FP (10251,8) n=3455 prev_true=f next_true=f rowpred=f
+  FP (10596,12) n=17043 prev_true=f next_true=f rowpred=f
+SET
+SET
+SET
+SELECT 52335
+SET
+SET
+SELECT 52335
+RESET
+RESET
+RESET
+SELECT 57546
+SELECT 1679
+lock               truth 57546 | bitmap 52335 FP 1679 FN 6890 | idxscan 52335 FP 1679 FN 6890 | fts_count 53473
+  FP (10252,11) n=83151 prev_true=f next_true=f rowpred=f
+  FP (10281,4) n=83189 prev_true=f next_true=f rowpred=f
+  FP (10281,5) n=83190 prev_true=f next_true=f rowpred=f
+  FP (10281,6) n=83191 prev_true=f next_true=f rowpred=f
+  FP (10281,7) n=83192 prev_true=f next_true=f rowpred=f
+  FP (10281,8) n=83193 prev_true=f next_true=f rowpred=f
+  FP (10281,9) n=83194 prev_true=f next_true=f rowpred=f
+  FP (10281,10) n=83195 prev_true=f next_true=f rowpred=f
+SET
+SET
+SET
+SELECT 625970
+SET
+SET
+SELECT 632446
+RESET
+RESET
+RESET
+SELECT 704106
+SELECT 1845
+fix                truth 704106 | bitmap 625970 FP 1845 FN 79981 | idxscan 632446 FP 11206 FN 82866 | fts_count 649283
+  FP (532,8) n=75824 prev_true=t next_true=f rowpred=f
+  FP (689,8) n=75828 prev_true=t next_true=t rowpred=f
+  FP (748,9) n=75832 prev_true=f next_true=f rowpred=f
+  FP (1025,7) n=75841 prev_true=t next_true=f rowpred=f
+  FP (4022,14) n=75823 prev_true=f next_true=f rowpred=f
+  FP (10238,1) n=559 prev_true=f next_true=t rowpred=f
+  FP (10238,3) n=561 prev_true=t next_true=f rowpred=f
+  FP (10238,4) n=562 prev_true=f next_true=f rowpred=f
+SET
+SET
+SET
+SELECT 204892
+SET
+SET
+SELECT 207282
+RESET
+RESET
+RESET
+SELECT 228852
+SELECT 2640
+bug                truth 228852 | bitmap 204892 FP 2640 FN 26600 | idxscan 207282 FP 5218 FN 26788 | fts_count 212396
+  FP (532,8) n=75824 prev_true=f next_true=f rowpred=f
+  FP (678,8) n=75827 prev_true=f next_true=f rowpred=f
+  FP (689,8) n=75828 prev_true=f next_true=f rowpred=f
+  FP (748,9) n=75832 prev_true=f next_true=f rowpred=f
+  FP (807,10) n=32730 prev_true=f next_true=f rowpred=f
+  FP (834,11) n=32732 prev_true=f next_true=f rowpred=f
+  FP (1025,7) n=75841 prev_true=f next_true=f rowpred=f
+  FP (1392,10) n=75851 prev_true=t next_true=f rowpred=f
+=== END C1 on-1.10.0 2026-10-25T15:18:19Z
+=== DIFF C1 upgraded-to-1.14.1 2026-10-25T15:18:21Z
+ext 1.14.1
+rows 1905300 heap_pages 131286 index_MB 1242 nseg 1
+n_dead_tup 10993 autovac 2 vac 2
+SET
+SET
+Bitmap Heap Scan on ag
+  Recheck Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+  ->  Bitmap Index Scan on idx_ag_msg_fts
+        Index Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+SET
+SET
+Bitmap Heap Scan on ag
+  Disabled: true
+  Recheck Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+  ->  Bitmap Index Scan on idx_ag_msg_fts
+        Index Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+SET
+SET
+SET
+SELECT 35109
+SET
+SET
+SELECT 35109
+RESET
+RESET
+RESET
+SELECT 38772
+SELECT 1041
+vacuum             truth 38772 | bitmap 35109 FP 1041 FN 4704 | idxscan 35109 FP 1041 FN 4704 | fts_count 35905
+  FP (9550,6) n=32129 prev_true=f next_true=f rowpred=f
+  FP (9553,10) n=32130 prev_true=f next_true=f rowpred=f
+  FP (10156,14) n=32131 prev_true=t next_true=f rowpred=f
+  FP (10159,9) n=32132 prev_true=f next_true=f rowpred=f
+  FP (10213,9) n=13924 prev_true=f next_true=f rowpred=f
+  FP (10252,14) n=83154 prev_true=f next_true=f rowpred=f
+  FP (10275,1) n=3464 prev_true=f next_true=f rowpred=f
+  FP (10275,2) n=3465 prev_true=f next_true=f rowpred=f
+SET
+SET
+SET
+SELECT 15820
+SET
+SET
+SELECT 15820
+RESET
+RESET
+RESET
+SELECT 17604
+SELECT 435
+autovacuum         truth 17604 | bitmap 15820 FP 435 FN 2219 | idxscan 15820 FP 435 FN 2219 | fts_count 16197
+  FP (10252,14) n=83154 prev_true=f next_true=f rowpred=f
+  FP (10275,1) n=3464 prev_true=f next_true=f rowpred=f
+  FP (10275,2) n=3465 prev_true=f next_true=f rowpred=f
+  FP (10275,3) n=3466 prev_true=f next_true=f rowpred=f
+  FP (10275,5) n=3468 prev_true=f next_true=f rowpred=f
+  FP (10275,6) n=3469 prev_true=f next_true=f rowpred=f
+  FP (10319,5) n=3507 prev_true=f next_true=f rowpred=f
+  FP (10319,6) n=3508 prev_true=f next_true=f rowpred=f
+SET
+SET
+SET
+SELECT 3367
+SET
+SET
+SELECT 3367
+RESET
+RESET
+RESET
+SELECT 3636
+SELECT 176
+visibility & map   truth 3636 | bitmap 3367 FP 176 FN 445 | idxscan 3367 FP 176 FN 445 | fts_count 3427
+  FP (11985,3) n=17838 prev_true=f next_true=f rowpred=f
+  FP (13997,17) n=64201 prev_true=f next_true=f rowpred=f
+  FP (14064,5) n=21028 prev_true=f next_true=f rowpred=f
+  FP (14064,6) n=21029 prev_true=f next_true=f rowpred=f
+  FP (14065,1) n=21032 prev_true=f next_true=f rowpred=f
+  FP (15040,4) n=21238 prev_true=f next_true=f rowpred=f
+  FP (15107,1) n=7629 prev_true=f next_true=f rowpred=f
+  FP (15175,14) n=7749 prev_true=f next_true=f rowpred=f
+SET
+SET
+SET
+SELECT 6641
+SET
+SET
+SELECT 6641
+RESET
+RESET
+RESET
+SELECT 7146
+SELECT 332
+hash & index       truth 7146 | bitmap 6641 FP 332 FN 837 | idxscan 6641 FP 332 FN 837 | fts_count 6804
+  FP (10275,5) n=3468 prev_true=f next_true=f rowpred=f
+  FP (10625,1) n=3542 prev_true=f next_true=f rowpred=f
+  FP (10625,2) n=3543 prev_true=f next_true=f rowpred=f
+  FP (10625,3) n=3544 prev_true=f next_true=f rowpred=f
+  FP (10764,5) n=83636 prev_true=f next_true=f rowpred=f
+  FP (10764,6) n=83637 prev_true=f next_true=f rowpred=f
+  FP (10774,1) n=3613 prev_true=f next_true=f rowpred=f
+  FP (10778,4) n=83660 prev_true=f next_true=f rowpred=f
+SET
+SET
+SET
+SELECT 7349
+SET
+SET
+SELECT 7349
+RESET
+RESET
+RESET
+SELECT 8010
+SELECT 306
+freeze             truth 8010 | bitmap 7349 FP 306 FN 967 | idxscan 7349 FP 306 FN 967 | fts_count 7561
+  FP (10720,3) n=3598 prev_true=f next_true=f rowpred=f
+  FP (10784,5) n=83693 prev_true=f next_true=f rowpred=f
+  FP (10784,6) n=83694 prev_true=f next_true=f rowpred=f
+  FP (10810,2) n=83759 prev_true=f next_true=f rowpred=f
+  FP (11619,2) n=17507 prev_true=f next_true=f rowpred=f
+  FP (11619,3) n=17508 prev_true=f next_true=f rowpred=f
+  FP (11619,4) n=17509 prev_true=f next_true=f rowpred=f
+  FP (11619,5) n=17510 prev_true=f next_true=f rowpred=f
+SET
+SET
+SET
+SELECT 95831
+SET
+SET
+SELECT 95831
+RESET
+RESET
+RESET
+SELECT 105732
+SELECT 2661
+index              truth 105732 | bitmap 95831 FP 2661 FN 12562 | idxscan 95831 FP 2661 FN 12562 | fts_count 98034
+  FP (8056,9) n=59672 prev_true=f next_true=f rowpred=f
+  FP (9506,9) n=75009 prev_true=f next_true=f rowpred=f
+  FP (9512,13) n=75435 prev_true=f next_true=f rowpred=f
+  FP (9550,6) n=32129 prev_true=f next_true=f rowpred=f
+  FP (9553,10) n=32130 prev_true=f next_true=f rowpred=f
+  FP (9684,13) n=59596 prev_true=f next_true=f rowpred=f
+  FP (9685,9) n=59597 prev_true=f next_true=f rowpred=f
+  FP (10156,14) n=32131 prev_true=f next_true=f rowpred=f
+SET
+SET
+SET
+SELECT 35775
+SET
+SET
+SELECT 35775
+RESET
+RESET
+RESET
+SELECT 39366
+SELECT 1280
+replication        truth 39366 | bitmap 35775 FP 1280 FN 4871 | idxscan 35775 FP 1280 FN 4871 | fts_count 36639
+  FP (7930,8) n=19617 prev_true=f next_true=f rowpred=f
+  FP (9204,31) n=32128 prev_true=f next_true=f rowpred=f
+  FP (9307,12) n=100242 prev_true=f next_true=f rowpred=f
+  FP (10216,12) n=13960 prev_true=f next_true=f rowpred=f
+  FP (10315,1) n=83239 prev_true=f next_true=f rowpred=f
+  FP (10315,2) n=83240 prev_true=f next_true=f rowpred=f
+  FP (10315,3) n=83241 prev_true=f next_true=f rowpred=f
+  FP (10315,4) n=83242 prev_true=f next_true=f rowpred=f
+SET
+SET
+SET
+SELECT 25948
+SET
+SET
+SELECT 25948
+RESET
+RESET
+RESET
+SELECT 28350
+SELECT 838
+planner            truth 28350 | bitmap 25948 FP 838 FN 3240 | idxscan 25948 FP 838 FN 3240 | fts_count 26479
+  FP (10314,6) n=3491 prev_true=f next_true=f rowpred=f
+  FP (10314,7) n=3492 prev_true=f next_true=f rowpred=f
+  FP (10314,8) n=3493 prev_true=f next_true=f rowpred=f
+  FP (10314,10) n=42337 prev_true=f next_true=f rowpred=f
+  FP (10396,3) n=649 prev_true=f next_true=f rowpred=f
+  FP (10396,4) n=650 prev_true=f next_true=f rowpred=f
+  FP (10396,5) n=651 prev_true=f next_true=f rowpred=f
+  FP (10396,6) n=652 prev_true=f next_true=f rowpred=f
+SET
+SET
+SET
+SELECT 54181
+SET
+SET
+SELECT 54181
+RESET
+RESET
+RESET
+SELECT 59400
+SELECT 1825
+wal                truth 59400 | bitmap 54181 FP 1825 FN 7044 | idxscan 54181 FP 1825 FN 7044 | fts_count 55580
+  FP (3662,9) n=75803 prev_true=f next_true=f rowpred=f
+  FP (3789,15) n=75806 prev_true=f next_true=f rowpred=f
+  FP (3934,11) n=75809 prev_true=f next_true=f rowpred=f
+  FP (7930,8) n=19617 prev_true=f next_true=f rowpred=f
+  FP (10216,3) n=13951 prev_true=f next_true=f rowpred=f
+  FP (10216,12) n=13960 prev_true=f next_true=f rowpred=f
+  FP (10251,8) n=3455 prev_true=f next_true=f rowpred=f
+  FP (10596,12) n=17043 prev_true=f next_true=f rowpred=f
+SET
+SET
+SET
+SELECT 52335
+SET
+SET
+SELECT 52335
+RESET
+RESET
+RESET
+SELECT 57546
+SELECT 1679
+lock               truth 57546 | bitmap 52335 FP 1679 FN 6890 | idxscan 52335 FP 1679 FN 6890 | fts_count 53473
+  FP (10252,11) n=83151 prev_true=f next_true=f rowpred=f
+  FP (10281,4) n=83189 prev_true=f next_true=f rowpred=f
+  FP (10281,5) n=83190 prev_true=f next_true=f rowpred=f
+  FP (10281,6) n=83191 prev_true=f next_true=f rowpred=f
+  FP (10281,7) n=83192 prev_true=f next_true=f rowpred=f
+  FP (10281,8) n=83193 prev_true=f next_true=f rowpred=f
+  FP (10281,9) n=83194 prev_true=f next_true=f rowpred=f
+  FP (10281,10) n=83195 prev_true=f next_true=f rowpred=f
+SET
+SET
+SET
+SELECT 625970
+SET
+SET
+SELECT 632446
+RESET
+RESET
+RESET
+SELECT 704106
+SELECT 1845
+fix                truth 704106 | bitmap 625970 FP 1845 FN 79981 | idxscan 632446 FP 11206 FN 82866 | fts_count 649283
+  FP (532,8) n=75824 prev_true=t next_true=f rowpred=f
+  FP (689,8) n=75828 prev_true=t next_true=t rowpred=f
+  FP (748,9) n=75832 prev_true=f next_true=f rowpred=f
+  FP (1025,7) n=75841 prev_true=t next_true=f rowpred=f
+  FP (4022,14) n=75823 prev_true=f next_true=f rowpred=f
+  FP (10238,1) n=559 prev_true=f next_true=t rowpred=f
+  FP (10238,3) n=561 prev_true=t next_true=f rowpred=f
+  FP (10238,4) n=562 prev_true=f next_true=f rowpred=f
+SET
+SET
+SET
+SELECT 204892
+SET
+SET
+SELECT 207282
+RESET
+RESET
+RESET
+SELECT 228852
+SELECT 2640
+bug                truth 228852 | bitmap 204892 FP 2640 FN 26600 | idxscan 207282 FP 5218 FN 26788 | fts_count 212396
+  FP (532,8) n=75824 prev_true=f next_true=f rowpred=f
+  FP (678,8) n=75827 prev_true=f next_true=f rowpred=f
+  FP (689,8) n=75828 prev_true=f next_true=f rowpred=f
+  FP (748,9) n=75832 prev_true=f next_true=f rowpred=f
+  FP (807,10) n=32730 prev_true=f next_true=f rowpred=f
+  FP (834,11) n=32732 prev_true=f next_true=f rowpred=f
+  FP (1025,7) n=75841 prev_true=f next_true=f rowpred=f
+  FP (1392,10) n=75851 prev_true=t next_true=f rowpred=f
+=== END C1 upgraded-to-1.14.1 2026-10-25T15:22:12Z
+loaded passes 18-34 15:23:16
+=== DIFF C1 final 2026-10-25T15:24:16Z
+ext 1.14.1
+rows 3704750 heap_pages 249422 index_MB 3216 nseg 1
+n_dead_tup 50092 autovac 2 vac 3
+SET
+SET
+Gather
+  Workers Planned: 2
+  ->  Parallel Bitmap Heap Scan on ag
+        Recheck Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+        ->  Bitmap Index Scan on idx_ag_msg_fts
+              Index Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+SET
+SET
+Gather
+  Workers Planned: 2
+  ->  Parallel Bitmap Heap Scan on ag
+        Disabled: true
+        Recheck Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+        ->  Bitmap Index Scan on idx_ag_msg_fts
+              Index Cond: (to_ftsdoc('english'::regconfig, message) @@@ '''vacuum'''::ftsquery)
+SET
+SET
+SET
+SELECT 72110
+SET
+SET
+SELECT 72110
+RESET
+RESET
+RESET
+SELECT 75390
+SELECT 1424
+vacuum             truth 75390 | bitmap 72110 FP 1424 FN 4704 | idxscan 72110 FP 1424 FN 4704 | fts_count 72472
+  FP (9550,6) n=32129 prev_true=f next_true=f rowpred=f
+  FP (9553,10) n=32130 prev_true=f next_true=f rowpred=f
+  FP (10156,14) n=32131 prev_true=t next_true=f rowpred=f
+  FP (10159,9) n=32132 prev_true=f next_true=f rowpred=f
+  FP (10213,9) n=13924 prev_true=f next_true=f rowpred=f
+  FP (10252,14) n=83154 prev_true=f next_true=f rowpred=f
+  FP (10275,1) n=3464 prev_true=f next_true=f rowpred=f
+  FP (10275,2) n=3465 prev_true=f next_true=f rowpred=f
+SET
+SET
+SET
+SELECT 32625
+SET
+SET
+SELECT 32625
+RESET
+RESET
+RESET
+SELECT 34230
+SELECT 614
+autovacuum         truth 34230 | bitmap 32625 FP 614 FN 2219 | idxscan 32625 FP 614 FN 2219 | fts_count 32793
+  FP (3726,10) n=100045 prev_true=f next_true=f rowpred=f
+  FP (10252,14) n=83154 prev_true=f next_true=f rowpred=f
+  FP (10275,1) n=3464 prev_true=f next_true=f rowpred=f
+  FP (10275,2) n=3465 prev_true=f next_true=f rowpred=f
+  FP (10275,3) n=3466 prev_true=f next_true=f rowpred=f
+  FP (10275,5) n=3468 prev_true=f next_true=f rowpred=f
+  FP (10275,6) n=3469 prev_true=f next_true=f rowpred=f
+  FP (10319,5) n=3507 prev_true=f next_true=f rowpred=f
+SET
+SET
+SET
+SELECT 6839
+SET
+SET
+SELECT 6839
+RESET
+RESET
+RESET
+SELECT 7070
+SELECT 214
+visibility & map   truth 7070 | bitmap 6839 FP 214 FN 445 | idxscan 6839 FP 214 FN 445 | fts_count 6865
+  FP (11985,3) n=17838 prev_true=f next_true=f rowpred=f
+  FP (13997,17) n=64201 prev_true=f next_true=f rowpred=f
+  FP (14064,5) n=21028 prev_true=f next_true=f rowpred=f
+  FP (14064,6) n=21029 prev_true=f next_true=f rowpred=f
+  FP (14065,1) n=21032 prev_true=f next_true=f rowpred=f
+  FP (15040,4) n=21238 prev_true=f next_true=f rowpred=f
+  FP (15107,1) n=7629 prev_true=f next_true=f rowpred=f
+  FP (15175,14) n=7749 prev_true=f next_true=f rowpred=f
+SET
+SET
+SET
+SELECT 13499
+SET
+SET
+SELECT 13499
+RESET
+RESET
+RESET
+SELECT 13895
+SELECT 441
+hash & index       truth 13895 | bitmap 13499 FP 441 FN 837 | idxscan 13499 FP 441 FN 837 | fts_count 13564
+  FP (10275,5) n=3468 prev_true=f next_true=f rowpred=f
+  FP (10625,1) n=3542 prev_true=f next_true=f rowpred=f
+  FP (10625,2) n=3543 prev_true=f next_true=f rowpred=f
+  FP (10625,3) n=3544 prev_true=f next_true=f rowpred=f
+  FP (10764,5) n=83636 prev_true=f next_true=f rowpred=f
+  FP (10764,6) n=83637 prev_true=f next_true=f rowpred=f
+  FP (10774,1) n=3613 prev_true=f next_true=f rowpred=f
+  FP (10778,4) n=83660 prev_true=f next_true=f rowpred=f
+SET
+SET
+SET
+SELECT 15037
+SET
+SET
+SELECT 15037
+RESET
+RESET
+RESET
+SELECT 15575
+SELECT 429
+freeze             truth 15575 | bitmap 15037 FP 429 FN 967 | idxscan 15037 FP 429 FN 967 | fts_count 15123
+  FP (10720,3) n=3598 prev_true=f next_true=f rowpred=f
+  FP (10784,5) n=83693 prev_true=f next_true=f rowpred=f
+  FP (10784,6) n=83694 prev_true=f next_true=f rowpred=f
+  FP (10810,2) n=83759 prev_true=f next_true=f rowpred=f
+  FP (11619,2) n=17507 prev_true=f next_true=f rowpred=f
+  FP (11619,3) n=17508 prev_true=f next_true=f rowpred=f
+  FP (11619,4) n=17509 prev_true=f next_true=f rowpred=f
+  FP (11619,5) n=17510 prev_true=f next_true=f rowpred=f
+SET
+SET
+SET
+SELECT 194878
+SET
+SET
+SELECT 196631
+RESET
+RESET
+RESET
+SELECT 205590
+SELECT 1798
+index              truth 205590 | bitmap 194878 FP 1798 FN 12510 | idxscan 196631 FP 3603 FN 12562 | fts_count 197731
+  FP (9684,13) n=59596 prev_true=f next_true=f rowpred=f
+  FP (10156,14) n=32131 prev_true=f next_true=f rowpred=f
+  FP (10245,3) n=588 prev_true=f next_true=f rowpred=f
+  FP (10245,10) n=595 prev_true=f next_true=f rowpred=f
+  FP (10246,2) n=600 prev_true=f next_true=f rowpred=f
+  FP (10246,3) n=601 prev_true=f next_true=f rowpred=f
+  FP (10246,4) n=602 prev_true=f next_true=f rowpred=f
+  FP (10246,5) n=603 prev_true=f next_true=f rowpred=f
+SET
+SET
+SET
+SELECT 73389
+SET
+SET
+SELECT 73389
+RESET
+RESET
+RESET
+SELECT 76545
+SELECT 1715
+replication        truth 76545 | bitmap 73389 FP 1715 FN 4871 | idxscan 73389 FP 1715 FN 4871 | fts_count 73768
+  FP (3775,18) n=71168 prev_true=f next_true=f rowpred=f
+  FP (7930,8) n=19617 prev_true=f next_true=f rowpred=f
+  FP (9204,31) n=32128 prev_true=f next_true=f rowpred=f
+  FP (9307,12) n=100242 prev_true=f next_true=f rowpred=f
+  FP (10216,12) n=13960 prev_true=f next_true=f rowpred=f
+  FP (10315,1) n=83239 prev_true=f next_true=f rowpred=f
+  FP (10315,2) n=83240 prev_true=f next_true=f rowpred=f
+  FP (10315,3) n=83241 prev_true=f next_true=f rowpred=f
+SET
+SET
+SET
+SELECT 52988
+SET
+SET
+SELECT 52988
+RESET
+RESET
+RESET
+SELECT 55125
+SELECT 1103
+planner            truth 55125 | bitmap 52988 FP 1103 FN 3240 | idxscan 52988 FP 1103 FN 3240 | fts_count 53225
+  FP (10314,6) n=3491 prev_true=f next_true=f rowpred=f
+  FP (10314,7) n=3492 prev_true=f next_true=f rowpred=f
+  FP (10314,8) n=3493 prev_true=f next_true=f rowpred=f
+  FP (10314,10) n=42337 prev_true=f next_true=f rowpred=f
+  FP (10396,3) n=649 prev_true=f next_true=f rowpred=f
+  FP (10396,4) n=650 prev_true=f next_true=f rowpred=f
+  FP (10396,5) n=651 prev_true=f next_true=f rowpred=f
+  FP (10396,6) n=652 prev_true=f next_true=f rowpred=f
+SET
+SET
+SET
+SELECT 111018
+SET
+SET
+SELECT 111018
+RESET
+RESET
+RESET
+SELECT 115500
+SELECT 2562
+wal                truth 115500 | bitmap 111018 FP 2562 FN 7044 | idxscan 111018 FP 2562 FN 7044 | fts_count 111612
+  FP (3662,9) n=75803 prev_true=f next_true=f rowpred=f
+  FP (3789,15) n=75806 prev_true=f next_true=f rowpred=f
+  FP (3934,11) n=75809 prev_true=f next_true=f rowpred=f
+  FP (7930,8) n=19617 prev_true=f next_true=f rowpred=f
+  FP (10216,3) n=13951 prev_true=f next_true=f rowpred=f
+  FP (10216,12) n=13960 prev_true=f next_true=f rowpred=f
+  FP (10251,8) n=3455 prev_true=f next_true=f rowpred=f
+  FP (10596,12) n=17043 prev_true=f next_true=f rowpred=f
+SET
+SET
+SET
+SELECT 107249
+SET
+SET
+SELECT 107249
+RESET
+RESET
+RESET
+SELECT 111895
+SELECT 2244
+lock               truth 111895 | bitmap 107249 FP 2244 FN 6890 | idxscan 107249 FP 2244 FN 6890 | fts_count 107747
+  FP (3775,18) n=71168 prev_true=f next_true=f rowpred=f
+  FP (10252,11) n=83151 prev_true=f next_true=f rowpred=f
+  FP (10281,4) n=83189 prev_true=f next_true=f rowpred=f
+  FP (10281,5) n=83190 prev_true=f next_true=f rowpred=f
+  FP (10281,6) n=83191 prev_true=f next_true=f rowpred=f
+  FP (10281,7) n=83192 prev_true=f next_true=f rowpred=f
+  FP (10281,8) n=83193 prev_true=f next_true=f rowpred=f
+  FP (10281,9) n=83194 prev_true=f next_true=f rowpred=f
+SET
+SET
+SET
+psql:/tmp/diff1.sql:4: FATAL:  terminating connection due to administrator command
+psql:/tmp/diff1.sql:4: server closed the connection unexpectedly
+	This probably means the server terminated abnormally
+	before or while processing the request.
+psql:/tmp/diff1.sql:4: error: connection to server was lost
+psql: error: connection to server on socket "/tmp/.s.PGSQL.5492" failed: FATAL:  the database system is shutting down
+=== END C1 final 2026-10-25T15:29:09Z
+ARM_DONE
