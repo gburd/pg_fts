@@ -868,6 +868,30 @@ SELECT * FROM messages
   </formalpara>
 
   <formalpara>
+   <title>Upgrading an index written by 1.10.0 or earlier</title>
+   <para>
+    <command>ALTER EXTENSION pg_fts UPDATE</command> does not repair an index that
+    took writes under 1.10.0 or earlier.  If, before the upgrade, an insert was
+    rolled back or failed part-way, or a row was deleted while its entry was still
+    pending, that index can return rows that do not match, as exact matches.  If a
+    pending flush ran while rows were being inserted, it can also miss rows.
+    VACUUM, <function>fts_merge()</function> and <function>fts_vacuum()</function>
+    keep both kinds of entry.  Rebuild the index with <command>REINDEX INDEX
+    CONCURRENTLY</command>.  To check an index first, run the query below with
+    sequential scans off; any non-zero count means it needs the rebuild
+    (CHANGELOG 1.14.2 has the check for missing rows too):
+<programlisting>
+SET enable_seqscan = off;
+SELECT count(*) FROM (
+  SELECT 1 FROM t
+   WHERE to_ftsdoc('english', body) @@@ to_ftsquery('english', 'vacuum')
+     AND NOT fts_match(to_ftsdoc('english', body), to_ftsquery('english', 'vacuum'))
+  OFFSET 0) s;
+</programlisting>
+   </para>
+  </formalpara>
+
+  <formalpara>
    <title>Behavior on a read replica</title>
    <para>
     Reads work normally on a hot standby (the index is fully replicated).  The
