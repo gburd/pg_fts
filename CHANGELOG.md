@@ -7,14 +7,29 @@ All notable changes to pg_fts are documented here.
 ## 1.14.3 - 2026-10-28
 
 Five fixes for issues reported by robinlahtinen on Codeberg (#6-#10, all against 1.14.2,
-each with a SQL reproduction and code pointers), and one sibling found while fixing #10.
-One is an out-of-bounds read reachable by any role that can call `fts_bm25`.
+each with a SQL reproduction and code pointers), one sibling found while fixing #10, and
+a backend crash (SIGSEGV) in ranked scans under concurrent inserts, found by the
+release review (every release since 1.0.7).  One is an out-of-bounds read reachable
+by any role that can call `fts_bm25`.  One known issue found by the same review ships
+unfixed (below).
 **No on-disk format change; no REINDEX; no new or changed SQL objects**
 (`pg_fts--1.14.2--1.14.3.sql` is a no-op; the base script changed only in a comment).
 Measured on PostgreSQL 17.10 and 18.6 (`bench/RESULTS_1143_2026-10-28.md`).
 
 ### Fixed
 
+- **A ranked index scan could crash its backend (SIGSEGV) when inserts flush the pending
+  list often**, found by the 1.14.3 review.  Every release since 1.0.7.  The ordering
+  scan redoes its candidate generation (up to 10 more times) when the segment directory
+  changes under it; when every attempt raced a change, the last one freed the candidates
+  but kept their count, and the visibility loop read them through NULL.  A crash makes
+  the postmaster restart every backend.  Each flush changes the directory twice, so it
+  takes inserts that flush every few documents: with 8 single-row inserting sessions at
+  `pg_fts.pending_flush_threshold = 20` and 8 ranked readers, 14 of 20 runs crashed on
+  1.14.2 and on this release before the fix (PG 17.10 and 18.6); at the default
+  threshold (20,000) none of the project's tests hit it.  After the retries run out the
+  scan now keeps the last attempt's candidates, as the bitmap and count paths already
+  did.  New TAP test `t/013_ranked_flush_race.pl`: 6 of 6 fail with 1.14.2, 6 of 6 pass.
 - **`fts_bm25` / `fts_bm25_opts` read past the end of a short `dfs` array**, reported by
   robinlahtinen (Codeberg #9).  Every release (the read is in 0.1.0's scorer).  The array
   is copied into a buffer of its own length, and the scorer read `dfs[i]` for every query
@@ -77,6 +92,23 @@ Measured on PostgreSQL 17.10 and 18.6 (`bench/RESULTS_1143_2026-10-28.md`).
   Still open (ROADMAP I19a, I19b): `rare & (a | b)` still walks the OR group (3.6 ms vs
   0.076 ms for `rare & apple`), and `zzzq & (apple | ban:*)` (the collect path) still
   builds both OR operands (3.2 ms vs 0.90 ms for `zzzq & ban:*`).
+
+### Known issues
+
+- **A ranked scan that runs while a flush publishes its segment can return a pending row
+  twice** (ROADMAP I20), found by the 1.14.3 review.  Since 1.13.0, when ranked scans
+  began merging pending documents.  A flush publishes the new segment and clears the
+  pending list in two separate metapage updates; a scan that reads the directory in
+  between, and finishes before the second update, sees each flushed document both in
+  the segment and in the pending list.  With the flushing backend stopped there under
+  gdb (1.14.2 and 1.14.3, PG 17.10 and 18.6): `LIMIT 10` returned 10 rows with 5
+  distinct ids, and the scores' N and df counted those documents twice.  Without a
+  debugger, on this release, 8 single-row inserters flushing every 20 documents and 8
+  ranked readers (10 runs, PG 17.10 and 18.6): 25 of 24,000 `LIMIT 1000` queries
+  returned a row twice, 0 of 24,000 `LIMIT 10` queries.  `count(*)`, bitmap scans
+  and `@@@` filters remove duplicate TIDs and are not affected.  The fix (publish the
+  segment and clear the list in one metapage update) changes the flush, so it is not
+  rushed into this release.  Reproduction: `bench/data_1143_2026-10-28/dup/`.
 
 ### Retracted
 

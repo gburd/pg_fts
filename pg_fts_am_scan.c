@@ -6973,19 +6973,23 @@ bm25_topk_visible(Relation index, FtsQuery q, int k, bool as_distance,
 		 * recycle those pages mid-scan (the A1 race).  Bracket it with the
 		 * directory generation: if it moved, discard the candidates and redo
 		 * from a fresh snapshot (bounded).  The subsequent MVCC visibility
-		 * loop reads the heap, not the index, so it needs no guard.
+		 * loop reads the heap, not the index, so it needs no guard.  After the
+		 * cap, keep the last attempt's candidates, as bm25_collect_matches
+		 * does.  Until 1.14.3 the last failed attempt freed them and left
+		 * ncand set, so the loop below read cand[i] through NULL: SIGSEGV
+		 * under inserts that flush often (CHANGELOG 1.14.3).
 		 */
 		cand = NULL;
-		do
+		for (;;)
 		{
 			gen0 = bm25_read_meta_generation(index);
 			ncand = bm25_topk_candidates_range(index, q, wantk, 0, UINT64_MAX, &cand);
-			if (bm25_read_meta_generation(index) == gen0)
+			if (bm25_read_meta_generation(index) == gen0 || gen_retries++ >= 10)
 				break;
 			if (cand)
 				pfree(cand);
 			cand = NULL;
-		} while (gen_retries++ < 10);
+		}
 
 		/* Drop any results from a prior (short) attempt before re-filling. */
 		if (results)
