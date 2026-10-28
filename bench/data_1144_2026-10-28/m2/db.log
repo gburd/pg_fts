@@ -1,0 +1,32 @@
+pg_fts tree aa96db4 so=665035cc
+Note: switching to 'f37c13f68b57d2c3472b2214fbcff699d6d34876'.
+
+You are in 'detached HEAD' state. You can look around, make experimental
+changes and commit them, and you can discard any commits you make in this
+state without impacting any branches by switching back to a branch.
+
+If you want to create a new branch to retain commits you create, you may
+do so (now or later) by using -c with the switch command. Example:
+
+  git switch -c <new-branch-name>
+
+Or undo this operation with:
+
+  git switch -
+
+Turn off this advice by setting config variable advice.detachedHead to false
+
+pgvector v0.8.7 /nvme/m2/pg/lib/postgresql/vector.so
+ Package: postgresql-17-pg-search
+ Version: 0.26.1
+ Depends: postgresql-17, libopenblas0
+pg_search.so
+initdb: warning: enabling "trust" authentication for local connections
+initdb: hint: You can change this by editing pg_hba.conf or using the option -A, or --auth-local and --auth-host, the next time you run initdb.
+NOTICE:  installing required extension "vector"
+WARNING:  key_field is deprecated as of 0.26.0 and is a no-op; it no longer needs to be provided
+scifact rows=5183 ext=pg_fts 1.14.3, pg_search 0.26.1
+NOTICE:  installing required extension "vector"
+WARNING:  key_field is deprecated as of 0.26.0 and is a no-op; it no longer needs to be provided
+nfcorpus rows=3633 ext=pg_fts 1.14.3, pg_search 0.26.1
+M2DB_DONE

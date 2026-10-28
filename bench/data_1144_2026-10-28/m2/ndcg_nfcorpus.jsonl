@@ -1,0 +1,4 @@
+{"db": "nfcorpus", "system": "pgfts", "queries": 323, "errors": 0, "ndcg@10": 0.324, "recall@100": 0.2463, "mrr@10": 0.5211}
+{"db": "nfcorpus", "system": "pgfts_simple", "queries": 323, "errors": 0, "ndcg@10": 0.3016, "recall@100": 0.234, "mrr@10": 0.5055}
+{"db": "nfcorpus", "system": "pgsearch", "queries": 323, "errors": 0, "ndcg@10": 0.3, "recall@100": 0.2395, "mrr@10": 0.5005}
+{"db": "nfcorpus", "system": "tsrank", "queries": 323, "errors": 0, "ndcg@10": 0.3001, "recall@100": 0.2337, "mrr@10": 0.4988}

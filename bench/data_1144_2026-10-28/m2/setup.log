@@ -1,0 +1,11 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+scifact docs 5183 queries 1109 qrels 339
+nfcorpus docs 3633 queries 3237 qrels 12334
+3a5fe5d7f96c739e18942cc297532d1f  scifact/docs.tsv
+6831357adef33545ad78ae221e71702e  scifact/qrels.tsv
+89a9e4c9dff10f8217af8b372d082ed8  scifact/queries.tsv
+5f09fb82cee077e0c4ea468364d84b7e  nfcorpus/docs.tsv
+d70caa966407c6070a0de15a9ca505e6  nfcorpus/qrels.tsv
+cb8120c2fef18e9153d831f15a694021  nfcorpus/queries.tsv
+-rw-rw-r-- 1 admin admin 53738028 Oct 28 22:07 postgresql-17-pg-search_0.26.1-1PARADEDB-trixie_amd64.deb
+M2SETUP_DONE

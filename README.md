@@ -399,10 +399,12 @@ build: pg_search **72 s**, pg_fts 238 s (no `fts_vacuum` needed), pg_textsearch 
   * **Where pg_fts does not win.**  pg_search builds 3.3x faster.  On `world & war` (both
     terms frequent, their best documents spread over many blocks; 2%, spreads overlapping)
     and on a 4-term OR (4%), pg_search is slightly faster.
-  * **What is not compared.**  Relevance quality (NDCG), write throughput, x86 for this
-    run, and network storage (a cold-cache band on local NVMe is in the results file:
-    41-65 ms for pg_fts 1.11.0).  All four engines rank the same documents highly but
-    tokenize slightly differently.
+  * **Relevance** (`bench/RESULTS_1144_2026-10-28.md`, BEIR test qrels, pg_search
+    0.26.1, x86): NDCG@10 on SciFact 0.685 (pg_fts, English) vs 0.634 (pg_search) vs
+    0.568 (ts_rank); on NFCorpus 0.324 vs 0.300 vs 0.300.  With no stemming (`simple`)
+    pg_fts scores 0.665 / 0.302.  Two datasets only.
+  * **What is not compared.**  Write throughput, x86 for this run, and network storage (a
+    cold-cache band on local NVMe is in the results file: 41-65 ms for pg_fts 1.11.0).
   * vs the built-in tsvector/GIN + ts_rank stack, pg_fts is far faster on ranked
     retrieval (up to ~40x on common-term top-k, because ts_rank must fetch and
     sort every match).

@@ -191,10 +191,10 @@ absence is not evidence of parity (`bench/COVERAGE_AUDIT_2026-09-10.md`):
 - **Ingest / update throughput.** We measure bulk build only. Sustained INSERT rows/s,
   DELETE/UPDATE cost, and how latency degrades as the pending list grows between
   merges are unmeasured for every engine.
-- **Ranking quality (NDCG / recall vs a reference).** We verify our own exactness
-  (top-k parity against an exact sort, gated per release) but have never compared
-  *relevance ordering* against a rival. This matters here because pg_search does not
-  stem, so it answers a different query.
+- **Ranking quality (NDCG / recall vs a reference)** -- measured for pg_fts, pg_search
+  0.26.1 and ts_rank on two BEIR sets only (`bench/RESULTS_1144_2026-10-28.md` section 5):
+  NDCG@10 SciFact 0.6848 / 0.6339 / 0.5684, NFCorpus 0.3240 / 0.3000 / 0.3001.
+  pg_textsearch and VectorChord-bm25 were not run; a larger BEIR set was not run.
 
 ### Caveats on this matrix
 Every *n/t* is a real gap in our knowledge, not an implied "No". We benchmarked the

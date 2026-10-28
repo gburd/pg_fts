@@ -1,0 +1,170 @@
+== PG17 v1143 so=82d22da3 CREATE EXTENSION
+1.14.3
+400000|100266|100248|1|ad0a4c44d6c0d2207cfe2b192a8dfd0f
+== PG17 i19 so=98dcad88 CREATE EXTENSION
+1.14.3
+400000|100266|100248|1|ad0a4c44d6c0d2207cfe2b192a8dfd0f
+== PG18 v1143 so=d62b684f CREATE EXTENSION
+1.14.3
+400000|100266|100248|1|ad0a4c44d6c0d2207cfe2b192a8dfd0f
+== PG18 i19 so=561e8a8b CREATE EXTENSION
+1.14.3
+400000|100266|100248|1|ad0a4c44d6c0d2207cfe2b192a8dfd0f
+17 i19 run1 correctness md5 e17ad154; oracle(bestfirst=off) md5 c1118250; same=False
+17 i19 run2 correctness md5 e17ad154; oracle(bestfirst=off) md5 c1118250; same=False
+17 i19 run3 correctness md5 e17ad154; oracle(bestfirst=off) md5 c1118250; same=False
+17 v1143 run1 correctness md5 e17ad154; oracle(bestfirst=off) md5 c1118250; same=False
+17 v1143 run2 correctness md5 e17ad154; oracle(bestfirst=off) md5 c1118250; same=False
+17 v1143 run3 correctness md5 e17ad154; oracle(bestfirst=off) md5 c1118250; same=False
+18 i19 run1 correctness md5 e17ad154; oracle(bestfirst=off) md5 c1118250; same=False
+18 i19 run2 correctness md5 e17ad154; oracle(bestfirst=off) md5 c1118250; same=False
+18 i19 run3 correctness md5 e17ad154; oracle(bestfirst=off) md5 c1118250; same=False
+18 v1143 run1 correctness md5 e17ad154; oracle(bestfirst=off) md5 c1118250; same=False
+18 v1143 run2 correctness md5 e17ad154; oracle(bestfirst=off) md5 c1118250; same=False
+18 v1143 run3 correctness md5 e17ad154; oracle(bestfirst=off) md5 c1118250; same=False
+PG  query                              arm    run  n  median_ms  min_ms  max_ms
+17  apple & (banana | w5)              i19    1    21     1.274   1.257   1.306
+17  apple & (banana | w5)              i19    2    21     1.275   1.258   1.316
+17  apple & (banana | w5)              i19    3    21     1.275   1.260   1.302
+17  apple & (banana | w5)              v1143  1    21     1.278   1.261   1.317
+17  apple & (banana | w5)              v1143  2    21     1.279   1.264   1.300
+17  apple & (banana | w5)              v1143  3    21     1.283   1.267   1.302
+17  apple | banana                     i19    1    21     7.687   7.673   7.774
+17  apple | banana                     i19    2    21     7.688   7.672   7.719
+17  apple | banana                     i19    3    21     7.683   7.667   8.928
+17  apple | banana                     v1143  1    21     7.801   7.781   7.842
+17  apple | banana                     v1143  2    21     7.798   7.774   7.888
+17  apple | banana                     v1143  3    21     7.796   7.779   7.812
+17  rare & (apple | ban:*)             i19    1    21     3.178   3.160   3.268
+17  rare & (apple | ban:*)             i19    2    21     3.211   3.161   3.292
+17  rare & (apple | ban:*)             i19    3    21     3.179   3.151   3.332
+17  rare & (apple | ban:*)             v1143  1    21     3.234   3.196   3.427
+17  rare & (apple | ban:*)             v1143  2    21     3.171   3.158   3.254
+17  rare & (apple | ban:*)             v1143  3    21     3.235   3.194   3.383
+17  rare & (apple | banana | w5)       i19    1    21     0.203   0.201   0.222
+17  rare & (apple | banana | w5)       i19    2    21     0.205   0.201   0.216
+17  rare & (apple | banana | w5)       i19    3    21     0.203   0.201   0.218
+17  rare & (apple | banana | w5)       v1143  1    21     2.741   2.711   2.879
+17  rare & (apple | banana | w5)       v1143  2    21     2.744   2.712   5.480
+17  rare & (apple | banana | w5)       v1143  3    21     2.747   2.716   2.776
+17  rare & (apple | banana)            i19    1    21     0.199   0.196   0.220
+17  rare & (apple | banana)            i19    2    21     0.199   0.196   0.220
+17  rare & (apple | banana)            i19    3    21     0.199   0.196   0.215
+17  rare & (apple | banana)            v1143  1    21     3.610   3.576   3.642
+17  rare & (apple | banana)            v1143  2    21     3.597   3.570   3.631
+17  rare & (apple | banana)            v1143  3    21     3.601   3.575   3.648
+17  rare & apple                       i19    1    21     0.075   0.074   0.079
+17  rare & apple                       i19    2    21     0.075   0.074   0.087
+17  rare & apple                       i19    3    21     0.075   0.074   0.088
+17  rare & apple                       v1143  1    21     0.077   0.076   0.100
+17  rare & apple                       v1143  2    21     0.075   0.074   0.079
+17  rare & apple                       v1143  3    21     0.077   0.076   0.095
+17  w7 & (apple | banana)              i19    1    21     0.582   0.573   0.600
+17  w7 & (apple | banana)              i19    2    21     0.578   0.571   0.607
+17  w7 & (apple | banana)              i19    3    21     0.579   0.572   0.605
+17  w7 & (apple | banana)              v1143  1    21     1.038   1.025   1.106
+17  w7 & (apple | banana)              v1143  2    21     1.039   1.019   1.071
+17  w7 & (apple | banana)              v1143  3    21     1.037   1.023   1.078
+17  w7 & (apple | banana) & !rare      i19    1    21     0.585   0.579   0.609
+17  w7 & (apple | banana) & !rare      i19    2    21     0.586   0.582   0.619
+17  w7 & (apple | banana) & !rare      i19    3    21     0.586   0.580   0.606
+17  w7 & (apple | banana) & !rare      v1143  1    21     0.790   0.782   0.832
+17  w7 & (apple | banana) & !rare      v1143  2    21     0.793   0.781   0.816
+17  w7 & (apple | banana) & !rare      v1143  3    21     0.796   0.780   0.823
+17  zzzq & (apple | ban:*)             i19    1    21     0.069   0.069   0.092
+17  zzzq & (apple | ban:*)             i19    2    21     0.069   0.069   0.095
+17  zzzq & (apple | ban:*)             i19    3    21     0.068   0.068   0.093
+17  zzzq & (apple | ban:*)             v1143  1    21     3.220   3.194   3.470
+17  zzzq & (apple | ban:*)             v1143  2    21     3.177   3.149   3.346
+17  zzzq & (apple | ban:*)             v1143  3    21     3.218   3.186   3.352
+17  zzzq & (apple | banana)            i19    1    21     0.066   0.065   0.079
+17  zzzq & (apple | banana)            i19    2    21     0.066   0.065   0.068
+17  zzzq & (apple | banana)            i19    3    21     0.066   0.065   0.084
+17  zzzq & (apple | banana)            v1143  1    21     0.067   0.066   0.068
+17  zzzq & (apple | banana)            v1143  2    21     0.066   0.065   0.079
+17  zzzq & (apple | banana)            v1143  3    21     0.066   0.066   0.067
+17  zzzq & apple                       i19    1    21     0.064   0.063   0.094
+17  zzzq & apple                       i19    2    21     0.064   0.063   0.098
+17  zzzq & apple                       i19    3    21     0.064   0.063   0.095
+17  zzzq & apple                       v1143  1    21     0.065   0.065   0.098
+17  zzzq & apple                       v1143  2    21     0.064   0.063   0.094
+17  zzzq & apple                       v1143  3    21     0.064   0.064   0.095
+17  zzzq & ban:*                       i19    1    21     0.067   0.066   0.085
+17  zzzq & ban:*                       i19    2    21     0.067   0.066   0.069
+17  zzzq & ban:*                       i19    3    21     0.066   0.066   0.084
+17  zzzq & ban:*                       v1143  1    21     0.920   0.909   0.942
+17  zzzq & ban:*                       v1143  2    21     0.898   0.885   0.929
+17  zzzq & ban:*                       v1143  3    21     0.916   0.907   0.946
+18  apple & (banana | w5)              i19    1    21     1.284   1.268   1.325
+18  apple & (banana | w5)              i19    2    21     1.285   1.273   1.333
+18  apple & (banana | w5)              i19    3    21     1.282   1.269   1.324
+18  apple & (banana | w5)              v1143  1    21     1.336   1.320   1.351
+18  apple & (banana | w5)              v1143  2    21     1.335   1.320   1.363
+18  apple & (banana | w5)              v1143  3    21     1.335   1.319   1.364
+18  apple | banana                     i19    1    21     7.793   7.764   7.821
+18  apple | banana                     i19    2    21     7.804   7.789   7.832
+18  apple | banana                     i19    3    21     7.803   7.791   7.835
+18  apple | banana                     v1143  1    21     8.509   8.484  10.104
+18  apple | banana                     v1143  2    21     8.513   8.501   9.628
+18  apple | banana                     v1143  3    21     8.527   8.508   8.546
+18  rare & (apple | ban:*)             i19    1    21     3.167   3.134   3.415
+18  rare & (apple | ban:*)             i19    2    21     3.172   3.139   3.403
+18  rare & (apple | ban:*)             i19    3    21     3.208   3.175   3.331
+18  rare & (apple | ban:*)             v1143  1    21     3.234   3.206   3.326
+18  rare & (apple | ban:*)             v1143  2    21     3.221   3.197   3.267
+18  rare & (apple | ban:*)             v1143  3    21     3.200   3.172   3.272
+18  rare & (apple | banana | w5)       i19    1    21     0.210   0.207   0.228
+18  rare & (apple | banana | w5)       i19    2    21     0.210   0.207   0.231
+18  rare & (apple | banana | w5)       i19    3    21     0.211   0.207   0.230
+18  rare & (apple | banana | w5)       v1143  1    21     2.764   2.722   2.805
+18  rare & (apple | banana | w5)       v1143  2    21     2.755   2.726   2.791
+18  rare & (apple | banana | w5)       v1143  3    21     2.757   2.729   2.775
+18  rare & (apple | banana)            i19    1    21     0.219   0.203   0.258
+18  rare & (apple | banana)            i19    2    21     0.207   0.203   0.226
+18  rare & (apple | banana)            i19    3    21     0.207   0.203   0.228
+18  rare & (apple | banana)            v1143  1    21     3.795   3.759   3.812
+18  rare & (apple | banana)            v1143  2    21     3.810   3.791   3.845
+18  rare & (apple | banana)            v1143  3    21     3.794   3.772   3.875
+18  rare & apple                       i19    1    21     0.079   0.078   0.084
+18  rare & apple                       i19    2    21     0.079   0.078   0.098
+18  rare & apple                       i19    3    21     0.080   0.079   0.085
+18  rare & apple                       v1143  1    21     0.079   0.078   0.093
+18  rare & apple                       v1143  2    21     0.078   0.077   0.101
+18  rare & apple                       v1143  3    21     0.079   0.077   0.096
+18  w7 & (apple | banana)              i19    1    21     0.595   0.589   0.623
+18  w7 & (apple | banana)              i19    2    21     0.595   0.589   0.616
+18  w7 & (apple | banana)              i19    3    21     0.597   0.589   0.628
+18  w7 & (apple | banana)              v1143  1    21     1.076   1.055   1.137
+18  w7 & (apple | banana)              v1143  2    21     1.073   1.059   1.128
+18  w7 & (apple | banana)              v1143  3    21     1.075   1.059   1.127
+18  w7 & (apple | banana) & !rare      i19    1    21     0.602   0.595   0.624
+18  w7 & (apple | banana) & !rare      i19    2    21     0.602   0.596   0.630
+18  w7 & (apple | banana) & !rare      i19    3    21     0.604   0.598   0.625
+18  w7 & (apple | banana) & !rare      v1143  1    21     0.806   0.794   0.832
+18  w7 & (apple | banana) & !rare      v1143  2    21     0.806   0.791   0.829
+18  w7 & (apple | banana) & !rare      v1143  3    21     0.805   0.796   0.825
+18  zzzq & (apple | ban:*)             i19    1    21     0.072   0.071   0.096
+18  zzzq & (apple | ban:*)             i19    2    21     0.072   0.071   0.101
+18  zzzq & (apple | ban:*)             i19    3    21     0.072   0.071   0.098
+18  zzzq & (apple | ban:*)             v1143  1    21     3.232   3.188   3.381
+18  zzzq & (apple | ban:*)             v1143  2    21     3.218   3.181   3.378
+18  zzzq & (apple | ban:*)             v1143  3    21     3.202   3.178   3.390
+18  zzzq & (apple | banana)            i19    1    21     0.068   0.067   0.081
+18  zzzq & (apple | banana)            i19    2    21     0.069   0.068   0.070
+18  zzzq & (apple | banana)            i19    3    21     0.069   0.068   0.088
+18  zzzq & (apple | banana)            v1143  1    21     0.069   0.068   0.088
+18  zzzq & (apple | banana)            v1143  2    21     0.068   0.067   0.080
+18  zzzq & (apple | banana)            v1143  3    21     0.069   0.068   0.071
+18  zzzq & apple                       i19    1    21     0.066   0.065   0.095
+18  zzzq & apple                       i19    2    21     0.067   0.066   0.099
+18  zzzq & apple                       i19    3    21     0.067   0.066   0.101
+18  zzzq & apple                       v1143  1    21     0.066   0.066   0.098
+18  zzzq & apple                       v1143  2    21     0.066   0.066   0.097
+18  zzzq & apple                       v1143  3    21     0.066   0.066   0.107
+18  zzzq & ban:*                       i19    1    21     0.069   0.068   0.071
+18  zzzq & ban:*                       i19    2    21     0.070   0.069   0.086
+18  zzzq & ban:*                       i19    3    21     0.069   0.069   0.072
+18  zzzq & ban:*                       v1143  1    21     0.921   0.911   0.957
+18  zzzq & ban:*                       v1143  2    21     0.919   0.908   0.948
+18  zzzq & ban:*                       v1143  3    21     0.907   0.895   0.942
+BENCH7_DONE

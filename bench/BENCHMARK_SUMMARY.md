@@ -520,10 +520,11 @@ Kept because the corrections are part of the result.
 
 Measured as of 1.10.0: single-client latency, **concurrent throughput** (16/32/64
 clients, all four engines), index size, build time, and match-count correctness.
-Still unmeasured: **ingest/update throughput**, **cold-cache (disk-bound) latency**,
-and **ranking quality (NDCG) vs rivals**. All four engines put 6-10 of the same
-documents in each top-10, so relevance differences are about near-ties, but that is
-not a quality measurement.
+Still unmeasured: **ingest/update throughput** and **cold-cache (disk-bound) latency**.
+**Ranking quality** was measured on 2026-10-28 (`RESULTS_1144_2026-10-28.md` section 5,
+BEIR test qrels, x86, one cluster): NDCG@10 SciFact pg_fts (English) 0.6848, pg_fts
+(`simple`, no stemming) 0.6650, pg_search 0.26.1 0.6339, ts_rank 0.5684; NFCorpus 0.3240,
+0.3016, 0.3000, 0.3001.  Two datasets; pg_textsearch and VectorChord-bm25 not run.
 
 ## 8. Honest summary (1.11.0, aarch64, 2026-10-08)
 

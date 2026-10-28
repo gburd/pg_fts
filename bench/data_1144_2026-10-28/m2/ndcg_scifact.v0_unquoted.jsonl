@@ -1,0 +1,4 @@
+{"db": "scifact", "system": "pgfts", "queries": 300, "errors": 68, "ndcg@10": 0.5344, "recall@100": 0.7227, "mrr@10": 0.506}
+{"db": "scifact", "system": "pgfts_simple", "queries": 300, "errors": 68, "ndcg@10": 0.515, "recall@100": 0.6943, "mrr@10": 0.4876}
+{"db": "scifact", "system": "pgsearch", "queries": 300, "errors": 0, "ndcg@10": 0.6339, "recall@100": 0.8909, "mrr@10": 0.5994}
+{"db": "scifact", "system": "tsrank", "queries": 300, "errors": 0, "ndcg@10": 0.5684, "recall@100": 0.8489, "mrr@10": 0.5372}
