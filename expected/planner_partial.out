@@ -1,0 +1,140 @@
+-- planner_partial (1.14.3, Codeberg #8): the @@@ estimator (fts_matchsel) may
+-- read a PARTIAL fts index whose predicate the query implies (predOK).
+-- 1.14.1 made fts_rel_bm25_index skip partial indexes for both the count(*)
+-- pushdown (right: a partial index's count is a wrong answer) and the
+-- estimator, which then fell back to tsmatchsel's 0.5%: `WHERE pred AND
+-- d @@@ q ORDER BY d <=> q LIMIT k` planned Bitmap Heap Scan + Sort, and the
+-- Sort ordered by fts_distance()'s corpus-free score (N = 1, every term the
+-- same idf), not BM25.  The count pushdown still skips partial indexes
+-- (planner_indexes).
+SET client_min_messages = warning;
+CREATE EXTENSION IF NOT EXISTS pg_fts;
+-- the reporter's repro: 'common' in every row (twice), 'rare' in one row
+CREATE TABLE r (id int PRIMARY KEY, live bool NOT NULL DEFAULT true, body text)
+  WITH (autovacuum_enabled = off);
+INSERT INTO r (id, body) SELECT g, 'common common filler' || g FROM generate_series(1, 1000) g;
+INSERT INTO r (id, body) VALUES (5000, 'rare filler');
+CREATE INDEX r_fts ON r USING fts (to_ftsdoc('simple', body)) WHERE live;
+ANALYZE r;
+\set top3 'SELECT id FROM r WHERE live AND to_ftsdoc(''simple'', body) @@@ to_ftsquery(''simple'', ''common | rare'') ORDER BY to_ftsdoc(''simple'', body) <=> to_ftsquery(''simple'', ''common | rare'') LIMIT 3'
+-- default plan: the ordering index scan (1.14.2: Limit -> Sort -> Bitmap Heap Scan)
+EXPLAIN (COSTS OFF) :top3;
+                                             QUERY PLAN                                             
+----------------------------------------------------------------------------------------------------
+ Limit
+   ->  Index Scan using r_fts on r
+         Index Cond: (to_ftsdoc('simple'::regconfig, body) @@@ '(''common'' | ''rare'')'::ftsquery)
+         Order By: (to_ftsdoc('simple'::regconfig, body) <=> '(''common'' | ''rare'')'::ftsquery)
+         Filter: live
+(5 rows)
+
+-- the BM25 order: 5000, 1, 2 (1.14.2: 2, 3, 1 -- the rare document missing)
+:top3;
+  id  
+------
+ 5000
+    1
+    2
+(3 rows)
+
+-- the same order with every other plan disabled
+SET enable_bitmapscan = off; SET enable_seqscan = off;
+:top3;
+  id  
+------
+ 5000
+    1
+    2
+(3 rows)
+
+RESET enable_bitmapscan; RESET enable_seqscan;
+-- the planner's row estimate for the scan of the named table in a statement
+CREATE FUNCTION pg_temp.est_rows(tbl text, stmt text) RETURNS int LANGUAGE plpgsql AS $$
+DECLARE ln text;
+BEGIN
+  FOR ln IN EXECUTE 'EXPLAIN ' || stmt LOOP
+    IF ln ~ (' on ' || tbl || '\M') THEN RETURN (regexp_match(ln, 'rows=(\d+)'))[1]::int; END IF;
+  END LOOP;
+  RETURN NULL;
+END $$;
+-- 1001 rows match; tsmatchsel said 5
+SELECT pg_temp.est_rows('r', $q$SELECT id FROM r WHERE live AND to_ftsdoc('simple', body) @@@ to_ftsquery('simple', 'common | rare')$q$)
+         BETWEEN 500 AND 2000 AS est_from_partial_index;
+ est_from_partial_index 
+------------------------
+ t
+(1 row)
+
+-- a narrow predicate: the index holds 100 of 2000 rows, all of which match.
+-- The index's fraction (1.0) is NOT scaled by its share of the table: the
+-- planner already applies the predicate's own selectivity (0.05), so the
+-- estimate is ~100; scaling would count the predicate twice (~5).
+CREATE TABLE pn (id int, d ftsdoc) WITH (autovacuum_enabled = off);
+INSERT INTO pn SELECT g, to_ftsdoc('simple', 'alpha w' || (g % 10)) FROM generate_series(1, 2000) g;
+CREATE INDEX pn_fts ON pn USING fts (d) WHERE id <= 100;
+VACUUM ANALYZE pn;
+SELECT pg_temp.est_rows('pn', $q$SELECT 1 FROM pn WHERE id <= 100 AND d @@@ 'alpha'::ftsquery$q$)
+         BETWEEN 50 AND 200 AS narrow_predicate_est;
+ narrow_predicate_est 
+----------------------
+ t
+(1 row)
+
+-- a stricter qual implies the predicate too: id <= 50 matches ~50
+SELECT pg_temp.est_rows('pn', $q$SELECT 1 FROM pn WHERE id <= 50 AND d @@@ 'alpha'::ftsquery$q$)
+         BETWEEN 25 AND 100 AS implied_predicate_est;
+ implied_predicate_est 
+-----------------------
+ t
+(1 row)
+
+-- a term in a tenth of the index: ~10 of the 100 rows
+SELECT pg_temp.est_rows('pn', $q$SELECT 1 FROM pn WHERE id <= 100 AND d @@@ 'w3'::ftsquery$q$)
+         BETWEEN 5 AND 20 AS narrow_term_est;
+ narrow_term_est 
+-----------------
+ t
+(1 row)
+
+-- predicate not implied: the index says nothing about rows outside it, so the
+-- estimate falls back to tsmatchsel (0.5% of 2000 = 10)
+SELECT pg_temp.est_rows('pn', $q$SELECT 1 FROM pn WHERE d @@@ 'alpha'::ftsquery$q$) AS not_implied_est;
+ not_implied_est 
+-----------------
+              10
+(1 row)
+
+-- and the count pushdown still never answers from a partial index
+SELECT count(*) AS alpha_all_rows FROM pn WHERE d @@@ 'alpha'::ftsquery;
+ alpha_all_rows 
+----------------
+           2000
+(1 row)
+
+SELECT count(*) AS alpha_le_100 FROM pn WHERE id <= 100 AND d @@@ 'alpha'::ftsquery;
+ alpha_le_100 
+--------------
+          100
+(1 row)
+
+-- a non-partial index on the same expression is preferred for the estimate
+CREATE INDEX pn_full ON pn USING fts (d);
+INSERT INTO pn SELECT g, to_ftsdoc('simple', 'beta') FROM generate_series(2001, 2400) g;
+SELECT fts_merge('pn_full') AS merged;
+ merged 
+--------
+ t
+(1 row)
+
+ANALYZE pn;
+-- 'beta' is in 400 rows, none of them in the partial index: from pn_full the
+-- estimate is ~400 x sel(id <= 100) ~ 17; from pn_fts it would fall back
+SELECT pg_temp.est_rows('pn', $q$SELECT 1 FROM pn WHERE id <= 100 AND d @@@ 'beta'::ftsquery$q$)
+         BETWEEN 5 AND 40 AS full_index_preferred;
+ full_index_preferred 
+----------------------
+ t
+(1 row)
+
+DROP TABLE r;
+DROP TABLE pn;

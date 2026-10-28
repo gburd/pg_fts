@@ -119,7 +119,16 @@
       <entry>
        Relevance distance <literal>1/(1+score)</literal> (a smaller distance is
        a higher BM25 score).  Used in <literal>ORDER BY</literal> to rank; the
-       <literal>fts</literal> index answers this as an ordering scan.
+       <literal>fts</literal> index answers this as an ordering scan.  The BM25
+       order, with the index's corpus statistics, is produced only by that
+       ordering index scan.  In any other plan (a <literal>Seq Scan</literal>
+       or a <literal>Bitmap Heap Scan</literal> plus <literal>Sort</literal>),
+       and in a select list, <literal>&lt;=&gt;</literal> falls back to a
+       corpus-free score (every term weighted as if rare, the document's own
+       length as the average), and the order can differ.  If the order
+       matters, check the plan with <command>EXPLAIN</command>, or run the
+       query with <varname>enable_seqscan</varname> and
+       <varname>enable_bitmapscan</varname> off.
       </entry>
      </row>
     </tbody>

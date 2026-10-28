@@ -312,17 +312,22 @@ fts_planner(Query *parse, const char *query_string, int cursorOptions,
  * progress -- its file can be empty -- or cancelled, so missing rows) and one
  * too new for this transaction's snapshot (indcheckxmin); its indexprs carry
  * rel's varno, so an expression index matches whatever RTE the table is.  Also
- * skipped: a partial index (it holds only the rows its predicate admits), a
- * hypothetical one, and one with no blocks (a partitioned index has no
- * storage).  1.14.0 and earlier walked RelationGetIndexList, which includes
- * all of these: wrong counts and planning errors (CHANGELOG 1.14.1).  A
- * get_relation_info_hook that prunes rel->indexlist (pg_hint_plan) therefore
- * disables the count pushdown and the df estimate for that rel: safe fallback.
+ * skipped: a hypothetical index, one with no blocks (a partitioned index has
+ * no storage), and a partial index (it holds only the rows its predicate
+ * admits) -- except that the estimator (estimate = true) may use a partial
+ * index whose predicate the query implies (predOK), when the rel has no
+ * non-partial one: see fts_matchsel.  The count pushdown never may (a count
+ * from a partial index is a wrong answer).  1.14.0 and earlier walked
+ * RelationGetIndexList, which includes all of these: wrong counts and planning
+ * errors (CHANGELOG 1.14.1).  A get_relation_info_hook that prunes
+ * rel->indexlist (pg_hint_plan) therefore disables the count pushdown and the
+ * df estimate for that rel: safe fallback.
  */
 static Oid
-fts_rel_bm25_index(RelOptInfo *rel, Node *expr)
+fts_rel_bm25_index(RelOptInfo *rel, Node *expr, bool estimate)
 {
 	Oid			ftsam = get_index_am_oid("fts", true);
+	Oid			partial = InvalidOid;
 	ListCell   *lc;
 
 	if (!OidIsValid(ftsam))
@@ -331,16 +336,26 @@ fts_rel_bm25_index(RelOptInfo *rel, Node *expr)
 	{
 		IndexOptInfo *info = (IndexOptInfo *) lfirst(lc);
 
-		if (info->relam != ftsam || info->indpred != NIL || info->hypothetical ||
+		if (info->relam != ftsam || info->hypothetical ||
 			info->pages == 0 || info->ncolumns != 1)
+			continue;
+		/* predOK is set by check_index_predicates, which set_plain_rel_size
+		 * runs before set_baserel_size_estimates (PG 17, 18); before that it
+		 * is false (plancat), so an earlier estimate falls back */
+		if (info->indpred != NIL && !(estimate && info->predOK))
 			continue;
 		if (info->indexkeys[0] != 0
 			? (IsA(expr, Var) && ((Var *) expr)->varno == rel->relid &&
 			   ((Var *) expr)->varattno == info->indexkeys[0])
 			: (info->indexprs != NIL && equal(linitial(info->indexprs), expr)))
-			return info->indexoid;
+		{
+			if (info->indpred == NIL)
+				return info->indexoid;
+			if (!OidIsValid(partial))
+				partial = info->indexoid;
+		}
 	}
-	return InvalidOid;
+	return partial;
 }
 
 /*
@@ -354,7 +369,13 @@ fts_rel_bm25_index(RelOptInfo *rel, Node *expr)
  *
  * For a Const ftsquery whose other side names a bm25 index on the rel, the
  * selectivity is the query's df bound over the segment dictionaries divided by
- * the segment document count (bm25_estimate_matchfrac).  Anything else -- a
+ * the segment document count (bm25_estimate_matchfrac).  A partial index the
+ * query's quals imply (predOK) is used too (1.14.3; 1.14.1-1.14.2 skipped it,
+ * so a ranked query over a partial index planned Bitmap + Sort and ordered by
+ * fts_distance's corpus-free score, Codeberg #8).  Its fraction is over the
+ * predicate's rows and is returned unscaled: the planner multiplies it with
+ * the selectivity of the quals that imply the predicate, so scaling it by the
+ * index's share of the table would count the predicate twice.  Anything else -- a
  * non-Const query, no bm25 index on that column, a join clause, or a query the
  * segments cannot estimate (bm25_estimate_matchfrac returns -1) -- falls back
  * to tsmatchsel, the estimate before 1.14.0.
@@ -401,7 +422,7 @@ fts_matchsel(PG_FUNCTION_ARGS)
 	examine_variable(root, varside, varRelid, &vardata);
 	if (vardata.rel != NULL && IS_SIMPLE_REL(vardata.rel) &&
 		vardata.rel->rtekind == RTE_RELATION)
-		indexoid = fts_rel_bm25_index(vardata.rel, varside);
+		indexoid = fts_rel_bm25_index(vardata.rel, varside, true);
 	ReleaseVariableStats(vardata);
 
 	if (OidIsValid(indexoid))
@@ -533,7 +554,7 @@ fts_find_pushdown_index(PlannerInfo *root, RelOptInfo *rel,
 	}
 
 	/* a bm25 index on this rel whose expression is the LHS */
-	return fts_rel_bm25_index(rel, (Node *) linitial(matchclause->args));
+	return fts_rel_bm25_index(rel, (Node *) linitial(matchclause->args), false);
 }
 
 /*
