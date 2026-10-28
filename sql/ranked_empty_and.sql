@@ -1,0 +1,91 @@
+-- ranked_empty_and (1.14.3, Codeberg #6): a ranked pure-boolean query whose
+-- segment walk can admit no document returns without walking.  Through 1.14.2
+-- `absent & (a | b)` took the lazy BoolGate path, the WAND walk ran over a's
+-- and b's cursors, and the gate rejected every pivot -- a rejected pivot never
+-- raises the threshold, so it visited every posting of the OR group.  Now the
+-- gate's RPN is evaluated once as an upper bound before the walk (a leaf is
+-- "has a segment cursor", a leaf under an odd number of NOTs is false); when
+-- it is false the walk is skipped and only pending documents are ranked.
+SET client_min_messages = warning;
+CREATE EXTENSION IF NOT EXISTS pg_fts;
+CREATE TABLE re (id int, d ftsdoc) WITH (autovacuum_enabled = off);
+-- apple in ids % 4 = 0 (and 12345), banana in ids % 4 = 1, rare only in 12345;
+-- at most 6 tokens a row, so the doclen sidecar's quantization is exact
+INSERT INTO re SELECT g, to_ftsdoc('simple', concat_ws(' ', 'w' || (g::bigint * 7919 % 500),
+       'w' || (g::bigint * 104729 % 500),
+       CASE WHEN g % 4 = 0 OR g = 12345 THEN 'apple' END, CASE WHEN g % 4 = 1 THEN 'banana' END,
+       CASE WHEN g = 12345 THEN 'rare' END, CASE WHEN g % 1000 = 8 THEN 'hot dog' END))
+  FROM generate_series(1, 20000) g;
+CREATE INDEX re_fts ON re USING fts (d) WITH (positions = on);
+VACUUM ANALYZE re;
+
+-- every query's full ranked result (ids and engine scores, fts_search = the
+-- ordering scan's engine) against an oracle that does not use the index: a
+-- seq scan + fts_bm25 with the index's own statistics (the README recipe)
+CREATE FUNCTION pg_temp.ranked(qt text) RETURNS text LANGUAGE sql AS $$
+  SELECT coalesce(string_agg(id || ':' || round(sc::numeric, 9), ',' ORDER BY sc DESC, id), '')
+    FROM (SELECT p.id, r.score AS sc FROM fts_search('re_fts', qt::ftsquery, 100000) r
+            JOIN re p ON p.ctid = r.ctid) s $$;
+CREATE FUNCTION pg_temp.oracle(qt text) RETURNS text LANGUAGE plpgsql AS $$
+DECLARE r text;
+BEGIN
+  SET LOCAL enable_indexscan = off; SET LOCAL enable_bitmapscan = off;
+  WITH st AS MATERIALIZED (SELECT s.ndocs, s.avgdl, fts_index_df('re_fts', qt::ftsquery) AS df
+                             FROM fts_index_stats('re_fts') s)
+  SELECT coalesce(string_agg(id || ':' || round(sc::numeric, 9), ',' ORDER BY sc DESC, id), '') INTO r
+    FROM (SELECT id, fts_bm25(d, qt::ftsquery, st.ndocs, st.avgdl, st.df) AS sc
+            FROM re, st WHERE d @@@ qt::ftsquery) x;
+  RETURN r;
+END $$;
+CREATE TABLE req (q text);
+INSERT INTO req VALUES ('zzzq & apple'), ('zzzq & (apple | banana)'), ('(apple | banana) & zzzq'),
+  ('rare & (apple | banana)'), ('apple | banana'), ('apple & !banana'), ('(apple | zzzq) & !banana'),
+  ('!zzzq & rare'), ('zzzq & !apple'), ('(zzzq | rare) & (apple | qqqz)'), ('!(zzzq | !rare) & apple'),
+  ('zzzq & "hot dog"'), ('rare & "hot dog"'), ('apple & "hot dog"'),
+  ('zzzq & (apple | ban:*)'), ('rare & (apple | ban:*)');
+SELECT q, length(o) > 0 AS nonempty, pg_temp.ranked(q) = o AS same_as_oracle
+  FROM (SELECT q, pg_temp.oracle(q) AS o FROM req) s ORDER BY q;
+
+-- pending documents still rank when the segment walk is skipped
+INSERT INTO re VALUES (99999, to_ftsdoc('simple', 'zzzq banana')),
+                      (99998, to_ftsdoc('simple', 'zzzq apple apple'));
+SELECT q, length(o) > 0 AS nonempty, pg_temp.ranked(q) = o AS same_as_oracle
+  FROM (SELECT q, pg_temp.oracle(q) AS o FROM req WHERE q ~ 'zzzq') s ORDER BY q;
+SET enable_seqscan = off; SET enable_bitmapscan = off;
+SELECT array_agg(id) AS ordering_scan_pending FROM (SELECT id FROM re WHERE d @@@ 'zzzq & (apple | banana)'::ftsquery
+  ORDER BY d <=> 'zzzq & (apple | banana)'::ftsquery LIMIT 10) s;
+RESET enable_seqscan; RESET enable_bitmapscan;
+-- after the merge zzzq has segment postings and the walk runs again
+SELECT fts_merge('re_fts') AS merged;
+SELECT q, length(o) > 0 AS nonempty, pg_temp.ranked(q) = o AS same_as_oracle
+  FROM (SELECT q, pg_temp.oracle(q) AS o FROM req WHERE q ~ 'zzzq') s ORDER BY q;
+
+-- the early-out itself: index buffers the ordering scan touches.  Through
+-- 1.14.2 `absent & (apple | banana)` read about as many as `apple | banana`
+CREATE TABLE re2 (id int, d ftsdoc) WITH (autovacuum_enabled = off);
+INSERT INTO re2 SELECT id, d FROM re WHERE id <= 20000;
+CREATE INDEX re2_fts ON re2 USING fts (d);
+VACUUM ANALYZE re2;
+CREATE FUNCTION pg_temp.scan_buffers(qt text) RETURNS int LANGUAGE plpgsql AS $$
+DECLARE ln text; seen bool := false; m text[];
+BEGIN
+  SET LOCAL enable_seqscan = off; SET LOCAL enable_bitmapscan = off;
+  FOR ln IN EXECUTE format('EXPLAIN (ANALYZE, BUFFERS, COSTS OFF, TIMING OFF, SUMMARY OFF) '
+      'SELECT id FROM re2 WHERE d @@@ %L::ftsquery ORDER BY d <=> %L::ftsquery LIMIT 10', qt, qt) LOOP
+    IF ln ~ 'Index Scan using re2_fts' THEN seen := true;
+    ELSIF seen AND ln ~ 'Buffers:' THEN
+      m := regexp_match(ln, 'hit=(\d+)');
+      RETURN coalesce(m[1]::int, 0) + coalesce((regexp_match(ln, 'read=(\d+)'))[1]::int, 0);
+    END IF;
+  END LOOP;
+  RETURN NULL;
+END $$;
+SELECT pg_temp.scan_buffers('apple | banana') > 40 AS or_group_reads_postings,
+       pg_temp.scan_buffers('zzzq & apple') * 4
+         < pg_temp.scan_buffers('apple | banana') AS absent_and_term_fast,
+       pg_temp.scan_buffers('zzzq & (apple | banana)') * 4
+         < pg_temp.scan_buffers('apple | banana') AS absent_and_or_skips_walk,
+       pg_temp.scan_buffers('(apple | banana) & zzzq') * 4
+         < pg_temp.scan_buffers('apple | banana') AS operand_order_irrelevant;
+
+DROP TABLE re, re2, req;

@@ -6116,6 +6116,38 @@ bool_gate_conjunctive(const BoolGate *g)
 	return true;
 }
 
+/*
+ * Can the segment walk admit any document (CHANGELOG 1.14.3, Codeberg #6)?
+ * An upper bound on bool_gate_admits at every pivot: a leaf is true iff its
+ * term has a segment cursor, except that a leaf under an odd number of NOTs is
+ * false (the RPN only grows as such a leaf falls).  At a real pivot each
+ * present[] is at most this, so false here means the walk admits nothing --
+ * `absent & (a | b)` returns at once instead of visiting every a/b posting
+ * (a rejected pivot never raises the threshold, so nothing is pruned).
+ * Pending documents are not part of the walk; the caller merges them in.
+ */
+static bool
+bool_gate_may_admit(BoolGate *g, const WandCursor *cursors, int ncur)
+{
+	bool	   *odd = eval_not_parity(g->q);
+	int			vi = 0;
+	uint32		i;
+
+	memset(g->present, 0, (Size) g->nterms * sizeof(bool));
+	for (i = 0; i < (uint32) ncur; i++)
+		g->present[cursors[i].termidx] = true;
+	for (i = 0; i < g->q->nitems; i++)
+	{
+		if (g->q->items[i].type != FTS_QI_VAL)
+			continue;
+		if (odd[i])
+			g->present[vi] = false;
+		vi++;
+	}
+	pfree(odd);
+	return bool_gate_admits(g);
+}
+
 static int
 fts_search_wand(WandCursor *cursors, int nterms, int k,
 				const DocidFilter *filter, BoolGate *gate, ScoredTid **out)
@@ -6823,7 +6855,13 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 		pgate->unknown = false;
 	}
 
-	ncand = fts_search_wand(cursors, nactive, wantk, filterp, gatep, &cand);
+	if (gatep != NULL && gate.q != NULL && !bool_gate_may_admit(&gate, cursors, nactive))
+	{
+		cand = NULL;			/* no segment document can match */
+		ncand = 0;
+	}
+	else
+		ncand = fts_search_wand(cursors, nactive, wantk, filterp, gatep, &cand);
 	bm25_tombstones_free(&tombs);
 	if (meta.npending > 0)
 		ncand = bm25_topk_add_pending(index, q, &meta, terms, lens, nterms, tidf,
