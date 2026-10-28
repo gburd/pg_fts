@@ -65,3 +65,22 @@ SELECT 'mixed' AS state, * FROM pg_temp.recipe_vs_scan('fresh | old1');
 SELECT pg_temp.recipe_follows_scan_order('fresh | old1') AS mixed_order_ok;
 RESET enable_seqscan; RESET enable_bitmapscan;
 DROP TABLE p;
+
+-- the same pending share in the ranked path for a prefix/fuzzy/regex/weighted
+-- query (bm25_topk_exact): through 1.14.2 its idf used the segment df only, so
+-- a pending-only term ranked as df = 0 and the scores changed at the flush.
+-- Oracle: each query's ranked ids and scores before the merge equal after.
+CREATE TABLE pm (id int, body text) WITH (autovacuum_enabled = off);
+INSERT INTO pm SELECT g, 'old' || (g % 10) || ' apple' FROM generate_series(1, 100) g;
+CREATE INDEX pm_fts ON pm USING fts (to_ftsdoc('simple', body));
+INSERT INTO pm SELECT g, 'fresh apple' FROM generate_series(101, 150) g;   -- pending
+CREATE TABLE pmq (q text);
+INSERT INTO pmq VALUES ('fresh | old1 | app:*'), ('fresh & app:*'), ('fresh | olx1~1'), ('fresh:D | old1');
+CREATE FUNCTION pg_temp.pm_ranked(qt text) RETURNS text LANGUAGE sql AS $$
+  SELECT string_agg(p.id || ':' || round(r.score::numeric, 9), ',' ORDER BY r.score DESC, p.id)
+    FROM fts_search('pm_fts', to_ftsquery('simple', qt), 1000) r JOIN pm p ON p.ctid = r.ctid $$;
+CREATE TEMP TABLE pm_before AS SELECT q, pg_temp.pm_ranked(q) AS r FROM pmq;
+SELECT fts_merge('pm_fts') AS merged;
+SELECT q, length(b.r) > 0 AS nonempty, b.r = pg_temp.pm_ranked(q) AS same_before_after_merge
+  FROM pm_before b ORDER BY q;
+DROP TABLE pm, pmq;

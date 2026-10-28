@@ -6302,11 +6302,16 @@ bm25_topk_exact(Relation index, FtsQuery q, const BM25MetaPageData *meta,
 	bool		isnull[INDEX_MAX_KEYS];
 	int			nbest = 0;
 	int			i;
+	uint64	   *pdf = bm25_pending_df(index, meta, terms, lens, nterms);
 
 	for (i = 0; i < nterms; i++)
 	{
 		uint32		s;
 
+		/* segment df plus pending df, as the cursor path's idf (1.14.3: the
+		 * pending share was missing here, so a ranked prefix/fuzzy/regex query
+		 * scored differently before and after a flush) */
+		dfs[i] = pdf ? (double) pdf[i] : 0.0;
 		for (s = 0; s < meta->nsegments; s++)
 		{
 			uint32		df,
@@ -6319,6 +6324,8 @@ bm25_topk_exact(Relation index, FtsQuery q, const BM25MetaPageData *meta,
 				dfs[i] += df;
 		}
 	}
+	if (pdf)
+		pfree(pdf);
 	bm25_collect_matches(index, q, &matches, &recheck);
 	heap = table_open(index->rd_index->indrelid, AccessShareLock);
 	indexInfo = BuildIndexInfo(index);
