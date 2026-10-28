@@ -469,8 +469,17 @@ bt_append_posting(BM25BuildState *bs, BuildTerm *bt, ItemPointer tid,
 static void bm25_write_segment(Relation index, BM25BuildState *bs, BM25SegMeta *seg);
 static void bm25_meta_from_page(Page page, BM25MetaPageData *out);
 static void bm25_meta_upcast_page(Page page);
-static bool bm25_meta_add_segment(Relation index, const BM25SegMeta *seg);
-static void bm25_add_segment_with_room(Relation index, const BM25SegMeta *seg);
+/* the pending-list clear a flush publishes together with its segment */
+typedef struct BM25PendingClear
+{
+	uint32		sealed;			/* pending documents folded into the segment */
+	BlockNumber newtail;		/* first page not folded (inserts since the seal) */
+	bool		freenewtail;	/* out: newtail was empty and left the list */
+} BM25PendingClear;
+static bool bm25_meta_add_segment(Relation index, const BM25SegMeta *seg,
+								  BM25PendingClear *pc);
+static void bm25_add_segment_with_room(Relation index, const BM25SegMeta *seg,
+									   BM25PendingClear *pc);
 static void bm25_free_page(Relation index, BlockNumber blk);
 static bool bm25_page_recyclable(Relation index, Page page);
 
@@ -591,7 +600,7 @@ bm25_build_flush_segment(Relation index, BM25BuildState *bs)
 	 */
 	if (IsInParallelMode())
 	{
-		if (!bm25_meta_add_segment(index, &seg))
+		if (!bm25_meta_add_segment(index, &seg, NULL))
 			ereport(ERROR,
 					(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
 					 errmsg("bm25 index \"%s\" reached the maximum of %d segments during a parallel build",
@@ -599,7 +608,7 @@ bm25_build_flush_segment(Relation index, BM25BuildState *bs)
 					 errhint("Raise pg_fts.build_mem_ceiling_mb (fewer, larger segments) or lower max_parallel_maintenance_workers.")));
 	}
 	else
-		bm25_add_segment_with_room(index, &seg);
+		bm25_add_segment_with_room(index, &seg, NULL);
 
 	/*
 	 * Progress signal for a large build.  A high-vocabulary, heavy-tailed corpus
@@ -2575,6 +2584,7 @@ typedef struct BM25DoclenDirCache
 	Size		used;			/* bytes of this chunk in use (appenders copy this much) */
 	int			budget_mb;		/* pg_fts.doclen_cache_mb it was built under */
 	int			ndictdirs;		/* I7: dictionary-index directories cached */
+	bool		complete;		/* every builder finished (1.14.4: attached early) */
 	BM25DictDir dictdirs[BM25_MAX_SEGMENTS];
 	BM25DoclenDir segs[BM25_MAX_SEGMENTS];
 	/* packed regions follow in the SAME allocation: uint64 docid[ndocid] then
@@ -2699,7 +2709,7 @@ bm25_doclendir_cache(Relation index, const BM25MetaPageData *meta)
 	 * session that has since SET it to 0 (until 1.12.0 it did, so "0 disables"
 	 * only took effect at the next directory change).
 	 */
-	if (dc != NULL && dc->generation == meta->generation &&
+	if (dc != NULL && dc->complete && dc->generation == meta->generation &&
 		dc->private_slots == !(pg_fts_shared_doclen && IsUnderPostmaster) &&
 		dc->budget_mb == pg_fts_doclen_cache_mb)
 		return dc;
@@ -2731,6 +2741,16 @@ bm25_doclendir_cache(Relation index, const BM25MetaPageData *meta)
 	old = MemoryContextSwitchTo(CacheMemoryContext);
 	dc = (BM25DoclenDirCache *) palloc0(sz);
 	MemoryContextSwitchTo(old);
+	/*
+	 * Attach every chunk to rd_amcache the moment it exists (CHANGELOG
+	 * 1.14.4): the scan and the two builders below can raise (a read error,
+	 * CHECK_FOR_INTERRUPTS, palloc), and until 1.14.4 the chunk was attached
+	 * only at the end, so an ERROR here leaked it in CacheMemoryContext for
+	 * the backend's life.  `complete` stays false until the last builder
+	 * returns, so a chunk an ERROR leaves attached is never served: the next
+	 * call frees and rebuilds it (and so does a relcache flush).
+	 */
+	index->rd_amcache = (void *) dc;
 	dc->generation = meta->generation;
 	dc->private_slots = !(pg_fts_shared_doclen && IsUnderPostmaster);
 	dc->ndocid = total;
@@ -2759,8 +2779,13 @@ bm25_doclendir_cache(Relation index, const BM25MetaPageData *meta)
 		}
 	}
 	dc = bm25_doclendir_add_slots(index, dc);
+#ifdef PG_FTS_TEST_HOOKS
+	/* TEST-ONLY (t/015): an ERROR between the builders, as a cancel would raise */
+	if (pg_fts_test_cache_build_error)
+		elog(ERROR, "pg_fts test hook: error during the relcache cache rebuild");
+#endif
 	dc = bm25_dictdir_add(index, meta, dc);
-	index->rd_amcache = (void *) dc;
+	dc->complete = true;
 	return dc;
 }
 
@@ -2980,6 +3005,7 @@ bm25_doclendir_add_slots(Relation index, BM25DoclenDirCache *dc)
 		}
 	}
 	MemoryContextDelete(tmp);
+	index->rd_amcache = (void *) out;	/* swap before freeing: never dangling */
 	pfree(dc);
 	return out;
 }
@@ -3154,6 +3180,7 @@ bm25_dictdir_add(Relation index, const BM25MetaPageData *meta, BM25DoclenDirCach
 		}
 	}
 	MemoryContextDelete(tmp);
+	index->rd_amcache = (void *) out;	/* swap before freeing: never dangling */
 	pfree(dc);
 	return out;
 }
@@ -3897,9 +3924,12 @@ bm25_write_segment(Relation index, BM25BuildState *bs, BM25SegMeta *seg)
  * fell behind under load is an outage, not an acceptable limit.  (A field
  * deployment had to disable the index when live ingestion outran merging and
  * hit the old hard error here.)
+ *
+ * A pending flush passes pc: its documents are already in the totals, and the
+ * sealed pages leave the pending list in the same update (see below).
  */
 static bool
-bm25_meta_add_segment(Relation index, const BM25SegMeta *seg)
+bm25_meta_add_segment(Relation index, const BM25SegMeta *seg, BM25PendingClear *pc)
 {
 	Buffer		buf = bm25_readbuf(index, BM25_METAPAGE_BLKNO);
 	GenericXLogState *state;
@@ -3920,8 +3950,32 @@ bm25_meta_add_segment(Relation index, const BM25SegMeta *seg)
 	m->segs[m->nsegments] = *seg;
 	m->nsegments++;
 	m->generation++;			/* directory changed: invalidate concurrent scan snapshots */
-	m->ndocs += seg->ndocs;
-	m->sumdoclen += seg->sumdoclen;
+	if (pc == NULL)
+	{
+		m->ndocs += seg->ndocs;
+		m->sumdoclen += seg->sumdoclen;
+	}
+	else
+	{
+		/*
+		 * A pending flush (CHANGELOG 1.14.4): the segment's documents were
+		 * counted into the totals at insert time, so the totals stay; drop the
+		 * sealed pages from the list IN THE SAME record.  Until 1.14.4 this was
+		 * a second metapage update, and a scan that read the metapage in
+		 * between saw every flushed document both in the new segment and on
+		 * the pending list (a ranked scan returned it twice).
+		 */
+		m->npending -= Min(pc->sealed, m->npending);
+		if (m->npending == 0 && m->pendingtail == pc->newtail)
+		{
+			/* nothing arrived since the seal: newtail is empty, drop it too */
+			m->pendinghead = InvalidBlockNumber;
+			m->pendingtail = InvalidBlockNumber;
+			pc->freenewtail = true;
+		}
+		else
+			m->pendinghead = pc->newtail;
+	}
 	GenericXLogFinish(state);
 	UnlockReleaseBuffer(buf);
 	return true;
@@ -3949,11 +4003,11 @@ static inline void bm25_maintenance_unlock(Relation index);
  * naturally on the actual add.
  */
 static void
-bm25_add_segment_with_room(Relation index, const BM25SegMeta *seg)
+bm25_add_segment_with_room(Relation index, const BM25SegMeta *seg, BM25PendingClear *pc)
 {
 	int			try;
 
-	if (bm25_meta_add_segment(index, seg))
+	if (bm25_meta_add_segment(index, seg, pc))
 		return;
 
 	for (try = 0; try < BM25_MAX_SEGMENTS; try++)
@@ -3990,7 +4044,7 @@ bm25_add_segment_with_room(Relation index, const BM25SegMeta *seg)
 			bm25_maintenance_unlock(index);
 		}
 		PG_END_TRY();
-		if (bm25_meta_add_segment(index, seg))
+		if (bm25_meta_add_segment(index, seg, pc))
 			return;
 	}
 
@@ -7337,42 +7391,41 @@ bm25_flush_pending(Relation index)
 		qsort(bs.terms, bs.nterms, sizeof(BuildTerm), cmp_buildterm);
 
 	bm25_write_segment(index, &bs, &seg);
-	bm25_add_segment_with_room(index, &seg);
 
 	/*
-	 * Clear the pending list.  Pending docs were already counted into the
-	 * corpus totals at insert time; add_segment counted them again, so subtract
-	 * the segment's contribution to avoid a double count.
+	 * Publish the segment and drop the sealed pages from the pending list in
+	 * ONE metapage update (bm25_meta_add_segment with a BM25PendingClear): a
+	 * scan sees either the old list or the new segment, never both.  The
+	 * generation bump in that update also invalidates scans that snapshotted
+	 * the pages freed below.
 	 */
 	{
-		Buffer		mb = bm25_readbuf(index, BM25_METAPAGE_BLKNO);
-		GenericXLogState *state;
-		Page		mp;
-		BM25MetaPageData *m;
+		BM25PendingClear pc;
 
-		LockBuffer(mb, BUFFER_LOCK_EXCLUSIVE);
-		state = GenericXLogStart(index);
-		mp = GenericXLogRegisterBuffer(state, mb, 0);
-		bm25_meta_upcast_page(mp);	/* v3 -> v4 before struct write */
-		m = BM25PageGetMeta(mp);
-		m->ndocs -= seg.ndocs;
-		m->sumdoclen -= seg.sumdoclen;
-		/* drop only the sealed pages: the list now starts at newtail, which
-		 * holds whatever was inserted since the seal */
-		m->npending -= Min(sealed, m->npending);
-		if (m->npending == 0 && m->pendingtail == newtail)
-		{
-			/* nothing arrived since the seal: newtail is empty, drop it too */
-			m->pendinghead = InvalidBlockNumber;
-			m->pendingtail = InvalidBlockNumber;
-			freenewtail = true;
-		}
-		else
-			m->pendinghead = newtail;
-		m->generation++;		/* pending pages freed below: invalidate scan snapshots */
-		GenericXLogFinish(state);
-		UnlockReleaseBuffer(mb);
+		pc.sealed = sealed;
+		pc.newtail = newtail;
+		pc.freenewtail = false;
+		bm25_add_segment_with_room(index, &seg, &pc);
+		freenewtail = pc.freenewtail;
 	}
+#ifdef PG_FTS_TEST_HOOKS
+	/*
+	 * TEST-ONLY: pause right after the publish, before the folded pages are
+	 * freed (t/014 runs ranked scans here).  Through 1.14.3 the pending list
+	 * was cleared by a second metapage update after this point, so this was
+	 * inside the window where a scan saw each document twice.
+	 */
+	if (pg_fts_test_flush_pause_advisory_key != 0)
+	{
+		LOCKTAG		tag;
+		int64		k = pg_fts_test_flush_pause_advisory_key;
+
+		SET_LOCKTAG_ADVISORY(tag, MyDatabaseId,
+							 (uint32) (k >> 32), (uint32) k, 1);
+		(void) LockAcquire(&tag, ShareLock, true, false);
+		LockRelease(&tag, ShareLock, true);
+	}
+#endif
 
 	/* recycle the folded pending pages (head..sealtail), and newtail if unused */
 	blk = meta.pendinghead;

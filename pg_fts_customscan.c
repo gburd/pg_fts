@@ -747,6 +747,8 @@ void		_PG_init(void);
  * Guarded by -DPG_FTS_TEST_HOOKS so the hook does not exist in a normal build.
  */
 int			pg_fts_test_pause_advisory_key = 0;
+int			pg_fts_test_flush_pause_advisory_key = 0;
+bool		pg_fts_test_cache_build_error = false;
 #endif
 
 void
@@ -836,6 +838,18 @@ _PG_init(void)
 							&pg_fts_test_pause_advisory_key,
 							0, 0, INT_MAX,
 							PGC_USERSET, 0, NULL, NULL, NULL);
+	DefineCustomIntVariable("pg_fts.test_flush_pause_advisory_key",
+							"TEST-ONLY: advisory key a pending flush waits on after publishing its segment (0=off).",
+							NULL,
+							&pg_fts_test_flush_pause_advisory_key,
+							0, 0, INT_MAX,
+							PGC_USERSET, 0, NULL, NULL, NULL);
+	DefineCustomBoolVariable("pg_fts.test_cache_build_error",
+							 "TEST-ONLY: raise an ERROR in the middle of the relcache cache rebuild.",
+							 NULL,
+							 &pg_fts_test_cache_build_error,
+							 false,
+							 PGC_USERSET, 0, NULL, NULL, NULL);
 #endif
 
 	prev_upper_paths_hook = create_upper_paths_hook;

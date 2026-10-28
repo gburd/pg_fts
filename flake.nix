@@ -182,10 +182,22 @@
         # the pgTapFor override (TAP enabled, harness installed) with pg_fts
         # installed, and points PERL5LIB at the harness so PostgreSQL::Test
         # resolves.  Each t/*.pl inits + tears down its own cluster.
-        tapCheckFor = pg:
+        tapCheckFor = pg: tapCheckWith { inherit pg; hooks = false; };
+        # hooks = true: pg_fts built with -DPG_FTS_TEST_HOOKS, running only the
+        # TAP tests that need the TEST-ONLY GUCs (t/014, t/015; they skip on a
+        # normal build).  PG_FTS_TEST_HOOKS_BUILD=1 turns a missing hook into a
+        # failure.  Never a package output: the hooks build is test-only.
+        tapCheckWith = { pg, hooks }:
           let
             pgt = pgTapFor pg;
-            pgFts = buildFor pgt;
+            pgFts = if hooks
+              then (buildFor pgt).overrideAttrs (o: {
+                makeFlags = (o.makeFlags or []) ++ [ "COPT=-DPG_FTS_TEST_HOOKS" ];
+              })
+              else buildFor pgt;
+            proveTests = if hooks
+              then "t/014_flush_publish_window.pl t/015_cache_rebuild_error.pl"
+              else "t/003_corruption.pl t/004_encodings.pl t/005_concurrency.pl t/006_concurrent_extend.pl t/007_segment_cap.pl t/008_vacuum_reclaim.pl t/010_vacuum_delete_heavy.pl t/011_shared_doclen.pl t/012_concurrent_flush.pl t/013_ranked_flush_race.pl t/014_flush_publish_window.pl t/015_cache_rebuild_error.pl";
             # One prefix (symlinks, no rebuild) that has pgt's server binaries +
             # perl harness AND pg_fts's extension files.  initdb/postgres run
             # from their real store paths (rpaths intact -- unlike a cp of the
@@ -199,7 +211,7 @@
               exec ${pgt.pg_config}/bin/pg_config "$@" | sed "s#${pgt}#${pgtJoin}#g"
             '';
           in pkgs.stdenv.mkDerivation {
-            name = "pg_fts-tap-${pg.version}";
+            name = "pg_fts-tap${if hooks then "-hooks" else ""}-${pg.version}";
             src = ./.;
             nativeBuildInputs =
               [ pgtJoin pgConfigWrapped pkgs.perl pkgs.perlPackages.IPCRun ];
@@ -217,8 +229,9 @@
               # under the sandbox; they are gated in CI (real PG, matching
               # harness), not here.  This is what makes `nix flake check`
               # actually exercise TAP instead of silently skipping it.
+              ${if hooks then "export PG_FTS_TEST_HOOKS_BUILD=1" else ""}
               make installcheck REGRESS= ISOLATION= \
-                PROVE_TESTS='t/003_corruption.pl t/004_encodings.pl t/005_concurrency.pl t/006_concurrent_extend.pl t/007_segment_cap.pl t/008_vacuum_reclaim.pl t/010_vacuum_delete_heavy.pl t/011_shared_doclen.pl t/012_concurrent_flush.pl t/013_ranked_flush_race.pl' \
+                PROVE_TESTS='${proveTests}' \
                 PG_CONFIG=${pgConfigWrapped}/bin/pg_config \
                 || { echo '--- TAP logs ---'; cat tmp_check/log/*.log tmp_check/log/regress_log_* 2>/dev/null; exit 1; }
               touch $out
@@ -244,6 +257,9 @@
           # an idiom the nixpkgs-shipped harness rejects under the build sandbox.
           tap-pg17 = tapCheckFor pgVersions.pg17;
           tap-pg18 = tapCheckFor pgVersions.pg18;
+          # t/014 + t/015 against a -DPG_FTS_TEST_HOOKS build (ROADMAP I20, I8)
+          tap-hooks-pg17 = tapCheckWith { pg = pgVersions.pg17; hooks = true; };
+          tap-hooks-pg18 = tapCheckWith { pg = pgVersions.pg18; hooks = true; };
         };
 
         devShells.default = pkgs.mkShell {

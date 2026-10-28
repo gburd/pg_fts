@@ -4,6 +4,39 @@ All notable changes to pg_fts are documented here.
 
 ## Unreleased
 
+### Fixed
+
+- **A ranked scan during a pending flush could return a pending row twice** (ROADMAP
+  I20; the known issue shipped in 1.14.3).  Since 1.13.0.  A flush published its new
+  segment in one metapage update and cleared the pending list in a second; a ranked scan
+  whose candidate pass fell between the two saw each flushed document in both, and the
+  scores, `fts_index_df` and `fts_index_stats().ndocs` counted it twice.  The flush now
+  publishes the segment and drops the sealed pages from the list in one metapage
+  update.  New TAP test `t/014_flush_publish_window.pl` stops the flusher right after
+  the publish (a test-hooks build): 1.14.3 with the same pause returned 100 rows / 50
+  distinct ids, `LIMIT 10` 10 rows / 5 distinct, ndocs 300 and df `{100,300}` (3 of 3
+  runs, PG 17.10 and 18.6); this release 50 / 50, 10 / 10, 250 and `{50,250}` (3 of 3).
+- **An ERROR while the per-index relcache cache was rebuilt leaked the cache** (ROADMAP
+  I8; known issue since 1.12.0, defect since 1.5.8).  The chunk (segment page directory,
+  slot arrays, dictionary directories) was built in `CacheMemoryContext` and attached to
+  the relation only after the last builder, so a cancel, read error or out-of-memory in
+  between leaked it for the backend's life, once per failed rebuild.  Each chunk is now
+  attached as soon as it exists (and swapped before the old one is freed), with a
+  `complete` flag so a partial chunk is never served.  Measured on PG 17.10 with an
+  ERROR raised between the builders (a test-hooks build), `CacheMemoryContext`
+  used_bytes, one session: 1.14.3 grew 453,352 / 928,000 / 1,844,080 bytes over 40 / 80
+  / 160 failed rebuilds (about 11.5 kB each); this release 952 / 0 / -320.  40 clean rebuilds grew both by 9,720.  New TAP test
+  `t/015_cache_rebuild_error.pl` (1.14.3: +496,160 bytes over 40, FAIL 3 of 3 on PG 17.10
+  and 18.6; this release +32,160, PASS 3 of 3).
+
+### Tests
+
+- The test-hooks build gets two TEST-ONLY GUCs (`pg_fts.test_flush_pause_advisory_key`,
+  `pg_fts.test_cache_build_error`; neither exists in a normal build).  `t/014` and
+  `t/015` skip on a normal build; CI and the flake (`tap-hooks-pg17`, `tap-hooks-pg18`)
+  run them against a hooks build with `PG_FTS_TEST_HOOKS_BUILD=1`, which makes a missing
+  hook a failure.
+
 ## 1.14.3 - 2026-10-28
 
 Five fixes for issues reported by robinlahtinen on Codeberg (#6-#10, all against 1.14.2,

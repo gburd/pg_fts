@@ -190,6 +190,11 @@ extern FtsDoc fts_analyze_with_config(Oid cfgId, const char *str, int len, uint8
 /* TEST-ONLY (see pg_fts_customscan.c _PG_init): advisory key a scan waits on
  * mid-collect to expose the scan-vs-merge recycle window; 0 = off. */
 extern int pg_fts_test_pause_advisory_key;
+/* TEST-ONLY: advisory key a pending flush waits on right after publishing its
+ * segment (the 1.14.3 flush-window duplicate, t/014); 0 = off. */
+extern int pg_fts_test_flush_pause_advisory_key;
+/* TEST-ONLY: raise an ERROR in the middle of the relcache cache rebuild (t/015) */
+extern bool pg_fts_test_cache_build_error;
 #endif
 extern FtsDoc fts_doc_build(uint32 nterms, char **terms, const int *lens,
 							const uint32 *tfs, bool has_pos,
