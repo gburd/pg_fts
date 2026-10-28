@@ -22,6 +22,7 @@
 
 #include "pg_fts.h"
 #include "catalog/pg_type.h"
+#include "parser/scansup.h"
 #include "tsearch/ts_cache.h"
 #include "tsearch/ts_type.h"
 #include "tsearch/ts_utils.h"
@@ -32,12 +33,21 @@
  * Ties on (text, len) break by token position so a distinct-term run comes out
  * with its positions ascending -- phrase_step requires each term's position
  * list to be ascending (this mirrors cmp_rawterm in pg_fts_analyze.c). */
+typedef struct WordSortArg
+{
+	ParsedWord *words;
+	const uint32 *pos;			/* true 1-based token ordinal of each word */
+} WordSortArg;
+
 static int
 cmp_word_idx(const void *a, const void *b, void *arg)
 {
-	ParsedWord *words = (ParsedWord *) arg;
-	ParsedWord *wa = &words[*(const int *) a];
-	ParsedWord *wb = &words[*(const int *) b];
+	WordSortArg *sa = (WordSortArg *) arg;
+	ParsedWord *words = sa->words;
+	int			ia = *(const int *) a,
+				ib = *(const int *) b;
+	ParsedWord *wa = &words[ia];
+	ParsedWord *wb = &words[ib];
 	int			min = Min(wa->len, wb->len);
 	int			c = memcmp(wa->word, wb->word, min);
 
@@ -45,13 +55,10 @@ cmp_word_idx(const void *a, const void *b, void *arg)
 		return c;
 	if (wa->len != wb->len)
 		return wa->len - wb->len;
-	/* same term: order by position so positions come out ascending.
-	 * parsetext() fills pos.pos with a plain 1-based token ordinal via
-	 * LIMITPOS() (no weight bits, capped at MAXENTRYPOS-1); alen==0 so the
-	 * apos array form is never used on this path. */
-	if (wa->pos.pos < wb->pos.pos)
+	/* same term: order by position so positions come out ascending */
+	if (sa->pos[ia] < sa->pos[ib])
 		return -1;
-	if (wa->pos.pos > wb->pos.pos)
+	if (sa->pos[ia] > sa->pos[ib])
 		return 1;
 	return 0;
 }
@@ -66,8 +73,9 @@ cmp_word_idx(const void *a, const void *b, void *arg)
  * ParsedWord.pos.pos with a 1-based token ordinal.
  */
 static FtsDoc
-ftsdoc_from_parsed(ParsedText *prs, uint8 label)
+ftsdoc_from_parsed(ParsedText *prs, const uint32 *wpos, uint32 doclen, uint8 label)
 {
+	WordSortArg sa;
 	int			nw = prs->curwords;
 	ParsedWord *words = prs->words;
 	int		   *order;
@@ -101,7 +109,9 @@ ftsdoc_from_parsed(ParsedText *prs, uint8 label)
 	order = (int *) palloc(nw * sizeof(int));
 	for (i = 0; i < nw; i++)
 		order[i] = i;
-	qsort_arg(order, nw, sizeof(int), cmp_word_idx, words);
+	sa.words = words;
+	sa.pos = wpos;
+	qsort_arg(order, nw, sizeof(int), cmp_word_idx, &sa);
 
 	for (i = 0; i < nw;)
 	{
@@ -142,7 +152,7 @@ ftsdoc_from_parsed(ParsedText *prs, uint8 label)
 	doc->version = FTS_DOC_VERSION;
 	doc->flags = FTS_DOCF_POSITIONS;
 	doc->nterms = ndistinct;
-	doc->doclen = (uint32) prs->pos;
+	doc->doclen = doclen;
 	doc->lexbytes = lexbytes;
 
 	entries = FTS_DOC_ENTRIES(doc);
@@ -177,7 +187,7 @@ ftsdoc_from_parsed(ParsedText *prs, uint8 label)
 		off += w->len;
 		/* cmp_word_idx broke ties by pos, so this run is already ascending */
 		for (k = 0; k < run; k++)
-			positions[pidx++] = FTS_POS_MAKE(words[order[i + k]].pos.pos, label);
+			positions[pidx++] = FTS_POS_MAKE(wpos[order[i + k]], label);
 		ndistinct++;
 		i += run;
 	}
@@ -189,30 +199,82 @@ ftsdoc_from_parsed(ParsedText *prs, uint8 label)
 
 /*
  * fts_analyze_with_config -- analyze text using a specific TS configuration.
+ *
+ * Positions (CHANGELOG 1.14.4, ROADMAP I9): parsetext() stores each token's
+ * ordinal in a 16-bit field capped at MAXENTRYPOS - 1 = 16,383, so through
+ * 1.14.3 every token past the 16,383rd shared that position and a phrase
+ * starting there could not match (the unconfigured analyzer was not capped).
+ * Its own counter (prs.pos) is a full int32.  So text that could hold more
+ * than FTS_PARSE_CHUNK tokens is parsed in chunks of at most that many bytes
+ * -- a token is at least one byte, so no ordinal inside a chunk reaches the
+ * cap -- split at whitespace, and each chunk's ordinals are offset by the
+ * positions of the chunks before it.  A text no longer than one chunk is
+ * parsed exactly as before.  Splitting at whitespace leaves the default
+ * parser's token stream unchanged; a multi-word dictionary (thesaurus) phrase
+ * that straddles a chunk boundary is not matched across it.
  */
+#define FTS_PARSE_CHUNK (MAXENTRYPOS - 1)
+
 FtsDoc
 fts_analyze_with_config(Oid cfgId, const char *str, int len, uint8 label)
 {
 	ParsedText	prs;
 	FtsDoc		doc;
+	uint32	   *wpos;
+	int			capwpos;
+	uint32		base = 0;
+	int			start = 0;
 	char	   *buf;
 
-	prs.lenwords = Max(len / 6, 16);
+	prs.lenwords = Max(Min(len, FTS_PARSE_CHUNK) / 6, 16);
 	prs.curwords = 0;
 	prs.pos = 0;
 	prs.words = (ParsedWord *) palloc(sizeof(ParsedWord) * prs.lenwords);
+	capwpos = prs.lenwords;
+	wpos = (uint32 *) palloc(sizeof(uint32) * capwpos);	/* alloc-ok: grows with prs.lenwords (palloc-bounded) */
+	buf = (char *) palloc(Min(len, FTS_PARSE_CHUNK) + 1);
 
-	/* parsetext wants a writable buffer */
-	buf = (char *) palloc(len + 1);
-	memcpy(buf, str, len);
-	buf[len] = '\0';
+	while (start < len)
+	{
+		int			end = len;
+		int			first = prs.curwords;
+		int			i;
 
-	parsetext(cfgId, &prs, buf, len);
+		if (len - start > FTS_PARSE_CHUNK)
+		{
+			/* end after the last whitespace byte inside the chunk; a chunk
+			 * with none (one 16 kB "word") is cut where it is */
+			end = start + FTS_PARSE_CHUNK;
+			while (end > start && !scanner_isspace(str[end - 1]))
+				end--;
+			if (end == start)
+				end = start + FTS_PARSE_CHUNK;
+		}
+		/* parsetext wants a writable, NUL-terminated buffer */
+		memcpy(buf, str + start, end - start);
+		buf[end - start] = '\0';
+		prs.pos = 0;
+		parsetext(cfgId, &prs, buf, end - start);
+		if (prs.curwords > capwpos)
+		{
+			capwpos = prs.lenwords;
+			wpos = (uint32 *) repalloc(wpos, sizeof(uint32) * capwpos);	/* alloc-ok: as above */
+		}
+		for (i = first; i < prs.curwords; i++)
+			wpos[i] = base + prs.words[i].pos.pos;
+		if ((uint64) base + (uint64) prs.pos > FTS_POS_ORD_MASK)
+			ereport(ERROR,
+					(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+					 errmsg("ftsdoc document has too many token positions")));
+		base += (uint32) prs.pos;
+		start = end;
+	}
 
-	doc = ftsdoc_from_parsed(&prs, label);
+	doc = ftsdoc_from_parsed(&prs, wpos, base, label);
 
 	if (prs.words)
 		pfree(prs.words);
+	pfree(wpos);
 	pfree(buf);
 
 	return doc;

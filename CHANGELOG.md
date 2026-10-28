@@ -67,6 +67,20 @@ All notable changes to pg_fts are documented here.
   regression test `count_partial`: 8 query shapes, each count equal to a seq scan and
   non-zero, pushed down exactly in the 3 equivalent cases, and after deletes.
 
+- **The configured analyzer kept token positions past 16,383** (ROADMAP I9, reported in
+  PR #12).  `to_ftsdoc(config, text)` runs PostgreSQL's `parsetext()`, which stores each
+  token's ordinal in a 16-bit field capped at 16,383, so every later token shared one
+  position and a phrase or NEAR there never matched; the unconfigured `to_ftsdoc(text)`
+  was not affected.  Text that could hold more tokens than that is now parsed in chunks
+  of at most 16,383 bytes, split at whitespace, with each chunk's ordinals offset by the
+  positions before it; a text of one chunk is parsed exactly as before.
+  `to_ftsdoc('simple', repeat('filler ', 17000) || 'alpha beta') @@@ '"alpha beta"'` is
+  now true (1.14.3: false), and its value equals the unconfigured analyzer's.  **Stored
+  `ftsdoc` columns and expression indexes keep the positions they were built with**:
+  recompute the column, or REINDEX, to gain them; until then such a phrase still does not
+  match, as before.  A thesaurus phrase that straddles a chunk boundary is not matched
+  across it.  New regression test `long_positions` (5 checks fail on 1.14.3).
+
 ### Tests
 
 - The test-hooks build gets two TEST-ONLY GUCs (`pg_fts.test_flush_pause_advisory_key`,
