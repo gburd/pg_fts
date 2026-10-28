@@ -1,0 +1,174 @@
+ok 1         - planner_partial                            36 ms
+not ok 2     - planner_indexes                            89 ms
+ok 3         - planner_cost                               20 ms
+ok 4         - planner_pending                           175 ms
+# 1 of 4 tests failed.
+# The differences that caused some tests to fail can be viewed in the file "/nvme/iss/src_fix_17/regression.diffs".
+PG17 fix reg rc=2
+ok 1         - planner_partial                            38 ms
+not ok 2     - planner_indexes                            90 ms
+ok 3         - planner_cost                               21 ms
+ok 4         - planner_pending                           179 ms
+# 1 of 4 tests failed.
+# The differences that caused some tests to fail can be viewed in the file "/nvme/iss/src_fix_18/regression.diffs".
+PG18 fix reg rc=2
+not ok 1     - planner_partial                            36 ms
+# 1 of 1 tests failed.
+# The differences that caused some tests to fail can be viewed in the file "/nvme/iss/old_out_17/regression.diffs".
+PG17 v1.14.2 rc=1
+diff -U3 /nvme/iss/src_fix_17/expected/planner_partial.out /nvme/iss/old_out_17/results/planner_partial.out
+--- /nvme/iss/src_fix_17/expected/planner_partial.out	2026-10-28 12:05:44.000000000 +0000
++++ /nvme/iss/old_out_17/results/planner_partial.out	2026-10-28 12:06:01.497609974 +0000
+@@ -19,22 +19,24 @@
+ \set top3 'SELECT id FROM r WHERE live AND to_ftsdoc(''simple'', body) @@@ to_ftsquery(''simple'', ''common | rare'') ORDER BY to_ftsdoc(''simple'', body) <=> to_ftsquery(''simple'', ''common | rare'') LIMIT 3'
+ -- default plan: the ordering index scan (1.14.2: Limit -> Sort -> Bitmap Heap Scan)
+ EXPLAIN (COSTS OFF) :top3;
+-                                             QUERY PLAN                                             
+-----------------------------------------------------------------------------------------------------
++                                                      QUERY PLAN                                                       
++-----------------------------------------------------------------------------------------------------------------------
+  Limit
+-   ->  Index Scan using r_fts on r
+-         Index Cond: (to_ftsdoc('simple'::regconfig, body) @@@ '(''common'' | ''rare'')'::ftsquery)
+-         Order By: (to_ftsdoc('simple'::regconfig, body) <=> '(''common'' | ''rare'')'::ftsquery)
+-         Filter: live
+-(5 rows)
++   ->  Sort
++         Sort Key: ((to_ftsdoc('simple'::regconfig, body) <=> '(''common'' | ''rare'')'::ftsquery))
++         ->  Bitmap Heap Scan on r
++               Recheck Cond: ((to_ftsdoc('simple'::regconfig, body) @@@ '(''common'' | ''rare'')'::ftsquery) AND live)
++               ->  Bitmap Index Scan on r_fts
++                     Index Cond: (to_ftsdoc('simple'::regconfig, body) @@@ '(''common'' | ''rare'')'::ftsquery)
++(7 rows)
+ 
+ -- the BM25 order: 5000, 1, 2 (1.14.2: 2, 3, 1 -- the rare document missing)
+ :top3;
+-  id  
+-------
+- 5000
+-    1
+-    2
++ id 
++----
++  2
++  3
++  1
+ (3 rows)
+ 
+ -- the same order with every other plan disabled
+@@ -62,7 +64,7 @@
+          BETWEEN 500 AND 2000 AS est_from_partial_index;
+  est_from_partial_index 
+ ------------------------
+- t
++ f
+ (1 row)
+ 
+ -- a narrow predicate: the index holds 100 of 2000 rows, all of which match.
+@@ -77,7 +79,7 @@
+          BETWEEN 50 AND 200 AS narrow_predicate_est;
+  narrow_predicate_est 
+ ----------------------
+- t
++ f
+ (1 row)
+ 
+ -- a stricter qual implies the predicate too: id <= 50 matches ~50
+@@ -85,7 +87,7 @@
+          BETWEEN 25 AND 100 AS implied_predicate_est;
+  implied_predicate_est 
+ -----------------------
+- t
++ f
+ (1 row)
+ 
+ -- a term in a tenth of the index: ~10 of the 100 rows
+@@ -93,7 +95,7 @@
+          BETWEEN 5 AND 20 AS narrow_term_est;
+  narrow_term_est 
+ -----------------
+- t
++ f
+ (1 row)
+ 
+ -- predicate not implied: the index says nothing about rows outside it, so the
+not ok 1     - planner_partial                            37 ms
+# 1 of 1 tests failed.
+# The differences that caused some tests to fail can be viewed in the file "/nvme/iss/old_out_18/regression.diffs".
+PG18 v1.14.2 rc=1
+diff -U3 /nvme/iss/src_fix_18/expected/planner_partial.out /nvme/iss/old_out_18/results/planner_partial.out
+--- /nvme/iss/src_fix_18/expected/planner_partial.out	2026-10-28 12:05:44.000000000 +0000
++++ /nvme/iss/old_out_18/results/planner_partial.out	2026-10-28 12:06:01.585607743 +0000
+@@ -19,22 +19,24 @@
+ \set top3 'SELECT id FROM r WHERE live AND to_ftsdoc(''simple'', body) @@@ to_ftsquery(''simple'', ''common | rare'') ORDER BY to_ftsdoc(''simple'', body) <=> to_ftsquery(''simple'', ''common | rare'') LIMIT 3'
+ -- default plan: the ordering index scan (1.14.2: Limit -> Sort -> Bitmap Heap Scan)
+ EXPLAIN (COSTS OFF) :top3;
+-                                             QUERY PLAN                                             
+-----------------------------------------------------------------------------------------------------
++                                                      QUERY PLAN                                                       
++-----------------------------------------------------------------------------------------------------------------------
+  Limit
+-   ->  Index Scan using r_fts on r
+-         Index Cond: (to_ftsdoc('simple'::regconfig, body) @@@ '(''common'' | ''rare'')'::ftsquery)
+-         Order By: (to_ftsdoc('simple'::regconfig, body) <=> '(''common'' | ''rare'')'::ftsquery)
+-         Filter: live
+-(5 rows)
++   ->  Sort
++         Sort Key: ((to_ftsdoc('simple'::regconfig, body) <=> '(''common'' | ''rare'')'::ftsquery))
++         ->  Bitmap Heap Scan on r
++               Recheck Cond: ((to_ftsdoc('simple'::regconfig, body) @@@ '(''common'' | ''rare'')'::ftsquery) AND live)
++               ->  Bitmap Index Scan on r_fts
++                     Index Cond: (to_ftsdoc('simple'::regconfig, body) @@@ '(''common'' | ''rare'')'::ftsquery)
++(7 rows)
+ 
+ -- the BM25 order: 5000, 1, 2 (1.14.2: 2, 3, 1 -- the rare document missing)
+ :top3;
+-  id  
+-------
+- 5000
+-    1
+-    2
++ id 
++----
++  2
++  3
++  1
+ (3 rows)
+ 
+ -- the same order with every other plan disabled
+@@ -62,7 +64,7 @@
+          BETWEEN 500 AND 2000 AS est_from_partial_index;
+  est_from_partial_index 
+ ------------------------
+- t
++ f
+ (1 row)
+ 
+ -- a narrow predicate: the index holds 100 of 2000 rows, all of which match.
+@@ -77,7 +79,7 @@
+          BETWEEN 50 AND 200 AS narrow_predicate_est;
+  narrow_predicate_est 
+ ----------------------
+- t
++ f
+ (1 row)
+ 
+ -- a stricter qual implies the predicate too: id <= 50 matches ~50
+@@ -85,7 +87,7 @@
+          BETWEEN 25 AND 100 AS implied_predicate_est;
+  implied_predicate_est 
+ -----------------------
+- t
++ f
+ (1 row)
+ 
+ -- a term in a tenth of the index: ~10 of the 100 rows
+@@ -93,7 +95,7 @@
+          BETWEEN 5 AND 20 AS narrow_term_est;
+  narrow_term_est 
+ -----------------
+- t
++ f
+ (1 row)
+ 
+ -- predicate not implied: the index says nothing about rows outside it, so the

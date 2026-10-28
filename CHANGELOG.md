@@ -97,6 +97,13 @@ Measured on PostgreSQL 17.10 and 18.6 (`bench/RESULTS_1143_2026-10-28.md`).
   `ranked_empty_and`; each fails on 1.14.2.  `test/asan_smoke.sql` gains the
   2000-term short-`dfs` probe (NaN on 1.14.2).  `planner_indexes`' covered-predicate
   count now plans a bitmap scan (estimate 100 instead of 1; same count).
+- `vacuum_parallel`'s `serial_reclaims` size check failed 2 of 27 nix PG 17 runs (1.14.2
+  and this release; ROADMAP I18).  Another backend's snapshot, even in another
+  database, keeps freed pages from being recycled (`bm25_page_recyclable`'s XID gate):
+  with a snapshot held open the check failed 3 of 3, without it passed 3 of 3 (the
+  snapshot in the nix runs was most likely an autovacuum worker's; not confirmed).  The test
+  now waits, bounded at 60 s, for other snapshots to end before each non-parallel
+  VACUUM.  Test-only; the check still fails when a snapshot outlives the bound.
 
 ## 1.14.2 - 2026-10-25
 

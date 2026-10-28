@@ -1,0 +1,94 @@
+ok 1         - bm25_dfs                                   14 ms
+# All 1 tests passed.
+All tests successful.
+PG17 fix reg rc=0
+ok 1         - bm25_dfs                                   14 ms
+# All 1 tests passed.
+All tests successful.
+PG18 fix reg rc=0
+not ok 1     - bm25_dfs                                   14 ms
+# 1 of 1 tests failed.
+# The differences that caused some tests to fail can be viewed in the file "/nvme/iss/old_out_17/regression.diffs".
+PG17 v1.14.2 rc=1
+diff -U3 /nvme/iss/src_fix_17/expected/bm25_dfs.out /nvme/iss/old_out_17/results/bm25_dfs.out
+--- /nvme/iss/src_fix_17/expected/bm25_dfs.out	2026-10-28 11:44:30.819918597 +0000
++++ /nvme/iss/old_out_17/results/bm25_dfs.out	2026-10-28 11:44:31.891934842 +0000
+@@ -38,7 +38,7 @@
+ SELECT round(:y::numeric, 4) AS empty_after_500, :y::float8 = :ref::float8 AS empty_eq_null;
+  empty_after_500 | empty_eq_null 
+ -----------------+---------------
+-         13.0066 | t
++          7.1964 | f
+ (1 row)
+ 
+ -- a large n_docs widens bm25_idf's clamp window, so a stale df shows in full
+@@ -48,7 +48,7 @@
+ SELECT round(:y::numeric, 4) AS bign_empty_after_1e9, :y::float8 = :refbig::float8 AS bign_empty_eq_null;
+  bign_empty_after_1e9 | bign_empty_eq_null 
+ ----------------------+--------------------
+-              54.4511 | t
++              34.1333 | f
+ (1 row)
+ 
+ -- a NULL element is df = 1 too
+@@ -64,7 +64,7 @@
+ SELECT round(:y::numeric, 4) AS opts_empty_after_1e9, :y::float8 = :refbig::float8 AS opts_empty_eq_null;
+  opts_empty_after_1e9 | opts_empty_eq_null 
+ ----------------------+--------------------
+-              54.4511 | t
++              34.1333 | f
+ (1 row)
+ 
+ SELECT fts_bm25_opts(:d, :q, 1e12, 2, 1.2, 0.75, 'robertson', ARRAY[1e9]::float8[]) AS x \gset
+@@ -72,7 +72,7 @@
+ SELECT :y::float8 = fts_bm25_opts(:d, :q, 1e12, 2, 1.2, 0.75, 'robertson', NULL) AS opts_rob_empty_eq_null;
+  opts_rob_empty_eq_null 
+ ------------------------
+- t
++ f
+ (1 row)
+ 
+ -- fts_bm25f already guarded the read; with one field of weight 1 it agrees
+not ok 1     - bm25_dfs                                   14 ms
+# 1 of 1 tests failed.
+# The differences that caused some tests to fail can be viewed in the file "/nvme/iss/old_out_18/regression.diffs".
+PG18 v1.14.2 rc=1
+diff -U3 /nvme/iss/src_fix_18/expected/bm25_dfs.out /nvme/iss/old_out_18/results/bm25_dfs.out
+--- /nvme/iss/src_fix_18/expected/bm25_dfs.out	2026-10-28 11:44:31.371926958 +0000
++++ /nvme/iss/old_out_18/results/bm25_dfs.out	2026-10-28 11:44:31.955935813 +0000
+@@ -38,7 +38,7 @@
+ SELECT round(:y::numeric, 4) AS empty_after_500, :y::float8 = :ref::float8 AS empty_eq_null;
+  empty_after_500 | empty_eq_null 
+ -----------------+---------------
+-         13.0066 | t
++          7.1964 | f
+ (1 row)
+ 
+ -- a large n_docs widens bm25_idf's clamp window, so a stale df shows in full
+@@ -48,7 +48,7 @@
+ SELECT round(:y::numeric, 4) AS bign_empty_after_1e9, :y::float8 = :refbig::float8 AS bign_empty_eq_null;
+  bign_empty_after_1e9 | bign_empty_eq_null 
+ ----------------------+--------------------
+-              54.4511 | t
++              34.1333 | f
+ (1 row)
+ 
+ -- a NULL element is df = 1 too
+@@ -64,7 +64,7 @@
+ SELECT round(:y::numeric, 4) AS opts_empty_after_1e9, :y::float8 = :refbig::float8 AS opts_empty_eq_null;
+  opts_empty_after_1e9 | opts_empty_eq_null 
+ ----------------------+--------------------
+-              54.4511 | t
++              34.1333 | f
+ (1 row)
+ 
+ SELECT fts_bm25_opts(:d, :q, 1e12, 2, 1.2, 0.75, 'robertson', ARRAY[1e9]::float8[]) AS x \gset
+@@ -72,7 +72,7 @@
+ SELECT :y::float8 = fts_bm25_opts(:d, :q, 1e12, 2, 1.2, 0.75, 'robertson', NULL) AS opts_rob_empty_eq_null;
+  opts_rob_empty_eq_null 
+ ------------------------
+- t
++ f
+ (1 row)
+ 
+ -- fts_bm25f already guarded the read; with one field of weight 1 it agrees

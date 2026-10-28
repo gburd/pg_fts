@@ -1,0 +1,258 @@
+######## PG 17.10 allpaths.c set_plain_rel_size
+set_plain_rel_size(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
+{
+	/*
+	 * Test any partial indexes of rel for applicability.  We must do this
+	 * first since partial unique indexes can affect size estimates.
+	 */
+	check_index_predicates(root, rel);
+
+	/* Mark rel with estimated output rows, width, etc */
+	set_baserel_size_estimates(root, rel);
+}
+######## PG 17.10 indxpath.c check_index_predicates header + predOK assignment
+34:#include "optimizer/restrictinfo.h"
+317:										  rel->baserestrictinfo, NIL);
+325:										  joinorclauses, rel->baserestrictinfo);
+1360:	clauselist = NIL;
+1765:	foreach(lc, index->indrestrictinfo)
+1973:	match_clauses_to_index(root, index->indrestrictinfo, index, clauseset);
+2376:		iclause->indexquals = list_make1(make_simple_restrictinfo(root, op));
+2476:				commrinfo = commute_restrictinfo(rinfo, comm_op);
+2602:								 make_simple_restrictinfo(root, clause));
+2977:			iclause->indexquals = list_make1(make_simple_restrictinfo(root,
+2992:			iclause->indexquals = list_make1(make_simple_restrictinfo(root, op));
+3230: * indrestrictinfo is set to the relation's baserestrictinfo list less any
+3232: * non-partial index, this is the same as baserestrictinfo.)  Such conditions
+3239: * baserestrictinfo list.  We assume that adding more restrictions can't make
+3240: * an index not predOK.  We must recompute indrestrictinfo each time, though,
+3244:check_index_predicates(PlannerInfo *root, RelOptInfo *rel)
+3256:	 * Initialize the indrestrictinfo lists to be identical to
+3257:	 * baserestrictinfo, and check whether there are any partial indexes.  If
+3265:		index->indrestrictinfo = rel->baserestrictinfo;
+3279:	clauselist = list_copy(rel->baserestrictinfo);
+check_index_predicates(PlannerInfo *root, RelOptInfo *rel)
+{
+	List	   *clauselist;
+	bool		have_partial;
+	bool		is_target_rel;
+	Relids		otherrels;
+	ListCell   *lc;
+
+	/* Indexes are available only on base or "other" member relations. */
+	Assert(IS_SIMPLE_REL(rel));
+
+	/*
+	 * Initialize the indrestrictinfo lists to be identical to
+	 * baserestrictinfo, and check whether there are any partial indexes.  If
+	 * not, this is all we need to do.
+	 */
+	have_partial = false;
+	foreach(lc, rel->indexlist)
+	{
+		IndexOptInfo *index = (IndexOptInfo *) lfirst(lc);
+
+		index->indrestrictinfo = rel->baserestrictinfo;
+		if (index->indpred)
+			have_partial = true;
+	}
+	if (!have_partial)
+		return;
+
+	/*
+	 * Construct a list of clauses that we can assume true for the purpose of
+	 * proving the index(es) usable.  Restriction clauses for the rel are
+	 * always usable, and so are any join clauses that are "movable to" this
+	 * rel.  Also, we can consider any EC-derivable join clauses (which must
+	 * be "movable to" this rel, by definition).
+	 */
+	clauselist = list_copy(rel->baserestrictinfo);
+
+	/* Scan the rel's join clauses */
+	foreach(lc, rel->joininfo)
+	{
+		RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
+
+		/* Check if clause can be moved to this rel */
+		if (!join_clause_is_movable_to(rinfo, rel))
+			continue;
+
+		clauselist = lappend(clauselist, rinfo);
+	}
+
+	/*
+	 * Add on any equivalence-derivable join clauses.  Computing the correct
+	 * relid sets for generate_join_implied_equalities is slightly tricky
+	 * because the rel could be a child rel rather than a true baserel, and in
+	 * that case we must subtract its parents' relid(s) from all_query_rels.
+	 * Additionally, we mustn't consider clauses that are only computable
+	 * after outer joins that can null the rel.
+	 */
+	if (rel->reloptkind == RELOPT_OTHER_MEMBER_REL)
+		otherrels = bms_difference(root->all_query_rels,
+								   find_childrel_parents(root, rel));
+	else
+		otherrels = bms_difference(root->all_query_rels, rel->relids);
+	otherrels = bms_del_members(otherrels, rel->nulling_relids);
+
+	if (!bms_is_empty(otherrels))
+		clauselist =
+			list_concat(clauselist,
+						generate_join_implied_equalities(root,
+														 bms_union(rel->relids,
+																   otherrels),
+														 otherrels,
+														 rel,
+														 NULL));
+
+	/*
+	 * Normally we remove quals that are implied by a partial index's
+	 * predicate from indrestrictinfo, indicating that they need not be
+	 * checked explicitly by an indexscan plan using this index.  However, if
+	 * the rel is a target relation of UPDATE/DELETE/MERGE/SELECT FOR UPDATE,
+	 * we cannot remove such quals from the plan, because they need to be in
+	 * the plan so that they will be properly rechecked by EvalPlanQual
+	 * testing.  Some day we might want to remove such quals from the main
+	 * plan anyway and pass them through to EvalPlanQual via a side channel;
+	 * but for now, we just don't remove implied quals at all for target
+	 * relations.
+	 */
+	is_target_rel = (bms_is_member(rel->relid, root->all_result_relids) ||
+					 get_plan_rowmark(root->rowMarks, rel->relid) != NULL);
+
+	/*
+######## PG 17.10 where is check_index_predicates called
+/nvme/postgresql-17.10/src/backend/optimizer/path/allpaths.c:578:	check_index_predicates(root, rel);
+/nvme/postgresql-17.10/src/backend/optimizer/path/allpaths.c:825:	check_index_predicates(root, rel);
+/nvme/postgresql-17.10/src/backend/optimizer/path/indxpath.c:3244:check_index_predicates(PlannerInfo *root, RelOptInfo *rel)
+######## PG 17.10 clausesel/restrictinfo: where is selectivity cached (norm_selec)
+963:			rinfo->norm_selec = s1;
+######## PG 18.6 allpaths.c set_plain_rel_size
+set_plain_rel_size(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
+{
+	/*
+	 * Test any partial indexes of rel for applicability.  We must do this
+	 * first since partial unique indexes can affect size estimates.
+	 */
+	check_index_predicates(root, rel);
+
+	/* Mark rel with estimated output rows, width, etc */
+	set_baserel_size_estimates(root, rel);
+}
+######## PG 18.6 indxpath.c check_index_predicates header + predOK assignment
+36:#include "optimizer/restrictinfo.h"
+323:										  rel->baserestrictinfo, NIL);
+331:										  joinorclauses, rel->baserestrictinfo);
+1258: *		Transform incoming OR-restrictinfo into a list of sub-restrictinfos,
+1463:	 * Group similar clauses into single sub-restrictinfo. Side effect: the
+1512:				subrinfo = make_plain_restrictinfo(root,
+1515:												   rinfo->is_pushed_down,
+1858:	clauselist = NIL;
+2263:	foreach(lc, index->indrestrictinfo)
+2471:	match_clauses_to_index(root, index->indrestrictinfo, index, clauseset);
+2888:		iclause->indexquals = list_make1(make_simple_restrictinfo(root, op));
+2988:				commrinfo = commute_restrictinfo(rinfo, comm_op);
+3114:								 make_simple_restrictinfo(root, clause));
+3463:	iclause->indexquals = list_make1(make_simple_restrictinfo(root,
+3674:			iclause->indexquals = list_make1(make_simple_restrictinfo(root,
+3689:			iclause->indexquals = list_make1(make_simple_restrictinfo(root, op));
+3928: * indrestrictinfo is set to the relation's baserestrictinfo list less any
+3930: * non-partial index, this is the same as baserestrictinfo.)  Such conditions
+3937: * baserestrictinfo list.  We assume that adding more restrictions can't make
+3938: * an index not predOK.  We must recompute indrestrictinfo each time, though,
+check_index_predicates(PlannerInfo *root, RelOptInfo *rel)
+{
+	List	   *clauselist;
+	bool		have_partial;
+	bool		is_target_rel;
+	Relids		otherrels;
+	ListCell   *lc;
+
+	/* Indexes are available only on base or "other" member relations. */
+	Assert(IS_SIMPLE_REL(rel));
+
+	/*
+	 * Initialize the indrestrictinfo lists to be identical to
+	 * baserestrictinfo, and check whether there are any partial indexes.  If
+	 * not, this is all we need to do.
+	 */
+	have_partial = false;
+	foreach(lc, rel->indexlist)
+	{
+		IndexOptInfo *index = (IndexOptInfo *) lfirst(lc);
+
+		index->indrestrictinfo = rel->baserestrictinfo;
+		if (index->indpred)
+			have_partial = true;
+	}
+	if (!have_partial)
+		return;
+
+	/*
+	 * Construct a list of clauses that we can assume true for the purpose of
+	 * proving the index(es) usable.  Restriction clauses for the rel are
+	 * always usable, and so are any join clauses that are "movable to" this
+	 * rel.  Also, we can consider any EC-derivable join clauses (which must
+	 * be "movable to" this rel, by definition).
+	 */
+	clauselist = list_copy(rel->baserestrictinfo);
+
+	/* Scan the rel's join clauses */
+	foreach(lc, rel->joininfo)
+	{
+		RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
+
+		/* Check if clause can be moved to this rel */
+		if (!join_clause_is_movable_to(rinfo, rel))
+			continue;
+
+		clauselist = lappend(clauselist, rinfo);
+	}
+
+	/*
+	 * Add on any equivalence-derivable join clauses.  Computing the correct
+	 * relid sets for generate_join_implied_equalities is slightly tricky
+	 * because the rel could be a child rel rather than a true baserel, and in
+	 * that case we must subtract its parents' relid(s) from all_query_rels.
+	 * Additionally, we mustn't consider clauses that are only computable
+	 * after outer joins that can null the rel.
+	 */
+	if (rel->reloptkind == RELOPT_OTHER_MEMBER_REL)
+		otherrels = bms_difference(root->all_query_rels,
+								   find_childrel_parents(root, rel));
+	else
+		otherrels = bms_difference(root->all_query_rels, rel->relids);
+	otherrels = bms_del_members(otherrels, rel->nulling_relids);
+
+	if (!bms_is_empty(otherrels))
+		clauselist =
+			list_concat(clauselist,
+						generate_join_implied_equalities(root,
+														 bms_union(rel->relids,
+																   otherrels),
+														 otherrels,
+														 rel,
+														 NULL));
+
+	/*
+	 * Normally we remove quals that are implied by a partial index's
+	 * predicate from indrestrictinfo, indicating that they need not be
+	 * checked explicitly by an indexscan plan using this index.  However, if
+	 * the rel is a target relation of UPDATE/DELETE/MERGE/SELECT FOR UPDATE,
+	 * we cannot remove such quals from the plan, because they need to be in
+	 * the plan so that they will be properly rechecked by EvalPlanQual
+	 * testing.  Some day we might want to remove such quals from the main
+	 * plan anyway and pass them through to EvalPlanQual via a side channel;
+	 * but for now, we just don't remove implied quals at all for target
+	 * relations.
+	 */
+	is_target_rel = (bms_is_member(rel->relid, root->all_result_relids) ||
+					 get_plan_rowmark(root->rowMarks, rel->relid) != NULL);
+
+	/*
+######## PG 18.6 where is check_index_predicates called
+/nvme/postgresql-18.6/src/backend/optimizer/path/allpaths.c:582:	check_index_predicates(root, rel);
+/nvme/postgresql-18.6/src/backend/optimizer/path/allpaths.c:841:	check_index_predicates(root, rel);
+/nvme/postgresql-18.6/src/backend/optimizer/path/indxpath.c:3942:check_index_predicates(PlannerInfo *root, RelOptInfo *rel)
+######## PG 18.6 clausesel/restrictinfo: where is selectivity cached (norm_selec)
+963:			rinfo->norm_selec = s1;

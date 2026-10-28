@@ -1,0 +1,73 @@
+### PG17 v1142 so=894d0018
+  ext   
+--------
+ 1.14.2
+
+ bm25_empty_dfs_2000terms | bm25_null_dfs_2000terms 
+--------------------------+-------------------------
+                      NaN |      1312.0749883287324
+
+psql:/tmp/claims.sql:10: NOTICE:  table "pm" does not exist, skipping
+ merged 
+--------
+ t
+
+ rows_compared | max_score_change_at_merge 
+---------------+---------------------------
+           150 |                    3.5165
+
+### PG17 fix so=418b4166
+  ext   
+--------
+ 1.14.2
+
+ bm25_empty_dfs_2000terms | bm25_null_dfs_2000terms 
+--------------------------+-------------------------
+       1312.0749883287324 |      1312.0749883287324
+
+psql:/tmp/claims.sql:10: NOTICE:  table "pm" does not exist, skipping
+ merged 
+--------
+ t
+
+ rows_compared | max_score_change_at_merge 
+---------------+---------------------------
+           150 |                    0.0000
+
+### PG18 v1142 so=546732a6
+  ext   
+--------
+ 1.14.2
+
+ bm25_empty_dfs_2000terms | bm25_null_dfs_2000terms 
+--------------------------+-------------------------
+                      NaN |      1312.0749883287324
+
+psql:/tmp/claims.sql:10: NOTICE:  table "pm" does not exist, skipping
+ merged 
+--------
+ t
+
+ rows_compared | max_score_change_at_merge 
+---------------+---------------------------
+           150 |                    3.5165
+
+### PG18 fix so=52261013
+  ext   
+--------
+ 1.14.2
+
+ bm25_empty_dfs_2000terms | bm25_null_dfs_2000terms 
+--------------------------+-------------------------
+       1312.0749883287324 |      1312.0749883287324
+
+psql:/tmp/claims.sql:10: NOTICE:  table "pm" does not exist, skipping
+ merged 
+--------
+ t
+
+ rows_compared | max_score_change_at_merge 
+---------------+---------------------------
+           150 |                    0.0000
+
+CLAIMS_DONE

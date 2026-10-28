@@ -1,0 +1,251 @@
+SET
+SET
+SET
+PREPARE
+ id  
+-----
+   3
+  50
+  78
+ 110
+ 123
+ 142
+ 152
+ 160
+ 161
+ 179
+(10 rows)
+
+CORRECTNESS
+            q            |                  ids                  
+-------------------------+---------------------------------------
+ zzzq & apple            | 
+ zzzq & (apple | banana) | 
+ rare & apple            | {123456}
+ rare & (apple | banana) | {123456}
+ apple | banana          | {3,50,78,110,123,142,152,160,161,179}
+ zzzq & (apple | ban:*)  | 
+ zzzq & ban:*            | 
+(7 rows)
+
+BUFFERS
+                                                    QUERY PLAN                                                    
+------------------------------------------------------------------------------------------------------------------
+ Limit (actual rows=0.00 loops=1)
+   Buffers: shared hit=1581
+   ->  Index Scan using docs_fts on docs (actual rows=0.00 loops=1)
+         Index Cond: (to_ftsdoc('simple'::regconfig, body) @@@ '(''zzzq'' & (''apple'' | ''banana''))'::ftsquery)
+         Order By: (to_ftsdoc('simple'::regconfig, body) <=> '(''zzzq'' & (''apple'' | ''banana''))'::ftsquery)
+         Index Searches: 0
+         Buffers: shared hit=1581
+ Planning:
+   Buffers: shared hit=4
+(9 rows)
+
+                                                    QUERY PLAN                                                    
+------------------------------------------------------------------------------------------------------------------
+ Limit (actual rows=1.00 loops=1)
+   Buffers: shared hit=501
+   ->  Index Scan using docs_fts on docs (actual rows=1.00 loops=1)
+         Index Cond: (to_ftsdoc('simple'::regconfig, body) @@@ '(''rare'' & (''apple'' | ''banana''))'::ftsquery)
+         Order By: (to_ftsdoc('simple'::regconfig, body) <=> '(''rare'' & (''apple'' | ''banana''))'::ftsquery)
+         Index Searches: 0
+         Buffers: shared hit=501
+ Planning:
+   Buffers: shared hit=4
+(9 rows)
+
+                                            QUERY PLAN                                             
+---------------------------------------------------------------------------------------------------
+ Limit (actual rows=0.00 loops=1)
+   Buffers: shared hit=10
+   ->  Index Scan using docs_fts on docs (actual rows=0.00 loops=1)
+         Index Cond: (to_ftsdoc('simple'::regconfig, body) @@@ '(''zzzq'' & ''apple'')'::ftsquery)
+         Order By: (to_ftsdoc('simple'::regconfig, body) <=> '(''zzzq'' & ''apple'')'::ftsquery)
+         Index Searches: 0
+         Buffers: shared hit=10
+ Planning:
+   Buffers: shared hit=3
+(9 rows)
+
+                                             QUERY PLAN                                              
+-----------------------------------------------------------------------------------------------------
+ Limit (actual rows=10.00 loops=1)
+   Buffers: shared hit=2772
+   ->  Index Scan using docs_fts on docs (actual rows=10.00 loops=1)
+         Index Cond: (to_ftsdoc('simple'::regconfig, body) @@@ '(''apple'' | ''banana'')'::ftsquery)
+         Order By: (to_ftsdoc('simple'::regconfig, body) <=> '(''apple'' | ''banana'')'::ftsquery)
+         Index Searches: 0
+         Buffers: shared hit=2772
+ Planning:
+   Buffers: shared hit=3
+(9 rows)
+
+TIMING zzzq & apple
+Timing is on.
+Time: 0.067 ms
+Time: 0.068 ms
+Time: 0.067 ms
+Time: 0.066 ms
+Time: 0.067 ms
+Time: 0.067 ms
+Time: 0.067 ms
+Time: 0.067 ms
+Time: 0.085 ms
+Time: 0.071 ms
+Time: 0.068 ms
+Time: 0.066 ms
+Time: 0.065 ms
+Time: 0.066 ms
+Time: 0.066 ms
+Time: 0.065 ms
+Time: 0.066 ms
+Time: 0.076 ms
+Time: 0.066 ms
+Time: 0.066 ms
+Time: 0.066 ms
+Timing is off.
+TIMING zzzq & (apple | banana)
+Timing is on.
+Time: 10.698 ms
+Time: 10.720 ms
+Time: 10.726 ms
+Time: 10.684 ms
+Time: 10.679 ms
+Time: 10.705 ms
+Time: 10.658 ms
+Time: 10.677 ms
+Time: 10.714 ms
+Time: 10.677 ms
+Time: 10.696 ms
+Time: 10.697 ms
+Time: 10.712 ms
+Time: 10.711 ms
+Time: 10.697 ms
+Time: 10.699 ms
+Time: 10.661 ms
+Time: 10.716 ms
+Time: 10.738 ms
+Time: 10.721 ms
+Time: 10.726 ms
+Timing is off.
+TIMING rare & apple
+Timing is on.
+Time: 0.080 ms
+Time: 0.079 ms
+Time: 0.079 ms
+Time: 0.080 ms
+Time: 0.079 ms
+Time: 0.079 ms
+Time: 0.078 ms
+Time: 0.078 ms
+Time: 0.078 ms
+Time: 0.078 ms
+Time: 0.078 ms
+Time: 0.078 ms
+Time: 0.078 ms
+Time: 0.078 ms
+Time: 0.078 ms
+Time: 0.078 ms
+Time: 0.078 ms
+Time: 0.077 ms
+Time: 0.077 ms
+Time: 0.078 ms
+Time: 0.090 ms
+Timing is off.
+TIMING rare & (apple | banana)
+Timing is on.
+Time: 3.545 ms
+Time: 3.554 ms
+Time: 3.558 ms
+Time: 3.561 ms
+Time: 3.543 ms
+Time: 3.542 ms
+Time: 3.534 ms
+Time: 3.568 ms
+Time: 3.550 ms
+Time: 3.552 ms
+Time: 3.566 ms
+Time: 3.557 ms
+Time: 3.574 ms
+Time: 3.562 ms
+Time: 3.582 ms
+Time: 3.545 ms
+Time: 3.556 ms
+Time: 3.549 ms
+Time: 3.567 ms
+Time: 3.554 ms
+Time: 3.554 ms
+Timing is off.
+TIMING apple | banana
+Timing is on.
+Time: 7.670 ms
+Time: 7.605 ms
+Time: 7.632 ms
+Time: 7.615 ms
+Time: 7.651 ms
+Time: 7.629 ms
+Time: 7.642 ms
+Time: 7.610 ms
+Time: 7.657 ms
+Time: 7.623 ms
+Time: 7.648 ms
+Time: 7.634 ms
+Time: 7.604 ms
+Time: 7.612 ms
+Time: 7.619 ms
+Time: 7.613 ms
+Time: 7.627 ms
+Time: 7.614 ms
+Time: 7.614 ms
+Time: 7.615 ms
+Time: 7.623 ms
+Timing is off.
+TIMING zzzq & (apple | ban:*)
+Timing is on.
+Time: 3.218 ms
+Time: 3.192 ms
+Time: 3.204 ms
+Time: 3.146 ms
+Time: 3.188 ms
+Time: 3.171 ms
+Time: 3.186 ms
+Time: 3.184 ms
+Time: 3.166 ms
+Time: 3.195 ms
+Time: 3.183 ms
+Time: 3.188 ms
+Time: 3.168 ms
+Time: 3.175 ms
+Time: 3.189 ms
+Time: 3.180 ms
+Time: 3.179 ms
+Time: 3.188 ms
+Time: 3.178 ms
+Time: 3.203 ms
+Time: 3.188 ms
+Timing is off.
+TIMING zzzq & ban:*
+Timing is on.
+Time: 0.898 ms
+Time: 0.897 ms
+Time: 0.895 ms
+Time: 0.919 ms
+Time: 0.908 ms
+Time: 0.903 ms
+Time: 0.895 ms
+Time: 0.919 ms
+Time: 0.908 ms
+Time: 0.898 ms
+Time: 0.903 ms
+Time: 0.901 ms
+Time: 0.933 ms
+Time: 0.898 ms
+Time: 0.901 ms
+Time: 0.902 ms
+Time: 0.913 ms
+Time: 0.913 ms
+Time: 0.894 ms
+Time: 0.896 ms
+Time: 0.919 ms
+Timing is off.

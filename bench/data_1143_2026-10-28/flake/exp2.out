@@ -1,0 +1,19 @@
+PG17 none: diff_lines=0 serial_reclaims=t secs=6.280239660
+PG17 short: diff_lines=0 serial_reclaims=t secs=19.444058025
+PG17 none: diff_lines=0 serial_reclaims=t secs=6.275130220
+PG17 short: diff_lines=0 serial_reclaims=t secs=19.443023501
+PG17 long: diff_lines=2 serial_reclaims=f secs=127.576157268
+128c128
+<  t
+---
+>  f
+PG18 none: diff_lines=0 serial_reclaims=t secs=6.447396493
+PG18 short: diff_lines=0 serial_reclaims=t secs=19.441824395
+PG18 none: diff_lines=0 serial_reclaims=t secs=6.346465895
+PG18 short: diff_lines=0 serial_reclaims=t secs=19.437603183
+PG18 long: diff_lines=2 serial_reclaims=f secs=127.623267278
+128c128
+<  t
+---
+>  f
+VPEXP2_DONE

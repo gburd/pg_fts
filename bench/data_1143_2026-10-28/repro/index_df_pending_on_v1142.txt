@@ -1,0 +1,164 @@
+ok 1         - index_df_pending                           29 ms
+# All 1 tests passed.
+All tests successful.
+PG17 fix reg rc=0
+ok 1         - index_df_pending                           31 ms
+# All 1 tests passed.
+All tests successful.
+PG18 fix reg rc=0
+not ok 1     - index_df_pending                           28 ms
+# 1 of 1 tests failed.
+# The differences that caused some tests to fail can be viewed in the file "/nvme/iss/old_out_17/regression.diffs".
+PG17 v1.14.2 rc=1
+diff -U3 /nvme/iss/src_fix_17/expected/index_df_pending.out /nvme/iss/old_out_17/results/index_df_pending.out
+--- /nvme/iss/src_fix_17/expected/index_df_pending.out	2026-10-28 12:36:56.000000000 +0000
++++ /nvme/iss/old_out_17/results/index_df_pending.out	2026-10-28 12:37:14.705204969 +0000
+@@ -21,14 +21,14 @@
+ SELECT fts_index_df('p_fts', to_ftsquery('simple', 'fresh | old1')) AS df_pending;
+  df_pending 
+ ------------
+- {50,10}
++ {1,10}
+ (1 row)
+ 
+ -- a term in neither the segments nor the pending list still reports 1
+ SELECT fts_index_df('p_fts', to_ftsquery('simple', 'nosuchterm | word | fresh')) AS df_absent;
+  df_absent 
+ -----------
+- {1,50,50}
++ {1,1,1}
+ (1 row)
+ 
+ -- the README recipe agrees with the ranked engine's own score for every
+@@ -67,19 +67,19 @@
+ SELECT 'before merge' AS state, * FROM pg_temp.recipe_vs_scan('fresh | old1');
+     state     | nrows | npending | agree 
+ --------------+-------+----------+-------
+- before merge |    60 |       50 | t
++ before merge |    60 |       50 | f
+ (1 row)
+ 
+ SELECT 'before merge' AS state, * FROM pg_temp.recipe_vs_scan('fresh');
+     state     | nrows | npending | agree 
+ --------------+-------+----------+-------
+- before merge |    50 |       50 | t
++ before merge |    50 |       50 | f
+ (1 row)
+ 
+ SELECT pg_temp.recipe_follows_scan_order('fresh | old1') AS before_merge_order_ok;
+  before_merge_order_ok 
+ -----------------------
+- t
++ f
+ (1 row)
+ 
+ EXPLAIN (COSTS OFF) SELECT id FROM p WHERE to_ftsdoc('simple', body) @@@ to_ftsquery('simple', 'fresh | old1')
+@@ -115,13 +115,13 @@
+ SELECT fts_index_df('p_fts', to_ftsquery('simple', 'fresh | old1')) AS df_mixed;
+  df_mixed 
+ ----------
+- {70,30}
++ {50,10}
+ (1 row)
+ 
+ SELECT 'mixed' AS state, * FROM pg_temp.recipe_vs_scan('fresh | old1');
+  state | nrows | npending | agree 
+ -------+-------+----------+-------
+- mixed |    80 |       70 | t
++ mixed |    80 |       70 | f
+ (1 row)
+ 
+ SELECT pg_temp.recipe_follows_scan_order('fresh | old1') AS mixed_order_ok;
+@@ -156,10 +156,10 @@
+   FROM pm_before b ORDER BY q;
+           q           | nonempty | same_before_after_merge 
+ ----------------------+----------+-------------------------
+- fresh & app:*        | t        | t
+- fresh | old1 | app:* | t        | t
+- fresh | olx1~1       | t        | t
+- fresh:D | old1       | t        | t
++ fresh & app:*        | t        | f
++ fresh | old1 | app:* | t        | f
++ fresh | olx1~1       | t        | f
++ fresh:D | old1       | t        | f
+ (4 rows)
+ 
+ DROP TABLE pm, pmq;
+not ok 1     - index_df_pending                           28 ms
+# 1 of 1 tests failed.
+# The differences that caused some tests to fail can be viewed in the file "/nvme/iss/old_out_18/regression.diffs".
+PG18 v1.14.2 rc=1
+diff -U3 /nvme/iss/src_fix_18/expected/index_df_pending.out /nvme/iss/old_out_18/results/index_df_pending.out
+--- /nvme/iss/src_fix_18/expected/index_df_pending.out	2026-10-28 12:36:56.000000000 +0000
++++ /nvme/iss/old_out_18/results/index_df_pending.out	2026-10-28 12:37:14.785205611 +0000
+@@ -21,14 +21,14 @@
+ SELECT fts_index_df('p_fts', to_ftsquery('simple', 'fresh | old1')) AS df_pending;
+  df_pending 
+ ------------
+- {50,10}
++ {1,10}
+ (1 row)
+ 
+ -- a term in neither the segments nor the pending list still reports 1
+ SELECT fts_index_df('p_fts', to_ftsquery('simple', 'nosuchterm | word | fresh')) AS df_absent;
+  df_absent 
+ -----------
+- {1,50,50}
++ {1,1,1}
+ (1 row)
+ 
+ -- the README recipe agrees with the ranked engine's own score for every
+@@ -67,19 +67,19 @@
+ SELECT 'before merge' AS state, * FROM pg_temp.recipe_vs_scan('fresh | old1');
+     state     | nrows | npending | agree 
+ --------------+-------+----------+-------
+- before merge |    60 |       50 | t
++ before merge |    60 |       50 | f
+ (1 row)
+ 
+ SELECT 'before merge' AS state, * FROM pg_temp.recipe_vs_scan('fresh');
+     state     | nrows | npending | agree 
+ --------------+-------+----------+-------
+- before merge |    50 |       50 | t
++ before merge |    50 |       50 | f
+ (1 row)
+ 
+ SELECT pg_temp.recipe_follows_scan_order('fresh | old1') AS before_merge_order_ok;
+  before_merge_order_ok 
+ -----------------------
+- t
++ f
+ (1 row)
+ 
+ EXPLAIN (COSTS OFF) SELECT id FROM p WHERE to_ftsdoc('simple', body) @@@ to_ftsquery('simple', 'fresh | old1')
+@@ -115,13 +115,13 @@
+ SELECT fts_index_df('p_fts', to_ftsquery('simple', 'fresh | old1')) AS df_mixed;
+  df_mixed 
+ ----------
+- {70,30}
++ {50,10}
+ (1 row)
+ 
+ SELECT 'mixed' AS state, * FROM pg_temp.recipe_vs_scan('fresh | old1');
+  state | nrows | npending | agree 
+ -------+-------+----------+-------
+- mixed |    80 |       70 | t
++ mixed |    80 |       70 | f
+ (1 row)
+ 
+ SELECT pg_temp.recipe_follows_scan_order('fresh | old1') AS mixed_order_ok;
+@@ -156,10 +156,10 @@
+   FROM pm_before b ORDER BY q;
+           q           | nonempty | same_before_after_merge 
+ ----------------------+----------+-------------------------
+- fresh & app:*        | t        | t
+- fresh | old1 | app:* | t        | t
+- fresh | olx1~1       | t        | t
+- fresh:D | old1       | t        | t
++ fresh & app:*        | t        | f
++ fresh | old1 | app:* | t        | f
++ fresh | olx1~1       | t        | f
++ fresh:D | old1       | t        | f
+ (4 rows)
+ 
+ DROP TABLE pm, pmq;

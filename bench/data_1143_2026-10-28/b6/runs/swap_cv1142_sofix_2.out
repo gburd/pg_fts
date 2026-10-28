@@ -1,0 +1,90 @@
+SET
+SET
+SET
+PREPARE
+ id  
+-----
+   3
+  50
+  78
+ 110
+ 123
+ 142
+ 152
+ 160
+ 161
+ 179
+(10 rows)
+
+TIMING apple | banana
+Timing is on.
+Time: 7.897 ms
+Time: 7.895 ms
+Time: 8.244 ms
+Time: 8.236 ms
+Time: 8.234 ms
+Time: 8.228 ms
+Time: 8.266 ms
+Time: 8.250 ms
+Time: 8.237 ms
+Time: 8.232 ms
+Time: 8.223 ms
+Time: 8.222 ms
+Time: 8.217 ms
+Time: 8.205 ms
+Time: 8.240 ms
+Time: 8.233 ms
+Time: 8.224 ms
+Time: 8.229 ms
+Time: 8.260 ms
+Time: 8.251 ms
+Time: 8.223 ms
+Timing is off.
+TIMING rare & (apple | banana)
+Timing is on.
+Time: 3.650 ms
+Time: 3.640 ms
+Time: 3.640 ms
+Time: 3.648 ms
+Time: 3.643 ms
+Time: 3.761 ms
+Time: 3.668 ms
+Time: 3.661 ms
+Time: 3.647 ms
+Time: 3.628 ms
+Time: 3.647 ms
+Time: 3.637 ms
+Time: 3.652 ms
+Time: 3.637 ms
+Time: 3.645 ms
+Time: 3.645 ms
+Time: 3.638 ms
+Time: 3.648 ms
+Time: 3.651 ms
+Time: 3.649 ms
+Time: 3.660 ms
+Timing is off.
+TIMING zzzq & (apple | banana)
+Timing is on.
+Time: 0.070 ms
+Time: 0.069 ms
+Time: 0.069 ms
+Time: 0.069 ms
+Time: 0.069 ms
+Time: 0.068 ms
+Time: 0.068 ms
+Time: 0.068 ms
+Time: 0.068 ms
+Time: 0.068 ms
+Time: 0.068 ms
+Time: 0.070 ms
+Time: 0.069 ms
+Time: 0.068 ms
+Time: 0.068 ms
+Time: 0.067 ms
+Time: 0.068 ms
+Time: 0.068 ms
+Time: 0.068 ms
+Time: 0.067 ms
+Time: 0.067 ms
+Timing is off.

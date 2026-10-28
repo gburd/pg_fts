@@ -1,0 +1,96 @@
+##### PG17 v1142 m10.sql
+SET
+CREATE EXTENSION
+1.14.2
+CREATE TABLE
+INSERT 0 100
+CREATE INDEX
+INSERT 0 50
+SET
+SET
+CREATE FUNCTION
+Limit
+  ->  Index Scan using p_fts on p
+        Index Cond: (to_ftsdoc('simple'::regconfig, body) @@@ '(''fresh'' | ''old1'')'::ftsquery)
+        Order By: (to_ftsdoc('simple'::regconfig, body) <=> '(''fresh'' | ''old1'')'::ftsquery)
+{1,10}
+before merge|fresh | old1|60|50|0.31665303692626245|50
+before merge|fresh|50|50|0.31665303692626245|50
+before merge|old1|10|0|0|0
+t
+{50,10}
+after merge|fresh | old1|60|50|0|0
+after merge|fresh|50|50|0|0
+after merge|old1|10|0|0|0
+##### PG17 fix m10.sql
+SET
+CREATE EXTENSION
+1.14.2
+CREATE TABLE
+INSERT 0 100
+CREATE INDEX
+INSERT 0 50
+SET
+SET
+CREATE FUNCTION
+Limit
+  ->  Index Scan using p_fts on p
+        Index Cond: (to_ftsdoc('simple'::regconfig, body) @@@ '(''fresh'' | ''old1'')'::ftsquery)
+        Order By: (to_ftsdoc('simple'::regconfig, body) <=> '(''fresh'' | ''old1'')'::ftsquery)
+{50,10}
+before merge|fresh | old1|60|50|0|0
+before merge|fresh|50|50|0|0
+before merge|old1|10|0|0|0
+t
+{50,10}
+after merge|fresh | old1|60|50|0|0
+after merge|fresh|50|50|0|0
+after merge|old1|10|0|0|0
+##### PG18 v1142 m10.sql
+SET
+CREATE EXTENSION
+1.14.2
+CREATE TABLE
+INSERT 0 100
+CREATE INDEX
+INSERT 0 50
+SET
+SET
+CREATE FUNCTION
+Limit
+  ->  Index Scan using p_fts on p
+        Index Cond: (to_ftsdoc('simple'::regconfig, body) @@@ '(''fresh'' | ''old1'')'::ftsquery)
+        Order By: (to_ftsdoc('simple'::regconfig, body) <=> '(''fresh'' | ''old1'')'::ftsquery)
+{1,10}
+before merge|fresh | old1|60|50|0.31665303692626245|50
+before merge|fresh|50|50|0.31665303692626245|50
+before merge|old1|10|0|0|0
+t
+{50,10}
+after merge|fresh | old1|60|50|0|0
+after merge|fresh|50|50|0|0
+after merge|old1|10|0|0|0
+##### PG18 fix m10.sql
+SET
+CREATE EXTENSION
+1.14.2
+CREATE TABLE
+INSERT 0 100
+CREATE INDEX
+INSERT 0 50
+SET
+SET
+CREATE FUNCTION
+Limit
+  ->  Index Scan using p_fts on p
+        Index Cond: (to_ftsdoc('simple'::regconfig, body) @@@ '(''fresh'' | ''old1'')'::ftsquery)
+        Order By: (to_ftsdoc('simple'::regconfig, body) <=> '(''fresh'' | ''old1'')'::ftsquery)
+{50,10}
+before merge|fresh | old1|60|50|0|0
+before merge|fresh|50|50|0|0
+before merge|old1|10|0|0|0
+t
+{50,10}
+after merge|fresh | old1|60|50|0|0
+after merge|fresh|50|50|0|0
+after merge|old1|10|0|0|0

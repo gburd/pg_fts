@@ -1,0 +1,88 @@
+ok 1         - ranked_empty_and                          545 ms
+# All 1 tests passed.
+All tests successful.
+PG17 fix reg rc=0
+ok 1         - ranked_empty_and                          521 ms
+# All 1 tests passed.
+All tests successful.
+PG18 fix reg rc=0
+not ok 1     - ranked_empty_and                          533 ms
+# 1 of 1 tests failed.
+# The differences that caused some tests to fail can be viewed in the file "/nvme/iss/old_out_17/regression.diffs".
+PG17 v1.14.2 rc=1
+diff -U3 /nvme/iss/src_fix_17/expected/ranked_empty_and.out /nvme/iss/old_out_17/results/ranked_empty_and.out
+--- /nvme/iss/src_fix_17/expected/ranked_empty_and.out	2026-10-28 12:40:56.000000000 +0000
++++ /nvme/iss/old_out_17/results/ranked_empty_and.out	2026-10-28 12:41:19.666807381 +0000
+@@ -71,16 +71,16 @@
+   FROM (SELECT q, pg_temp.oracle(q) AS o FROM req WHERE q ~ 'zzzq') s ORDER BY q;
+                q                | nonempty | same_as_oracle 
+ --------------------------------+----------+----------------
+- !(zzzq | !rare) & apple        | t        | t
++ !(zzzq | !rare) & apple        | t        | f
+  !zzzq & rare                   | t        | t
+- (apple | banana) & zzzq        | t        | t
+- (apple | zzzq) & !banana       | t        | t
+- (zzzq | rare) & (apple | qqqz) | t        | t
+- zzzq & !apple                  | t        | t
++ (apple | banana) & zzzq        | t        | f
++ (apple | zzzq) & !banana       | t        | f
++ (zzzq | rare) & (apple | qqqz) | t        | f
++ zzzq & !apple                  | t        | f
+  zzzq & "hot dog"               | f        | t
+  zzzq & (apple | ban:*)         | t        | t
+- zzzq & (apple | banana)        | t        | t
+- zzzq & apple                   | t        | t
++ zzzq & (apple | banana)        | t        | f
++ zzzq & apple                   | t        | f
+ (10 rows)
+ 
+ SET enable_seqscan = off; SET enable_bitmapscan = off;
+@@ -144,7 +144,7 @@
+          < pg_temp.scan_buffers('apple | banana') AS operand_order_irrelevant;
+  or_group_reads_postings | absent_and_term_fast | absent_and_or_skips_walk | operand_order_irrelevant 
+ -------------------------+----------------------+--------------------------+--------------------------
+- t                       | t                    | t                        | t
++ t                       | t                    | f                        | f
+ (1 row)
+ 
+ DROP TABLE re, re2, req;
+not ok 1     - ranked_empty_and                          530 ms
+# 1 of 1 tests failed.
+# The differences that caused some tests to fail can be viewed in the file "/nvme/iss/old_out_18/regression.diffs".
+PG18 v1.14.2 rc=1
+diff -U3 /nvme/iss/src_fix_18/expected/ranked_empty_and.out /nvme/iss/old_out_18/results/ranked_empty_and.out
+--- /nvme/iss/src_fix_18/expected/ranked_empty_and.out	2026-10-28 12:40:56.000000000 +0000
++++ /nvme/iss/old_out_18/results/ranked_empty_and.out	2026-10-28 12:41:20.246784060 +0000
+@@ -71,16 +71,16 @@
+   FROM (SELECT q, pg_temp.oracle(q) AS o FROM req WHERE q ~ 'zzzq') s ORDER BY q;
+                q                | nonempty | same_as_oracle 
+ --------------------------------+----------+----------------
+- !(zzzq | !rare) & apple        | t        | t
++ !(zzzq | !rare) & apple        | t        | f
+  !zzzq & rare                   | t        | t
+- (apple | banana) & zzzq        | t        | t
+- (apple | zzzq) & !banana       | t        | t
+- (zzzq | rare) & (apple | qqqz) | t        | t
+- zzzq & !apple                  | t        | t
++ (apple | banana) & zzzq        | t        | f
++ (apple | zzzq) & !banana       | t        | f
++ (zzzq | rare) & (apple | qqqz) | t        | f
++ zzzq & !apple                  | t        | f
+  zzzq & "hot dog"               | f        | t
+  zzzq & (apple | ban:*)         | t        | t
+- zzzq & (apple | banana)        | t        | t
+- zzzq & apple                   | t        | t
++ zzzq & (apple | banana)        | t        | f
++ zzzq & apple                   | t        | f
+ (10 rows)
+ 
+ SET enable_seqscan = off; SET enable_bitmapscan = off;
+@@ -144,7 +144,7 @@
+          < pg_temp.scan_buffers('apple | banana') AS operand_order_irrelevant;
+  or_group_reads_postings | absent_and_term_fast | absent_and_or_skips_walk | operand_order_irrelevant 
+ -------------------------+----------------------+--------------------------+--------------------------
+- t                       | t                    | t                        | t
++ t                       | t                    | f                        | f
+ (1 row)
+ 
+ DROP TABLE re, re2, req;

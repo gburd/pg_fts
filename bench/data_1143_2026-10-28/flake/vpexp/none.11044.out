@@ -1,0 +1,35 @@
+ merged 
+--------
+ t
+(1 row)
+
+ has_matches 
+-------------
+ t
+(1 row)
+
+ index_matches_heap 
+--------------------
+ t
+(1 row)
+
+ parallel_no_growth 
+--------------------
+ t
+(1 row)
+
+       result       
+--------------------
+ vacuum_parallel ok
+(1 row)
+
+ serial_reclaims 
+-----------------
+ t
+(1 row)
+
+ index_matches_heap_after 
+--------------------------
+ t
+(1 row)
+
