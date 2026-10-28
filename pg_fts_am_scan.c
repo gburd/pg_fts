@@ -3776,7 +3776,10 @@ fts_index_stats(PG_FUNCTION_ARGS)
 PG_FUNCTION_INFO_V1(fts_index_df);
 
 /* fts_index_df(regclass, ftsquery) -> float8[] of df per query term occurrence,
- * in fts_query_terms() order (duplicates are not removed) */
+ * in fts_query_terms() order (duplicates are not removed).  The df is the one
+ * the ordering scan uses for IDF: segments plus pending documents (CHANGELOG
+ * 1.14.3; through 1.14.2 the pending documents were left out).  A term in
+ * neither reports 1, which fts_bm25 scores the same as 0 (bm25_idf clamps). */
 Datum
 fts_index_df(PG_FUNCTION_ARGS)
 {
@@ -3785,34 +3788,42 @@ fts_index_df(PG_FUNCTION_ARGS)
 	Relation	index;
 	BM25MetaPageData meta;
 	Datum	   *elems;
-	int			n = 0;
-	uint32		i;
+	const char **terms;
+	int		   *lens;
+	int			nterms;
+	uint64	   *pdf;
+	int			t;
+	uint32		gen0;
+	int			retries = 0;
 	ArrayType  *result;
 
 	index = index_open(indexoid, AccessShareLock);
-	bm25_read_meta(index, &meta);
+	nterms = fts_query_terms(q, &terms, &lens);
+	elems = (Datum *) palloc(Max(nterms, 1) * sizeof(Datum));	/* alloc-ok: nterms = query term count */
 
-	elems = (Datum *) palloc(q->nitems * sizeof(Datum));
-	for (i = 0; i < q->nitems; i++)
+	/* a concurrent flush/merge moves pending docs into a segment and frees the
+	 * pages read: redo from a fresh snapshot if the generation moved (bounded) */
+	do
 	{
-		FtsQueryItem *it = &q->items[i];
-
-		if (it->type == FTS_QI_VAL)
+		bm25_read_meta(index, &meta);
+		gen0 = meta.generation;
+		pdf = bm25_pending_df(index, &meta, terms, lens, nterms);
+		for (t = 0; t < nterms; t++)
 		{
-			uint64		df = 0;		/* summed across segments; uint64 so a term in
-									 * >2^32 docs does not wrap (consumed as double) */
+			uint64		df = pdf ? pdf[t] : 0;	/* uint64 so a term in >2^32 docs
+												 * does not wrap (consumed as double) */
 			uint32		s;
 
-			/* document frequency is summed across all segments */
 			for (s = 0; s < meta.nsegments; s++)
-				df += bm25_lookup_df(index, &meta.segs[s],
-									 FTS_QUERY_ITEMTEXT(q, it), it->termlen);
-			elems[n++] = Float8GetDatum((double) (df == 0 ? 1 : df));
+				df += bm25_lookup_df(index, &meta.segs[s], terms[t], lens[t]);
+			elems[t] = Float8GetDatum((double) (df == 0 ? 1 : df));
 		}
-	}
+		if (pdf)
+			pfree(pdf);
+	} while (bm25_read_meta_generation(index) != gen0 && retries++ < 10);
 	index_close(index, AccessShareLock);
 
-	result = construct_array(elems, n, FLOAT8OID, 8, true, 'd');
+	result = construct_array(elems, nterms, FLOAT8OID, 8, true, 'd');
 	PG_FREE_IF_COPY(q, 1);
 	PG_RETURN_ARRAYTYPE_P(result);
 }

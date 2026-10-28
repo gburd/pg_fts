@@ -362,7 +362,15 @@ SELECT id FROM docs
      <para>
       Introspect the index: corpus statistics (document count, average length,
       distinct terms); the per-term document frequencies used for IDF; and the
-      current live segment count.
+      current live segment count.  <literal>ndocs</literal>,
+      <literal>avgdl</literal> and <function>fts_index_df</function> count
+      pending (not yet merged) documents, as the ordering scan does, so
+      <literal>fts_bm25(doc, q, s.ndocs, s.avgdl, fts_index_df(idx, q))</literal>
+      gives the ordering scan's score; <function>fts_index_df</function> returns
+      one element per term occurrence in the query, and 1 for a term no document
+      holds.  <literal>nterms</literal> sums the segment dictionaries only: a term
+      held only by pending documents is not counted until the next merge or
+      flush, and a term in several segments is counted once per segment.
      </para>
     </listitem>
    </varlistentry>
