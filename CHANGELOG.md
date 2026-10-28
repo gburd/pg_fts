@@ -29,6 +29,36 @@ All notable changes to pg_fts are documented here.
   `t/015_cache_rebuild_error.pl` (1.14.3: +496,160 bytes over 40, FAIL 3 of 3 on PG 17.10
   and 18.6; this release +32,160, PASS 3 of 3).
 
+### Changed
+
+- **Ranked `rare & (a | b)` is driven from its cheapest required operand** (ROADMAP
+  I19a, Codeberg #6 idea 2).  A ranked pure-boolean AND that is not a pure AND took
+  the BoolGate walk over every cursor; a gate-rejected pivot never raises the
+  threshold, so with few matches it visited every posting of the OR group.  Now, when
+  the cheapest positive operand of the root AND chain (summed df of its terms) is at
+  most 1/8 of all the query's postings, candidates come from that operand's postings
+  only and every other cursor is sought to each candidate; scores, admission and tie
+  order are the walk's, so the results are the same (16 shapes in the new regression
+  test `ranked_driven_and`, against a seq-scan oracle and against
+  `pg_fts.bestfirst = off`, with several segments and pending rows).  The reporter's
+  400k-row corpus, ranked top-10, warm, median of 21 runs x 3 runs per build, 1.14.3 ->
+  this release: `rare & (apple | banana)` 3.601 -> 0.199 ms (PG 17.10), 3.795 -> 0.207
+  ms (PG 18.6); `rare & (apple | banana | w5)` 2.744 -> 0.203 / 2.757 -> 0.210;
+  `w7 & (apple | banana)` (about 800 `w7` rows) 1.038 -> 0.579 / 1.075 -> 0.595.  Not
+  driven, unchanged: `apple & (banana | w5)` 1.279 / 1.275 (PG 17.10).  Index buffers
+  of `rare & (apple | banana)` 501 -> 417: the time went, the pages mostly did not,
+  because seeking the OR group's cursors to the one candidate still reads their block
+  headers.
+- **The collect path skips an AND whose plain required term is absent from a segment**
+  (ROADMAP I19b, Codeberg #6).  A query with a prefix, fuzzy or regex term is not pure
+  boolean and is evaluated over materialized TID sets; `zzzq & (apple | ban:*)` built
+  both OR operands before the AND met the empty `zzzq`.  Each segment now first looks
+  up every plain positive term that is an operand of the root AND chain; one with no
+  posting in the segment empties it.  Same corpus: `zzzq & (apple | ban:*)` 3.218 ->
+  0.069 ms (PG 17.10), 3.218 -> 0.072 ms (PG 18.6); `zzzq & ban:*` 0.916 -> 0.067;
+  buffers 59 -> 17.  Not changed: `rare & (apple | ban:*)` (3.234 / 3.179 ms), where the
+  required term is present and the OR group is still built.
+
 ### Tests
 
 - The test-hooks build gets two TEST-ONLY GUCs (`pg_fts.test_flush_pause_advisory_key`,

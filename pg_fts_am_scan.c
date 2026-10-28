@@ -1060,6 +1060,127 @@ eval_not_parity(FtsQuery q)
 	return odd;
 }
 
+/*
+ * The operands of the AND chain at the root of q's RPN (ROADMAP I19a/I19b,
+ * CHANGELOG 1.14.4): `a & (b | c) & !d` -> a, (b | c), !d.  Each is reported by
+ * the RPN index where its subtree ENDS (ops[]); start[n] is where node n's
+ * subtree starts, so its items are start[n]..n, and pos[n] says the subtree has
+ * no NOT.  Every match satisfies every operand.  Returns the number of
+ * operands, 0 when the root is not an AND.  The arrays are q->nitems long.
+ */
+static uint32 bm25_lookup_df(Relation index, const BM25SegMeta *seg,
+							 const char *term, int termlen);
+
+static int
+query_and_operands(FtsQuery q, int *ops, int *start, bool *pos)
+{
+	int		   *stk = (int *) palloc(Max(q->nitems, 1) * sizeof(int));	/* alloc-ok: query items */
+	int		   *lchild = (int *) palloc(Max(q->nitems, 1) * sizeof(int));	/* alloc-ok: query items */
+	int			sp = 0,
+				nops = 0;
+	uint32		i;
+
+	for (i = 0; i < q->nitems; i++)
+	{
+		FtsQueryItem *it = &q->items[i];
+
+		lchild[i] = -1;
+		if (it->type == FTS_QI_VAL)
+		{
+			start[i] = (int) i;
+			pos[i] = true;
+		}
+		else if (it->op == FTS_OP_NOT)
+		{
+			int			c = stk[--sp];
+
+			start[i] = start[c];
+			pos[i] = false;
+		}
+		else
+		{
+			int			b = stk[--sp];
+			int			a = stk[--sp];
+
+			start[i] = start[a];
+			pos[i] = pos[a] && pos[b];
+			lchild[i] = a;
+		}
+		stk[sp++] = (int) i;
+	}
+	if (sp == 1 && q->items[stk[0]].type != FTS_QI_VAL && q->items[stk[0]].op == FTS_OP_AND)
+	{
+		int			wl[64];		/* AND nodes to expand */
+		int			nwl = 0;
+
+		wl[nwl++] = stk[0];
+		while (nwl > 0)
+		{
+			int			n = wl[--nwl];
+			int			kids[2];
+			int			j;
+
+			kids[0] = lchild[n];
+			kids[1] = n - 1;	/* the right subtree ends just before its operator */
+			for (j = 0; j < 2; j++)
+			{
+				int			c = kids[j];
+
+				/* past 64 nested ANDs an AND is itself reported as an operand:
+				 * coarser, never wrong (every match still satisfies it) */
+				if (q->items[c].type != FTS_QI_VAL && q->items[c].op == FTS_OP_AND &&
+					nwl < (int) lengthof(wl))
+					wl[nwl++] = c;
+				else
+					ops[nops++] = c;
+			}
+		}
+	}
+	pfree(stk);
+	pfree(lchild);
+	return nops;
+}
+
+/*
+ * Does a plain positive term that every match must hold (an operand of the
+ * root AND chain) have no posting in this segment (ROADMAP I19b, CHANGELOG
+ * 1.14.4)?  Then the segment contributes nothing, and bm25_eval_query skips
+ * building the other operands' sets -- `zzzq & (apple | ban:*)` built both OR
+ * operands in full before meeting the empty `zzzq`.  Only plain terms are
+ * tested (a dictionary lookup each); a prefix/fuzzy/regex leaf has no cheap
+ * emptiness test, and a weighted one is left to the normal evaluation.
+ */
+static bool
+bm25_required_term_absent(Relation index, const BM25SegMeta *seg, FtsQuery q)
+{
+	int		   *ops,
+			   *start;
+	bool	   *pos;
+	int			nops,
+				j;
+	bool		absent = false;
+
+	if (q->nitems < 3)
+		return false;
+	ops = (int *) palloc(q->nitems * sizeof(int));	/* alloc-ok: query items */
+	start = (int *) palloc(q->nitems * sizeof(int));	/* alloc-ok: query items */
+	pos = (bool *) palloc(q->nitems * sizeof(bool));	/* alloc-ok: query items */
+	nops = query_and_operands(q, ops, start, pos);
+	for (j = 0; j < nops && !absent; j++)
+	{
+		FtsQueryItem *it = &q->items[ops[j]];
+
+		if (it->type == FTS_QI_VAL &&
+			(it->flags & (FTS_QF_PREFIX | FTS_QF_FUZZY | FTS_QF_REGEX | FTS_QF_WEIGHTED)) == 0 &&
+			bm25_lookup_df(index, seg, FTS_QUERY_ITEMTEXT(q, it), it->termlen) == 0)
+			absent = true;
+	}
+	pfree(ops);
+	pfree(start);
+	pfree(pos);
+	return absent;
+}
+
 static TidSet
 bm25_eval_query(Relation index, const BM25SegMeta *seg, FtsQuery q)
 {
@@ -1069,7 +1190,7 @@ bm25_eval_query(Relation index, const BM25SegMeta *seg, FtsQuery q)
 	uint32		i;
 	TidSet		result;
 
-	if (q->nitems == 0)
+	if (q->nitems == 0 || bm25_required_term_absent(index, seg, q))
 	{
 		result.tids = NULL;
 		result.n = 0;
@@ -6148,10 +6269,190 @@ bool_gate_may_admit(BoolGate *g, const WandCursor *cursors, int ncur)
 	return bool_gate_admits(g);
 }
 
+/*
+ * The driver of a pure-boolean query that is an AND at the root (ROADMAP I19a,
+ * CHANGELOG 1.14.4): among the operands of the top-level AND chain, the
+ * positive one (no NOT inside) whose leaves' summed df is smallest.  Every
+ * match satisfies that operand, and a positive AND/OR tree of plain terms is
+ * satisfied only by a document holding at least one of its leaves, so the
+ * union of its leaves' postings enumerates every match.  Fills drv[termidx]
+ * (VAL ordinal) for the driver's leaves and returns its cost (summed cursor
+ * df); returns -1 when the root is not an AND or no operand is positive.
+ */
+static double
+bool_gate_driver(const BoolGate *g, const WandCursor *cursors, int ncur, bool *drv)
+{
+	FtsQuery	q = g->q;
+	int		   *ops = (int *) palloc(Max(q->nitems, 1) * sizeof(int));	/* alloc-ok: query items */
+	int		   *start = (int *) palloc(Max(q->nitems, 1) * sizeof(int));	/* alloc-ok: query items */
+	bool	   *pos = (bool *) palloc(Max(q->nitems, 1) * sizeof(bool));	/* alloc-ok: query items */
+	int		   *vord = (int *) palloc(Max(q->nitems, 1) * sizeof(int));	/* alloc-ok: query items */
+	int			nops = query_and_operands(q, ops, start, pos);
+	int			best = -1,
+				vi = 0,
+				j;
+	double		bestcost = -1;
+	uint32		i;
+
+	for (i = 0; i < q->nitems; i++)
+		vord[i] = (q->items[i].type == FTS_QI_VAL) ? vi++ : -1;
+	for (j = 0; j < nops; j++)
+	{
+		int			n = ops[j];
+		double		cost = 0;
+		int			m,
+					t;
+
+		if (!pos[n])
+			continue;
+		for (m = start[n]; m <= n; m++)
+			if (vord[m] >= 0)
+				for (t = 0; t < ncur; t++)
+					if (cursors[t].termidx == vord[m])
+						cost += cursors[t].df;
+		if (best < 0 || cost < bestcost)
+		{
+			best = n;
+			bestcost = cost;
+		}
+	}
+	if (best >= 0)
+	{
+		memset(drv, 0, (Size) g->nterms * sizeof(bool));
+		for (j = start[best]; j <= best; j++)
+			if (vord[j] >= 0)
+				drv[vord[j]] = true;
+	}
+	pfree(ops);
+	pfree(start);
+	pfree(pos);
+	pfree(vord);
+	return best >= 0 ? bestcost : -1;
+}
+
+/*
+ * fts_search_driven (ROADMAP I19a, CHANGELOG 1.14.4): exact top-k for a
+ * pure-boolean AND whose cheapest required operand (bool_gate_driver) is much
+ * smaller than the rest -- `rare & (a | b)`.  The BoolGate walk visits every
+ * posting of the OR group there: a gate-rejected pivot never raises the
+ * threshold, and with few matches the threshold stays low, so nothing prunes.
+ * Here candidates come from the driver's cursors only, in docid order; every
+ * other cursor is sought to the candidate, the gate decides membership over
+ * the same present[] the walk uses, and the score is summed in term order
+ * (sum_term_order) -- so scores, admission and the heap's tie order are the
+ * walk's: the same top-k.
+ */
+pg_noinline static int
+fts_search_driven(WandCursor *cursors, int nterms, int k, BoolGate *gate,
+				  const bool *drv, ScoredTid **out)
+{
+	ScoredTid  *heap = (ScoredTid *) palloc(Max(k, 1) * sizeof(ScoredTid));
+	int			nheap = 0;
+	double		threshold = 0.0;
+	int			nq = cursors_nq(cursors, nterms);
+	double	   *acc = (double *) palloc0(Max(nq, 1) * sizeof(double));	/* alloc-ok: nq = query term count */
+	int			i;
+
+	for (i = 0; i < nterms; i++)
+		wand_prime(&cursors[i]);
+	for (;;)
+	{
+		uint64		cand = UINT64_MAX;
+		double		score;
+
+		CHECK_FOR_INTERRUPTS();	/* per candidate; cursor blocks are palloc'd copies, no lock held */
+		for (i = 0; i < nterms; i++)
+			if (drv[cursors[i].termidx] && cursors[i].docid < cand)
+				cand = cursors[i].docid;
+		if (cand == UINT64_MAX)
+			break;
+		for (i = 0; i < nterms; i++)
+		{
+			if (!drv[cursors[i].termidx])
+				wand_seek(&cursors[i], cand);
+			if (cursors[i].docid == cand)
+				acc[cursors[i].termidx] += wand_contrib_cur(&cursors[i]);
+		}
+		score = sum_term_order(acc, nq);
+		if ((nheap < k || score > threshold) &&
+			bmw_gate_admits(gate, cursors, nterms, cand))
+		{
+			ItemPointerData tid;
+
+			bm25_docid_to_tid(cand, &tid);
+			if (nheap < k)
+			{
+				heap[nheap].tid = tid;
+				heap[nheap].score = score;
+				nheap++;
+			}
+			else
+			{
+				int			minpos = 0;
+
+				for (i = 1; i < nheap; i++)
+					if (scored_worse(&heap[i], &heap[minpos]))
+						minpos = i;
+				heap[minpos].tid = tid;
+				heap[minpos].score = score;
+			}
+			if (nheap == k)
+			{
+				threshold = heap[0].score;
+				for (i = 1; i < nheap; i++)
+					if (heap[i].score < threshold)
+						threshold = heap[i].score;
+			}
+		}
+		for (i = 0; i < nterms; i++)
+			if (drv[cursors[i].termidx] && cursors[i].docid == cand)
+				wand_next(&cursors[i]);
+	}
+	for (i = 0; i < nterms; i++)
+	{
+		if (cursors[i].blkbuf)
+			pfree(cursors[i].blkbuf);
+		if (cursors[i].posbuf)
+			pfree(cursors[i].posbuf);
+		if (cursors[i].posoff)
+			pfree(cursors[i].posoff);
+		cursors[i].blkbuf = NULL;
+		cursors[i].posbuf = NULL;
+		cursors[i].posoff = NULL;
+		bm25_doclen_cursor_free(&cursors[i].doclenc);
+	}
+	pfree(acc);
+	qsort(heap, nheap, sizeof(ScoredTid), cmp_scored_desc);
+	*out = heap;
+	return nheap;
+}
+
+/* drive from the AND's cheapest operand when it is at most 1/this of all postings */
+#define BM25_DRIVEN_MAX_FRACTION 8
+
 static int
 fts_search_wand(WandCursor *cursors, int nterms, int k,
 				const DocidFilter *filter, BoolGate *gate, ScoredTid **out)
 {
+	if (filter == NULL && pg_fts_bestfirst && gate != NULL && gate->q != NULL &&
+		gate->phrase == NULL && !bool_gate_conjunctive(gate))
+	{
+		bool	   *drv = (bool *) palloc(Max(gate->nterms, 1) * sizeof(bool));	/* alloc-ok: query term count */
+		double		dcost = bool_gate_driver(gate, cursors, nterms, drv);
+		double		total = 0;
+		int			i;
+
+		for (i = 0; i < nterms; i++)
+			total += cursors[i].df;
+		if (dcost >= 0 && dcost * BM25_DRIVEN_MAX_FRACTION <= total)
+		{
+			int			n = fts_search_driven(cursors, nterms, k, gate, drv, out);
+
+			pfree(drv);
+			return n;
+		}
+		pfree(drv);
+	}
 	if (filter == NULL && pg_fts_bestfirst && bool_gate_conjunctive(gate))
 	{
 		int			n = fts_search_and_bestfirst(cursors, nterms, k, gate, out);
