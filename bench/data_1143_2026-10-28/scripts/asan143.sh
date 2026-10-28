@@ -17,9 +17,11 @@ j=y.index('        run: |', i); k=y.index('      - name:', j)
 print('\n'.join(l[10:] for l in y[j:k].split('\n')[1:]))
 PY
 D="$PWD/asandata"
+[ -s $G/asan_step.sh ] || { echo ASAN_STEP_EXTRACT_FAIL; exit 1; }
 PFX=$PFX bash -eo pipefail $G/asan_step.sh > $G/asan_step.log 2>&1; rc=$?
 echo "asan step rc=$rc; $(grep -E 'asan_smoke: all checks passed|ERROR' $G/asan_step.log | head -2 | tr '\n' ' ')"
 grep -E "bm25_short_dfs_ok" -A3 $G/asan_step.log | head -5
 $PFX/bin/pg_ctl -D $D -m immediate -w stop >/dev/null 2>&1
 echo "AddressSanitizer lines in server log: $(grep -ciE 'AddressSanitizer' $D/log); 'detected write past chunk end' lines: $(grep -c 'write past chunk end' $D/log)"
+grep -q 'asan_smoke: all checks passed' $G/asan_step.log && [ $rc = 0 ] && [ -f $D/log ] || { echo ASAN_NOT_GREEN; exit 1; }
 echo ASAN143_DONE

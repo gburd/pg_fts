@@ -1,0 +1,19 @@
+PG17 old so 894d0018 (postgres (PostgreSQL) 17.10) new so b0d209ba tree 60aa460; new edge: /nvme/iss/gate/upg-new17/share/postgresql/extension/pg_fts--1.14.2--1.14.3.sql; stale base 1.14.2 in tree: 0
+  at 1.14.2: ext 1.14.2 count(rare)=1015 fts_index_df(fresh|rare)={1,600}
+  after UPDATE: ext 1.14.3 count(rare) stored=1015 expr=1015 heap=1015; fts_index_df(fresh|rare)={500,1100} (fresh heap=500); #9 '{}'=NULL: t; #8 partial ordering scan: 1
+  after VACUUM + fts_vacuum on 1.14.3: count 923 heap 923; top20 unchanged across upgrade: yes
+  fresh 1.14.2 -> 1.14.3
+  update paths: 70 sources reach 1.14.3; unreachable: none
+  available base versions: 1.14.3,1.14.2
+  fresh install default: 1.14.3
+  PG17 UPGRADE OK
+PG18 old so 546732a6 (postgres (PostgreSQL) 18.6) new so 4a1c9b4c tree 60aa460; new edge: /nvme/iss/gate/upg-new18/share/postgresql/extension/pg_fts--1.14.2--1.14.3.sql; stale base 1.14.2 in tree: 0
+  at 1.14.2: ext 1.14.2 count(rare)=1015 fts_index_df(fresh|rare)={1,600}
+  after UPDATE: ext 1.14.3 count(rare) stored=1015 expr=1015 heap=1015; fts_index_df(fresh|rare)={500,1100} (fresh heap=500); #9 '{}'=NULL: t; #8 partial ordering scan: 1
+  after VACUUM + fts_vacuum on 1.14.3: count 923 heap 923; top20 unchanged across upgrade: yes
+  fresh 1.14.2 -> 1.14.3
+  update paths: 70 sources reach 1.14.3; unreachable: none
+  available base versions: 1.14.3,1.14.2
+  fresh install default: 1.14.3
+  PG18 UPGRADE OK
+UPG143_DONE

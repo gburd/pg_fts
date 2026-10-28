@@ -1,0 +1,25 @@
+echo "# +++ tap install-check in  +++" && rm -rf '/nvme/iss/gate/gtree17'/tmp_check && /usr/bin/mkdir -p '/nvme/iss/gate/gtree17'/tmp_check && cd ./ && TESTLOGDIR='/nvme/iss/gate/gtree17/tmp_check/log' TESTDATADIR='/nvme/iss/gate/gtree17/tmp_check' PATH="/nvme/iss/gate/pfx17/bin:/nvme/iss/gate/gtree17:$PATH" PGPORT='65432' PG_REGRESS='/nvme/iss/gate/pfx17/lib/postgresql/pgxs/src/makefiles/../../src/test/regress/pg_regress' /usr/bin/prove -I /nvme/iss/gate/pfx17/lib/postgresql/pgxs/src/makefiles/../../src/test/perl/ -I ./  t/003_corruption.pl t/004_encodings.pl t/005_concurrency.pl t/006_concurrent_extend.pl t/007_segment_cap.pl t/008_vacuum_reclaim.pl t/010_vacuum_delete_heavy.pl t/011_shared_doclen.pl t/012_concurrent_flush.pl t/013_ranked_flush_race.pl
+# +++ tap install-check in  +++
+# corrupted 5 posting page(s), 74 pending page(s)
+t/003_corruption.pl ........... ok
+t/004_encodings.pl ............ ok
+# reader summary: NOTICE:  READER_DONE reads=71525 wrong=0
+# NOTICE:  READER_DONE reads=71318 wrong=0
+t/005_concurrency.pl .......... ok
+t/006_concurrent_extend.pl .... ok
+# final segments = 8 (hard cap 128), rows = 240
+t/007_segment_cap.pl .......... ok
+# index pages after build: 2199
+# index pages after fts_vacuum #1: 2199
+# index pages after fts_vacuum #2: 2199
+t/008_vacuum_reclaim.pl ....... ok
+# index MB after three VACUUMs: 20, 20, 20
+# after delete=20MB, after 4 cleanups=15MB
+# after delete=20MB, +4 cleanups=15MB, +6 txns +4 more=4MB
+t/010_vacuum_delete_heavy.pl .. ok
+t/011_shared_doclen.pl ........ ok
+t/012_concurrent_flush.pl ..... ok
+t/013_ranked_flush_race.pl .... ok
+All tests successful.
+Files=10, Tests=115, 260 wallclock secs ( 0.41 usr  0.01 sys +  7.26 cusr 11.80 csys = 19.48 CPU)
+Result: PASS

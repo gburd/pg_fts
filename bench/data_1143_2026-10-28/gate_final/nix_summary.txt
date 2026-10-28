@@ -1,0 +1,15 @@
+pg_fts-tap> echo "# +++ tap install-check in  +++" && rm -rf '/build/wqfv28gwi94sw694v966vq6zkixpycd5-source'/tmp_check && /nix/store/sr26flm2nkfa12dkrwj2630kqsfakky4-coreutils-9.11/bin/mkdir -p '/build/wqfv28gwi94sw694v966vq6zkixpycd5-source'/tmp_check && cd ./ && TESTLOGDIR='/build/wqfv28gwi94sw694v966vq6zkixpycd5-source/tmp_check/log' TESTDATADIR='/build/wqfv28gwi94sw694v966vq6zkixpycd5-source/tmp_check' PATH="/nix/store/8cm0gcanbqg9q4adj1s5j2v62hgkkxrf-pg_fts-tap-prefix-18.4/bin:/build/wqfv28gwi94sw694v966vq6zkixpycd5-source:$PATH" PGPORT='65432' PG_REGRESS='/nix/store/bf6k8gbz17lkw81vfwdb7sa9cqnj3g0r-postgresql-18.4-dev/lib/pgxs/src/makefiles/../../src/test/regress/pg_regress' /nix/store/k7kxg101ikkm0cyf8jcqhg948vy542af-perl-5.42.0/bin/prove -I /nix/store/bf6k8gbz17lkw81vfwdb7sa9cqnj3g0r-postgresql-18.4-dev/lib/pgxs/src/makefiles/../../src/test/perl/ -I ./  t/003_corruption.pl t/004_encodings.pl t/005_concurrency.pl t/006_concurrent_extend.pl t/007_segment_cap.pl t/008_vacuum_reclaim.pl t/010_vacuum_delete_heavy.pl t/011_shared_doclen.pl t/012_concurrent_flush.pl t/013_ranked_flush_race.pl
+pg_fts-tap> echo "# +++ tap install-check in  +++" && rm -rf '/build/wqfv28gwi94sw694v966vq6zkixpycd5-source'/tmp_check && /nix/store/sr26flm2nkfa12dkrwj2630kqsfakky4-coreutils-9.11/bin/mkdir -p '/build/wqfv28gwi94sw694v966vq6zkixpycd5-source'/tmp_check && cd ./ && TESTLOGDIR='/build/wqfv28gwi94sw694v966vq6zkixpycd5-source/tmp_check/log' TESTDATADIR='/build/wqfv28gwi94sw694v966vq6zkixpycd5-source/tmp_check' PATH="/nix/store/ra2gzrwaifrlc64ssxfmih9yxlr71n4q-pg_fts-tap-prefix-17.10/bin:/build/wqfv28gwi94sw694v966vq6zkixpycd5-source:$PATH" PGPORT='65432' PG_REGRESS='/nix/store/bngcqqfc69wdp5kq50v70ks4bsr3x8ab-postgresql-17.10-dev/lib/pgxs/src/makefiles/../../src/test/regress/pg_regress' /nix/store/k7kxg101ikkm0cyf8jcqhg948vy542af-perl-5.42.0/bin/prove -I /nix/store/bngcqqfc69wdp5kq50v70ks4bsr3x8ab-postgresql-17.10-dev/lib/pgxs/src/makefiles/../../src/test/perl/ -I ./  t/003_corruption.pl t/004_encodings.pl t/005_concurrency.pl t/006_concurrent_extend.pl t/007_segment_cap.pl t/008_vacuum_reclaim.pl t/010_vacuum_delete_heavy.pl t/011_shared_doclen.pl t/012_concurrent_flush.pl t/013_ranked_flush_race.pl
+pg_fts-installcheck> # All 27 tests passed.
+pg_fts-installcheck> # All 4 tests passed.
+pg_fts-installcheck> # All 27 tests passed.
+pg_fts-installcheck> # All 4 tests passed.
+pg_fts-tap> t/013_ranked_flush_race.pl .... ok
+pg_fts-tap> Result: PASS
+pg_fts-tap> t/013_ranked_flush_race.pl .... ok
+pg_fts-tap> Result: PASS
+nix build rc=0
+pg_fts-installcheck> # All 27 tests passed.
+pg_fts-installcheck> # All 4 tests passed.
+pg_fts-installcheck> # All 27 tests passed.
+pg_fts-installcheck> # All 4 tests passed.

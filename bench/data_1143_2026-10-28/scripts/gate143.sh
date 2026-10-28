@@ -8,7 +8,7 @@ for M in 17 18; do
   PFX=$G/pfx$M; [ -d $PFX ] || cp -a /nvme/pg$M $PFX
   B=$PFX/bin
   T=$G/gtree$M; [ -d $T ] && mv $T /nvme/trash_g_$RANDOM; mkdir -p $T; tar xzf $G/final.tgz -C $T; cd $T
-  echo "== PG$M $($B/postgres --version) tree $(cat GITREV) $(grep default_version pg_fts.control) REGRESS: $(grep -c 'planner_partial ranked_empty_and' Makefile) bool_gate_may_admit in source: $(grep -c bool_gate_may_admit pg_fts_am_scan.c)"
+  echo "== PG$M $($B/postgres --version) tree $(cat GITREV) $(grep default_version pg_fts.control) REGRESS: $(grep -c 'planner_partial ranked_empty_and' Makefile) keep-last: $(grep -c 'gen_retries++ >= 10' pg_fts_am_scan.c) t013: $(ls t/013_ranked_flush_race.pl | wc -l) bool_gate_may_admit in source: $(grep -c bool_gate_may_admit pg_fts_am_scan.c)"
   make -s clean PG_CONFIG=$B/pg_config >/dev/null 2>&1
   make -s PG_CONFIG=$B/pg_config -j32 2>&1 | grep -E "warning:|error:" | head; make -s PG_CONFIG=$B/pg_config install >/dev/null 2>&1
   echo "installed so md5 $(md5sum $($B/pg_config --pkglibdir)/pg_fts.so | cut -c1-8); ext files: $(ls $($B/pg_config --sharedir)/extension/pg_fts--1.14.3.sql $($B/pg_config --sharedir)/extension/pg_fts--1.14.2--1.14.3.sql | wc -l); stale 1.14.2 base: $(ls $($B/pg_config --sharedir)/extension/pg_fts--1.14.2.sql 2>/dev/null | wc -l) (copied prefix had none: fresh /nvme/pg$M copy)"
@@ -26,7 +26,7 @@ for M in 17 18; do
   echo "== PG$M tap"
   mv tmp_check /nvme/trash_g_$RANDOM 2>/dev/null
   make PG_CONFIG=$B/pg_config installcheck REGRESS= ISOLATION= \
-    PROVE_TESTS='t/003_corruption.pl t/004_encodings.pl t/005_concurrency.pl t/006_concurrent_extend.pl t/007_segment_cap.pl t/008_vacuum_reclaim.pl t/010_vacuum_delete_heavy.pl t/011_shared_doclen.pl t/012_concurrent_flush.pl' > $G/tap$M.log 2>&1; echo "tap rc=$?"
+    PROVE_TESTS='t/003_corruption.pl t/004_encodings.pl t/005_concurrency.pl t/006_concurrent_extend.pl t/007_segment_cap.pl t/008_vacuum_reclaim.pl t/010_vacuum_delete_heavy.pl t/011_shared_doclen.pl t/012_concurrent_flush.pl t/013_ranked_flush_race.pl' > $G/tap$M.log 2>&1; echo "tap rc=$?"
   grep -E "^t/.*(ok|FAIL|Dubious|skipped)|^Result|^Files=|Failed" $G/tap$M.log | tail -16
 done
 cd $G/gtree17

@@ -1,0 +1,8 @@
+tree 60aa460 ext so=b4a645d1 default_version = '1.14.3'; short-dfs probe in smoke: 2
+asan step rc=0; asan_smoke: all checks passed 
+ bm25_short_dfs_ok 
+-------------------
+ t
+(1 row)
+AddressSanitizer lines in server log: 0; 'detected write past chunk end' lines: 0
+ASAN143_DONE

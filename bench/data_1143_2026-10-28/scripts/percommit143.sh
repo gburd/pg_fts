@@ -13,5 +13,7 @@ for c in ${COMMITS}; do
   make PG_CONFIG=$PFX/bin/pg_config installcheck PGHOST=/tmp PGPORT=$P PGUSER=postgres PROVE_TESTS=ci/noop.pl > $G/pc-$c.log 2>&1; rc=$?
   echo "$c ($(cat GITREV)) rc=$rc $(grep -cE '^ok ' $G/pc-$c.log) ok $(grep -cE '^not ok ' $G/pc-$c.log) not-ok: $(grep -E '^not ok' $G/pc-$c.log | awk '{print $4}' | tr '\n' ' ')"
   $PFX/bin/pg_ctl -D $D -w stop >/dev/null
+  [ $rc = 0 ] || bad=1
 done
+[ -z "${bad:-}" ] || { echo PERCOMMIT_NOT_GREEN; exit 1; }
 echo PERCOMMIT_DONE

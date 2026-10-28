@@ -1,0 +1,10 @@
+tree 60aa460; commits: 368163d 9443eb2 f93d079 de99c9f 03857d6 b9f090e 6eb1325 9fb5fea ea30ce2 
+gate rc=0 installcheck rc=0 tap rc=0 installcheck rc=0 tap rc=0 == check-alloc: alloc-safety: no unguarded corpus/vocabulary-scale allocations rc=0 == check-ascii: install SQL, C sources and specs are pure ASCII rc=0 fuzz rc=0 == ALL CLEAN == 
+upg rc=0 2 UPGRADE OK
+asan rc=0
+percommit rc=0
+nix rc=0 nix build rc=0
+nix tree 60aa460
+nix pg17 rerun 1 rc=0 # All 27 tests passed. # All 4 tests passed. 
+nix pg17 rerun 2 rc=0 # All 27 tests passed. # All 4 tests passed. 
+ALL143C_DONE
