@@ -36,6 +36,12 @@ All notable changes to pg_fts are documented here.
   `t/015` skip on a normal build; CI and the flake (`tap-hooks-pg17`, `tap-hooks-pg18`)
   run them against a hooks build with `PG_FTS_TEST_HOOKS_BUILD=1`, which makes a missing
   hook a failure.
+- The CI `sanitizers` job now also fails on the cassert allocator's own reports
+  ("detected write past chunk end", "problem in alloc set", "detected double pfree";
+  ROADMAP I10).  A write past the end of a palloc'd chunk stays inside the AllocSet
+  block, so ASan does not see it.  Checked with a mutant that writes one double past
+  `fts_bm25`'s `dfs` copy: the smoke's own checks passed and ASan reported nothing, and
+  the step now fails on the 2 chunk-end WARNINGs; the unmodified tree passes.
 
 ## 1.14.3 - 2026-10-28
 

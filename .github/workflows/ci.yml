@@ -204,6 +204,15 @@ jobs:
           if grep -iE "heap-use-after-free|heap-buffer-overflow|stack-buffer-overflow|global-buffer-overflow|use-after-poison|SUMMARY: AddressSanitizer: (heap|stack|global|use)" "$D/log"; then
             echo "ASan reported a memory error"; cat "$D/log"; exit 1
           fi
+          # ...and on the cassert allocator's own checks: a write past the end
+          # of a palloc'd chunk stays inside the AllocSet block, so ASan never
+          # sees it (PostgreSQL's allocator is not poisoned); cassert logs it
+          # as a WARNING at pfree / context reset (ROADMAP I10, CHANGELOG
+          # 1.14.4).  The 1.14.3 short-dfs read (Codeberg #9) was invisible to
+          # the grep above for the same reason.
+          if grep -E "detected write past chunk end|problem in alloc set|detected double pfree" "$D/log"; then
+            echo "the cassert allocator reported a corrupt chunk"; cat "$D/log"; exit 1
+          fi
           "$PFX/bin/pg_ctl" -D "$D" -w stop
       - name: Show diffs on failure
         if: failure()
