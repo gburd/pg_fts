@@ -50,6 +50,12 @@ ninja -C build
 ninja -C build install
 ```
 
+The PostgreSQL from the EDB Windows installer is an MSVC build and works as
+is: `-Dpg_dir="C:/Program Files/PostgreSQL/18"`.  The check is that
+`<pg_dir>\lib\postgres.lib` exists; a PostgreSQL without it cannot link
+pg_fts.  (Reported and tested on EDB PostgreSQL 18.6 with Visual Studio 2026
+by robinlahtinen, Codeberg #7.)
+
 With [Nix](https://nixos.org) (flakes) you can build and test without a local
 PostgreSQL install:
 

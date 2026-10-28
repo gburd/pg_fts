@@ -24,6 +24,9 @@
 
 #include <stdint.h>
 #include <string.h>
+#ifdef _MSC_VER
+#include <intrin.h>				/* _BitScanReverse */
+#endif
 
 /*
  * PostgreSQL's c.h defines uint64/uint32 and UINT64CONST; only supply them when
@@ -320,7 +323,16 @@ fts_doclen_to_byte(uint32 len)
 		return 0;
 	if (len <= 7)
 		return (uint8) len;		/* 0..7 exact (exponent field 0) */
+#ifdef _MSC_VER
+	{
+		unsigned long idx;
+
+		_BitScanReverse(&idx, len);	/* MSVC has no __builtin_clz; len > 7 so a bit is set */
+		hb = (uint32) idx;
+	}
+#else
 	hb = 31 - (uint32) __builtin_clz(len);	/* highest set bit */
+#endif
 	exp = hb - 3;						/* keep 4 significant bits: 1 + 3 mantissa */
 	mant = (len >> exp) & 0x07;
 	e = exp + 1;						/* exponent field (>=1 for len>=8) */

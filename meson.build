@@ -4,15 +4,21 @@
 # meson recipe exists only for Windows/MSVC, where PostgreSQL itself is built
 # with meson and PGXS is unavailable.
 #
-# PREREQUISITE: an MSVC-built PostgreSQL >= 17 built from source with the same
-# Visual Studio toolchain (`meson setup ... && ninja install`).  A
-# MinGW/Strawberry PostgreSQL will NOT work: it ships a GCC-flavored pg_config.h
+# PREREQUISITE: an MSVC-built PostgreSQL >= 17: either built from source with
+# the same Visual Studio toolchain (`meson setup ... && ninja install`), or the
+# EDB Windows installer's PostgreSQL, which is an MSVC build that ships
+# lib\postgres.lib and the MSVC headers (-Dpg_dir="C:/Program Files/PostgreSQL/18").
+# The check is that <pg_dir>\lib\postgres.lib exists.  A MinGW/Strawberry
+# PostgreSQL will NOT work: it ships a GCC-flavored pg_config.h
 # (HAVE_STRINGS_H=1, PG_INT128_TYPE=__int128) that MSVC cannot consume, and no
 # postgres.lib backend import library to link against.  The pg_fts C sources are
 # MSVC-clean (vendored sparsemap carries full _MSC_VER shims, including
 # _M_ARM64).  Validated on Windows 11 ARM64 (x64-emulated cl) under both VS2022
 # (cl 19.44) and VS2026-preview (cl 19.50): builds clean and @@@/<=>/fts_count
-# pass against a from-source MSVC PostgreSQL 17.10.
+# pass against a from-source MSVC PostgreSQL 17.10 (v0.1.0).  1.5.0 through
+# 1.14.2 did not link under MSVC (__builtin_clz in pg_fts_for.h, fixed in
+# 1.14.3); the fix was tested on EDB PostgreSQL 18.6 + VS 2026 (cl 19.51) by
+# the reporter (Codeberg #7), not by this project.
 #
 # Build (from an "x64 Native Tools" prompt, or after vcvars64.bat):
 #   meson setup build -Dpg_dir=C:/pgsql --buildtype=release
