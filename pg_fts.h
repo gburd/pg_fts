@@ -242,10 +242,10 @@ extern bool fts_doc_has_fuzzy(FtsDoc doc, const char *term, int termlen, int k);
 /* shared: does any doc term match the regular expression? (stage 14) */
 extern bool fts_doc_has_regex(FtsDoc doc, const char *re, int relen);
 
-/* pg_fts_rank.c -- collect distinct query term operands (shared) */
+/* pg_fts_rank.c -- collect query term operands, one per occurrence (shared) */
 extern int	fts_query_terms(FtsQuery q, const char ***terms_out, int **lens_out);
 extern double fts_bm25_score_index(FtsDoc doc, FtsQuery q, double N,
-								   double avgdl, const double *dfs);
+								   double avgdl, const double *dfs, int ndfs);
 
 /* pg_fts_trgm.c -- trigram pre-filter for fuzzy/regex at scale */
 #define FTS_MAX_TRIGRAMS 64

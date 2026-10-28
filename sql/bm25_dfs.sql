@@ -1,0 +1,65 @@
+-- bm25_dfs (1.14.3, Codeberg #9): fts_bm25 / fts_bm25_opts with a dfs array
+-- shorter than the query's term list.  Through 1.14.2 fts_bm25_score read
+-- dfs[i] for every query term with no bound, so a short or empty array read
+-- past its palloc'd copy and scored with whatever the memory held: '{}' run
+-- right after an ARRAY[x] call returned the ARRAY[x] call's score.  A term
+-- past the end of the array now scores with df = 1, exactly as a NULL dfs
+-- (and as fts_bm25f already did).  Each probe is two \gset statements, the
+-- second right after the first, because that is the order that leaked: a
+-- statement in between (or a wrapping round()) reuses the freed chunk first.
+SET client_min_messages = warning;
+CREATE EXTENSION IF NOT EXISTS pg_fts;
+\set d 'to_ftsdoc(''simple'', ''alpha beta'')'
+\set q 'to_ftsquery(''simple'', ''alpha | beta'')'
+
+-- reference: NULL dfs (df = 1 for both) and explicit full arrays
+SELECT round(fts_bm25(:d, :q, 1000, 2)::numeric, 4) AS null_dfs,
+       round(fts_bm25(:d, :q, 1000, 2, ARRAY[1, 1]::float8[])::numeric, 4) AS ones,
+       round(fts_bm25(:d, :q, 1000, 2, ARRAY[500, 1]::float8[])::numeric, 4) AS df500_1,
+       round(fts_bm25(:d, :q, 1e12, 2)::numeric, 4) AS bign_null;
+SELECT fts_bm25(:d, :q, 1000, 2) AS ref \gset
+SELECT fts_bm25(:d, :q, 1e12, 2) AS refbig \gset
+
+-- short array: the missing second term is df = 1
+SELECT fts_bm25(:d, :q, 1000, 2, ARRAY[500]::float8[]) AS y \gset
+SELECT round(:y::numeric, 4) AS short_500,
+       :y::float8 = fts_bm25(:d, :q, 1000, 2, ARRAY[500, 1]::float8[]) AS short_eq_padded;
+
+-- empty array right after a one-element call (1.14.2: 7.1964, the 500 call)
+SELECT fts_bm25(:d, :q, 1000, 2, ARRAY[500]::float8[]) AS x \gset
+SELECT fts_bm25(:d, :q, 1000, 2, '{}'::float8[]) AS y \gset
+SELECT round(:y::numeric, 4) AS empty_after_500, :y::float8 = :ref::float8 AS empty_eq_null;
+
+-- a large n_docs widens bm25_idf's clamp window, so a stale df shows in full
+-- (1.14.2: 34.1333, the 1e9 call)
+SELECT fts_bm25(:d, :q, 1e12, 2, ARRAY[1e9]::float8[]) AS x \gset
+SELECT fts_bm25(:d, :q, 1e12, 2, '{}'::float8[]) AS y \gset
+SELECT round(:y::numeric, 4) AS bign_empty_after_1e9, :y::float8 = :refbig::float8 AS bign_empty_eq_null;
+
+-- a NULL element is df = 1 too
+SELECT fts_bm25(:d, :q, 1000, 2, ARRAY[NULL, NULL]::float8[]) = :ref::float8 AS null_elems_eq_null;
+
+-- the same read in fts_bm25_opts (1.14.2: 34.1333)
+SELECT fts_bm25_opts(:d, :q, 1e12, 2, 1.2, 0.75, 'lucene', ARRAY[1e9]::float8[]) AS x \gset
+SELECT fts_bm25_opts(:d, :q, 1e12, 2, 1.2, 0.75, 'lucene', '{}'::float8[]) AS y \gset
+SELECT round(:y::numeric, 4) AS opts_empty_after_1e9, :y::float8 = :refbig::float8 AS opts_empty_eq_null;
+SELECT fts_bm25_opts(:d, :q, 1e12, 2, 1.2, 0.75, 'robertson', ARRAY[1e9]::float8[]) AS x \gset
+SELECT fts_bm25_opts(:d, :q, 1e12, 2, 1.2, 0.75, 'robertson', '{}'::float8[]) AS y \gset
+SELECT :y::float8 = fts_bm25_opts(:d, :q, 1e12, 2, 1.2, 0.75, 'robertson', NULL) AS opts_rob_empty_eq_null;
+
+-- fts_bm25f already guarded the read; with one field of weight 1 it agrees
+SELECT fts_bm25f(ARRAY[:d], :q, ARRAY[1]::float8[], 1e12, ARRAY[2]::float8[], ARRAY[1e9]::float8[]) AS x \gset
+SELECT fts_bm25f(ARRAY[:d], :q, ARRAY[1]::float8[], 1e12, ARRAY[2]::float8[], '{}'::float8[]) AS y \gset
+SELECT round(:y::numeric, 4) AS bm25f_empty, abs(:y::float8 - :refbig::float8) < 1e-9 AS bm25f_eq_bm25;
+
+-- dfs is one entry per query term OCCURRENCE: duplicates are not removed, so
+-- 'alpha | alpha' scores alpha twice and takes two dfs slots
+SELECT round(fts_bm25(:d, to_ftsquery('simple', 'alpha'), 1000, 2)::numeric, 4) AS alpha,
+       round(fts_bm25(:d, to_ftsquery('simple', 'alpha | alpha'), 1000, 2)::numeric, 4) AS alpha_alpha,
+       round(fts_bm25(:d, to_ftsquery('simple', 'alpha | alpha'), 1000, 2, ARRAY[500, 500]::float8[])::numeric, 4) AS alpha_alpha_500;
+-- and fts_index_df returns one element per occurrence, in the same order
+CREATE TABLE bd (id int, body text);
+INSERT INTO bd SELECT g, CASE WHEN g <= 30 THEN 'alpha' ELSE 'beta' END FROM generate_series(1, 100) g;
+CREATE INDEX bd_fts ON bd USING fts (to_ftsdoc('simple', body));
+SELECT fts_index_df('bd_fts', to_ftsquery('simple', 'alpha | alpha | beta')) AS df_per_occurrence;
+DROP TABLE bd;

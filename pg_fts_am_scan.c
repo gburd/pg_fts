@@ -3775,7 +3775,8 @@ fts_index_stats(PG_FUNCTION_ARGS)
 
 PG_FUNCTION_INFO_V1(fts_index_df);
 
-/* fts_index_df(regclass, ftsquery) -> float8[] of df per distinct query term */
+/* fts_index_df(regclass, ftsquery) -> float8[] of df per query term occurrence,
+ * in fts_query_terms() order (duplicates are not removed) */
 Datum
 fts_index_df(PG_FUNCTION_ARGS)
 {
@@ -6352,7 +6353,7 @@ bm25_topk_exact(Relation index, FtsQuery q, const BM25MetaPageData *meta,
 				ResetExprContext(econtext);
 				continue;
 			}
-			score = fts_bm25_score_index(doc, q, N, avgdl, dfs);
+			score = fts_bm25_score_index(doc, q, N, avgdl, dfs, nterms);
 			MemoryContextSwitchTo(oldctx);
 			ResetExprContext(econtext);
 		}

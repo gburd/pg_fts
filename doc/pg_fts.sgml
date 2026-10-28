@@ -332,7 +332,12 @@ SELECT id FROM docs
       <replaceable>query</replaceable> given the corpus size
       <replaceable>n_docs</replaceable>, average document length
       <replaceable>avgdl</replaceable>, and per-term document frequencies
-      <replaceable>dfs</replaceable>.  <function>fts_bm25_opts</function>
+      <replaceable>dfs</replaceable>: one entry per term occurrence in the
+      query, in query order (a repeated term takes one entry each time and is
+      scored each time), as <function>fts_index_df</function> returns them.  A
+      NULL <replaceable>dfs</replaceable>, a NULL element, or a term past the
+      end of a shorter array is scored with a document frequency of 1.
+      <function>fts_bm25_opts</function>
       exposes the tuning knobs and selectable variants (<literal>lucene</literal>,
       <literal>robertson</literal>, <literal>atire</literal>,
       <literal>bm25+</literal>, <literal>bm25l</literal>) matching the

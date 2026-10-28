@@ -170,8 +170,10 @@ CREATE OPERATOR @@@ (
 -- BM25 relevance score of a document against a query.
 --   n_docs : total documents in the corpus (N)
 --   avgdl  : average document length (in tokens)
---   dfs    : optional float8[] of per-query-term document frequencies, in the
---            order the query's distinct terms appear; NULL treats terms as rare
+--   dfs    : optional float8[] of per-query-term document frequencies, one per
+--            term occurrence in query order (duplicates are not removed, as
+--            fts_index_df returns them); NULL, or a missing trailing entry,
+--            treats the term as rare (df = 1)
 CREATE FUNCTION fts_bm25(ftsdoc, ftsquery, n_docs float8, avgdl float8,
                          dfs float8[] DEFAULT NULL)
 RETURNS float8

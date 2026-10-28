@@ -45,6 +45,20 @@ SELECT pg_temp.ok('rank_ok', count(*) = 10) AS rank_ok
   FROM (SELECT id FROM a WHERE to_ftsdoc('simple', body) @@@ 'alpha'::ftsquery
         ORDER BY to_ftsdoc('simple', body) <=> 'alpha'::ftsquery LIMIT 10) s;
 
+-- fts_bm25 / fts_bm25_opts with a dfs array shorter than the query (1.14.3,
+-- Codeberg #9): every query term is in the doc, so each one reads its dfs
+-- slot; a term past the end of the array must score as df = 1 (a NULL dfs)
+-- instead of reading up to 16 kB past the array's palloc'd copy.
+SELECT pg_temp.ok('bm25_short_dfs_ok',
+         fts_bm25(d, q, 1e12, 20, '{}'::float8[]) = fts_bm25(d, q, 1e12, 20)
+     AND fts_bm25(d, q, 1e12, 20, ARRAY[1e9]::float8[])
+       = fts_bm25(d, q, 1e12, 20, array_prepend(1e9::float8, array_fill(1::float8, ARRAY[1999])))
+     AND fts_bm25_opts(d, q, 1e12, 20, 1.2, 0.75, 'bm25l', '{}'::float8[])
+       = fts_bm25_opts(d, q, 1e12, 20, 1.2, 0.75, 'bm25l', NULL)) AS bm25_short_dfs_ok
+  FROM (SELECT to_ftsdoc('simple', string_agg('t' || g, ' ')) AS d,
+               to_ftsquery('simple', string_agg('t' || g, ' | ')) AS q
+          FROM generate_series(1, 2000) g) s;
+
 -- index-only exact count
 SELECT pg_temp.ok('count_ok', fts_count('a_on', 'alpha'::ftsquery) = (SELECT count(*) FROM a WHERE body ~ '\malpha\M')) AS count_ok;
 

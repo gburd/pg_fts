@@ -76,10 +76,11 @@ bm25_idf(BM25Variant v, double N, double df)
 }
 
 /*
- * Collect the distinct term operands referenced by a query.  Operators and
- * duplicate terms are ignored -- BM25 sums over the query's terms present in
- * the document, regardless of the boolean structure (matching Lucene, which
- * scores the disjunction of query terms).
+ * Collect the term operands referenced by a query, one entry per occurrence in
+ * query order.  Operators are ignored and duplicates are NOT removed (so
+ * 'alpha | alpha' yields two entries and scores alpha twice) -- BM25 sums over
+ * the query's terms present in the document, regardless of the boolean
+ * structure (matching Lucene, which scores the disjunction of query terms).
  */
 int
 fts_query_terms(FtsQuery q, const char ***terms_out, int **lens_out)
@@ -113,12 +114,14 @@ fts_query_terms(FtsQuery q, const char ***terms_out, int **lens_out)
  *
  * dfs may be NULL, in which case every term is treated as having df = 1 (as if
  * it were rare); this yields a usable ranking when true df is unavailable.
- * When dfs is provided it must have one entry per distinct query term, in the
- * order fts_query_terms() returns them.
+ * When dfs is provided it holds ndfs entries, one per query term occurrence in
+ * the order fts_query_terms() returns them; a term past the end of a short
+ * array is treated as df = 1, like a NULL dfs (CHANGELOG 1.14.3).
  */
 static double
 fts_bm25_score(FtsDoc doc, FtsQuery q, double N, double avgdl,
-			   const double *dfs, double k1, double b, BM25Variant variant)
+			   const double *dfs, int ndfs, double k1, double b,
+			   BM25Variant variant)
 {
 	const char **terms;
 	int		   *lens;
@@ -145,7 +148,7 @@ fts_bm25_score(FtsDoc doc, FtsQuery q, double N, double avgdl,
 			continue;			/* term absent: contributes nothing */
 
 		tf = (double) e->tf;
-		df = (dfs != NULL) ? dfs[i] : 1.0;
+		df = (dfs != NULL && i < ndfs) ? dfs[i] : 1.0;
 		idf = bm25_idf(variant, N, df);
 
 		if (variant == BM25_BM25L)
@@ -184,10 +187,10 @@ fts_bm25_score(FtsDoc doc, FtsQuery q, double N, double avgdl,
 
 double
 fts_bm25_score_index(FtsDoc doc, FtsQuery q, double N, double avgdl,
-					 const double *dfs)
+					 const double *dfs, int ndfs)
 {
-	return fts_bm25_score(doc, q, N, avgdl, dfs,
-					  BM25_DEFAULT_K1, BM25_DEFAULT_B, BM25_LUCENE);
+	return fts_bm25_score(doc, q, N, avgdl, dfs, ndfs,
+						  BM25_DEFAULT_K1, BM25_DEFAULT_B, BM25_LUCENE);
 }
 
 /*
@@ -238,7 +241,7 @@ fts_bm25(PG_FUNCTION_ARGS)
 	if (N < 1.0)
 		N = 1.0;
 
-	score = fts_bm25_score(doc, q, N, avgdl, dfs,
+	score = fts_bm25_score(doc, q, N, avgdl, dfs, ndfs,
 						   BM25_DEFAULT_K1, BM25_DEFAULT_B, BM25_LUCENE);
 
 	PG_FREE_IF_COPY(doc, 0);
@@ -325,7 +328,7 @@ fts_bm25_opts(PG_FUNCTION_ARGS)
 	if (N < 1.0)
 		N = 1.0;
 
-	score = fts_bm25_score(doc, q, N, avgdl, dfs, k1, b, variant);
+	score = fts_bm25_score(doc, q, N, avgdl, dfs, ndfs, k1, b, variant);
 
 	PG_FREE_IF_COPY(doc, 0);
 	PG_FREE_IF_COPY(q, 1);
@@ -346,7 +349,7 @@ fts_bm25_opts(PG_FUNCTION_ARGS)
  *
  * Inputs are parallel arrays over fields: one ftsdoc per field, one weight per
  * field, one avgdl per field.  IDF uses the summed df across fields (dfs is one
- * value per distinct query term, as with fts_bm25).
+ * value per query term occurrence, as with fts_bm25).
  */
 PG_FUNCTION_INFO_V1(fts_bm25f);
 
@@ -487,7 +490,7 @@ fts_distance(PG_FUNCTION_ARGS)
 	q = PG_GETARG_FTSQUERY(1);
 
 	/* N and avgdl unknown here; use N=1, avgdl=|D| so length term is neutral */
-	score = fts_bm25_score(doc, q, 1.0, (double) doc->doclen, NULL,
+	score = fts_bm25_score(doc, q, 1.0, (double) doc->doclen, NULL, 0,
 						   BM25_DEFAULT_K1, BM25_DEFAULT_B, BM25_LUCENE);
 
 	PG_FREE_IF_COPY(doc, 0);
@@ -510,7 +513,7 @@ fts_distance_commutator(PG_FUNCTION_ARGS)
 	q = PG_GETARG_FTSQUERY(0);
 	doc = PG_GETARG_FTSDOC(1);
 
-	score = fts_bm25_score(doc, q, 1.0, (double) doc->doclen, NULL,
+	score = fts_bm25_score(doc, q, 1.0, (double) doc->doclen, NULL, 0,
 						   BM25_DEFAULT_K1, BM25_DEFAULT_B, BM25_LUCENE);
 
 	PG_FREE_IF_COPY(q, 0);
