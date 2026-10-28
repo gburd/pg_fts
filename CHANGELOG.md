@@ -4,6 +4,100 @@ All notable changes to pg_fts are documented here.
 
 ## Unreleased
 
+## 1.14.3 - 2026-10-28
+
+Five fixes for issues reported by robinlahtinen on Codeberg (#6-#10, all against 1.14.2,
+each with a SQL reproduction and code pointers), and one sibling found while fixing #10.
+One is an out-of-bounds read reachable by any role that can call `fts_bm25`.
+**No on-disk format change; no REINDEX; no new or changed SQL objects**
+(`pg_fts--1.14.2--1.14.3.sql` is a no-op; the base script changed only in a comment).
+Measured on PostgreSQL 17.10 and 18.6 (`bench/RESULTS_1143_2026-10-28.md`).
+
+### Fixed
+
+- **`fts_bm25` / `fts_bm25_opts` read past the end of a short `dfs` array**, reported by
+  robinlahtinen (Codeberg #9).  Every release (the read is in 0.1.0's scorer).  The array
+  is copied into a buffer of its own length, and the scorer read `dfs[i]` for every query
+  term with no bound, so an array shorter than the query's term list, including `'{}'`,
+  read whatever the memory held.  On 1.14.2 `'{}'` run right after an `ARRAY[1e9]` call
+  returned the `1e9` call's score (34.1333 instead of 54.4511), and a 2000-term query
+  with `'{}'` returned NaN.  With transaction pooling that memory can hold another
+  client's earlier value.  A term past the end of the array now scores with df = 1, the
+  same as a NULL `dfs` and as `fts_bm25f` already did.  Under the ASan-built
+  PostgreSQL 17 the read was not reported: PostgreSQL's allocator does not poison
+  freed chunks, so this is caught by the regression test's defined values, not by ASan.
+- **The MSVC build did not link** (`__builtin_clz` in `pg_fts_for.h`), reported with a
+  patch by robinlahtinen (Codeberg #7).  1.5.0 through 1.14.2 (the doclen sidecar codec).
+  The reporter's `_BitScanReverse` branch is applied as sent; they built and ran it on the
+  EDB installer's PostgreSQL 18.6 with Visual Studio 2026.  Not built under MSVC by this
+  project; the non-MSVC preprocessed header is byte-identical to 1.14.2's.  The README and
+  `meson.build` now say the EDB installer's PostgreSQL works (`<pg_dir>\lib\postgres.lib`
+  must exist).
+- **`fts_index_df` left pending documents out**, reported by robinlahtinen (Codeberg #10).
+  Every release up to 1.14.2; since 1.13.0 the ordering scan counts them, so from 1.13.0
+  the two disagreed.  `fts_index_stats().ndocs` and the ordering scan's IDF count
+  documents not yet merged into a segment, `fts_index_df` did not, so a term held only
+  by pending documents read as df = 1, and the README recipe
+  `fts_bm25(doc, q, s.ndocs, s.avgdl, fts_index_df(idx, q))` disagreed with the ordering
+  scan until the next flush.  Reporter's repro: `{1,10}` with 50 pending `fresh` rows,
+  now `{50,10}`.  On that corpus the recipe's distance differed from the ordering scan's
+  own distance on all 50 pending rows (max 0.3167) in 1.14.2 and on none in 1.14.3,
+  before and after `fts_merge`.  A term no document holds still reports 1 (`fts_bm25`
+  clamps df to at least 1, so 1 and 0 score the same).  `fts_index_stats().nterms` stays
+  a sum over the segment dictionaries (a pending-only term is not counted, a term in
+  several segments is counted once per segment); now documented.
+- **Ranked prefix, fuzzy, regex and weighted queries scored pending-only terms as
+  absent** (found while fixing #10).  Since 1.13.0 (when such queries began ranking
+  through an exact heap pass).  That pass summed df over the segments only, while every
+  other ranked path adds the pending documents, so the scores changed at the next flush:
+  `fresh | old1 | app:*` by up to 3.5165 on 150 rows.  It now adds them.
+- **A ranked query over a partial fts index planned Bitmap Heap Scan + Sort and did not
+  return the BM25 order**, reported by robinlahtinen (Codeberg #8).  1.14.1 and 1.14.2.
+  1.14.1 made the `@@@` estimator skip partial indexes along with the `count(*)`
+  pushdown, so it fell back to `tsmatchsel`'s 0.5%: the reporter's query estimated 5
+  rows where 1,001 match, the Sort ordered by `<=>`'s corpus-free fallback score, and
+  the top 3 were 2, 3, 1 instead of 5000, 1, 2.  The estimator now reads a partial index
+  whose predicate the query implies (`predOK`) when there is no non-partial one; the
+  plan is the ordering index scan and the order is 5000, 1, 2.  Estimates on a 2,000-row
+  table with a 100-row partial index: 100 (100 match), 50 (50) and 10 (10), where 1.14.2
+  said 1 for each.  The `count(*)` pushdown still never answers from a partial index.
+  The `<=>` documentation now says that the BM25 order comes only from the ordering
+  index scan.
+- **Ranked `absent & (a | b)` walked every posting of the OR group**, reported by
+  robinlahtinen (Codeberg #6).  Since the lazy boolean gate (0.2.3).  Not a wrong
+  result.  Before the walk, the query is now evaluated once over which terms have any
+  postings (a term under an odd number of NOTs counted as absent); when no document can
+  match, the walk is skipped and only pending documents are ranked.  Reporter's
+  400k-row corpus, ranked top-10, warm, median of 21 runs x 3 runs per arm:
+  `zzzq & (apple | banana)` 10.8 -> 0.066 ms (PG 17.10), 10.7 -> 0.067 ms (PG 18.6);
+  index buffers 1,581 -> 13.  `zzzq & apple`, `rare & apple`, `rare & (apple | banana)`
+  and `apple | banana` are unchanged (within run-to-run variation, checked by swapping
+  the two builds between the two clusters).  Results are identical on 16 queries
+  (NOT, nested NOT, phrase, prefix) against a seq-scan oracle.
+  Still open (ROADMAP I19a, I19b): `rare & (a | b)` still walks the OR group (3.6 ms vs
+  0.076 ms for `rare & apple`), and `zzzq & (apple | ban:*)` (the collect path) still
+  builds both OR operands (3.2 ms vs 0.90 ms for `zzzq & ban:*`).
+
+### Retracted
+
+- The `fts_bm25` SQL comment, the scorer's C comments and the `fts_bm25f` comment said
+  `dfs` has "one entry per distinct query term", and `fts_query_terms` said duplicate
+  terms are ignored.  It does not de-duplicate: `alpha | alpha` scores alpha twice and
+  takes two `dfs` slots, and `fts_index_df` returns one element per occurrence, so the
+  two always agreed.  The comments and docs now say one entry per term occurrence
+  (reported in Codeberg #9).
+- `meson.build` said "The pg_fts C sources are MSVC-clean".  From 1.5.0 to 1.14.2 they
+  did not link under MSVC (above).
+- The docs called `fts_index_df` "the per-term document frequencies used for IDF".
+  Until 1.14.3 that was true only with no pending documents (above).
+
+### Tests
+
+- New regression tests `bm25_dfs`, `index_df_pending`, `planner_partial`,
+  `ranked_empty_and`; each fails on 1.14.2.  `test/asan_smoke.sql` gains the
+  2000-term short-`dfs` probe (NaN on 1.14.2).  `planner_indexes`' covered-predicate
+  count now plans a bitmap scan (estimate 100 instead of 1; same count).
+
 ## 1.14.2 - 2026-10-25
 
 A documentation and safety release.  **No code change, no on-disk format change, no SQL
