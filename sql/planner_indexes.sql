@@ -19,9 +19,9 @@ SELECT fts_count('pi_fts', 'alpha'::ftsquery) AS in_partial_index;
 -- count(*) counts the table, not the partial index (1.14.0: 100)
 EXPLAIN (COSTS OFF) SELECT count(*) FROM pi WHERE d @@@ 'alpha'::ftsquery;
 SELECT count(*) AS alpha FROM pi WHERE d @@@ 'alpha'::ftsquery;
--- a query the predicate covers still uses the index, through the normal paths
--- (a bitmap scan since 1.14.3: the estimator reads the predOK partial index,
--- 100 rows, where 1.14.1-1.14.2 fell back to tsmatchsel, 1 row; planner_partial)
+-- a query whose other quals ARE the predicate is counted from the partial index
+-- (1.14.4, count_partial; 1.14.3 planned a bitmap scan, 1.14.1-1.14.2 a scan
+-- estimated at 1 row); the count is the same
 SET enable_seqscan = off;
 EXPLAIN (COSTS OFF) SELECT count(*) FROM pi WHERE d @@@ 'alpha'::ftsquery AND id <= 100;
 SELECT count(*) AS alpha_le_100 FROM pi WHERE d @@@ 'alpha'::ftsquery AND id <= 100;

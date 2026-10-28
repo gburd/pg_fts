@@ -306,6 +306,43 @@ fts_planner(Query *parse, const char *query_string, int cursorOptions,
 }
 
 /*
+ * A partial bm25 index on `rel` over `expr` whose predicate is EQUIVALENT to
+ * the query's other quals (1.14.4, ROADMAP I17a), or InvalidOid.  A partial
+ * index holds exactly the rows its predicate P admits, so its count of q is
+ * the count of `P AND q`; that answers `R AND q` (R = the other quals) only
+ * when every row satisfying R satisfies P (predOK: check_index_predicates has
+ * proved R => P) and every row satisfying P satisfies R (proved here with the
+ * same predicate prover, P => R).  Anything the prover cannot show either way
+ * -- `id <= 50` against `id <= 100`, a Param, a volatile function -- leaves the
+ * pushdown off and the count to the normal plan, as before.
+ */
+static Oid
+fts_rel_partial_count_index(RelOptInfo *rel, Node *expr, List *others)
+{
+	Oid			ftsam = get_index_am_oid("fts", true);
+	ListCell   *lc;
+
+	if (!OidIsValid(ftsam) || contain_volatile_functions((Node *) others))
+		return InvalidOid;
+	foreach(lc, rel->indexlist)
+	{
+		IndexOptInfo *info = (IndexOptInfo *) lfirst(lc);
+
+		if (info->relam != ftsam || info->hypothetical || info->pages == 0 ||
+			info->ncolumns != 1 || info->indpred == NIL || !info->predOK)
+			continue;
+		if (!(info->indexkeys[0] != 0
+			  ? (IsA(expr, Var) && ((Var *) expr)->varno == rel->relid &&
+				 ((Var *) expr)->varattno == info->indexkeys[0])
+			  : (info->indexprs != NIL && equal(linitial(info->indexprs), expr))))
+			continue;
+		if (predicate_implied_by(others, info->indpred, false))
+			return info->indexoid;
+	}
+	return InvalidOid;
+}
+
+/*
  * The bm25 index on `rel` whose indexed expression is `expr`, or InvalidOid.
  * Taken from the planner's own list (rel->indexlist), which leaves out every
  * index a query must not read: one not yet valid (CREATE INDEX CONCURRENTLY in
@@ -316,8 +353,9 @@ fts_planner(Query *parse, const char *query_string, int cursorOptions,
  * no storage), and a partial index (it holds only the rows its predicate
  * admits) -- except that the estimator (estimate = true) may use a partial
  * index whose predicate the query implies (predOK), when the rel has no
- * non-partial one: see fts_matchsel.  The count pushdown never may (a count
- * from a partial index is a wrong answer).  1.14.0 and earlier walked
+ * non-partial one: see fts_matchsel.  The count pushdown takes a partial index
+ * only through fts_rel_partial_count_index, when its predicate is equivalent
+ * to the query's other quals (1.14.4).  1.14.0 and earlier walked
  * RelationGetIndexList, which includes all of these: wrong counts and planning
  * errors (CHANGELOG 1.14.1).  A get_relation_info_hook that prunes
  * rel->indexlist (pg_hint_plan) therefore disables the count pushdown and the
@@ -520,6 +558,7 @@ fts_find_pushdown_index(PlannerInfo *root, RelOptInfo *rel,
 	Oid			matchop = fts_lookup_match_op();
 	ListCell   *lc;
 	OpExpr	   *matchclause = NULL;
+	List	   *others = NIL;	/* the quals besides @@@ */
 	int			nquals = 0;
 
 	if (!OidIsValid(matchop))
@@ -527,21 +566,26 @@ fts_find_pushdown_index(PlannerInfo *root, RelOptInfo *rel,
 	if (rel->reloptkind != RELOPT_BASEREL || rel->rtekind != RTE_RELATION)
 		return InvalidOid;
 
-	/* need exactly one qual, and it must be the @@@ operator */
+	/*
+	 * Exactly one @@@ qual.  Any other quals must be EQUIVALENT to a partial
+	 * index's predicate (1.14.4, ROADMAP I17a): see below.
+	 */
 	foreach(lc, baserestrictinfo)
 	{
 		RestrictInfo *ri = (RestrictInfo *) lfirst(lc);
-		OpExpr	   *op;
+		OpExpr	   *op = IsA(ri->clause, OpExpr) ? (OpExpr *) ri->clause : NULL;
 
 		nquals++;
-		if (!IsA(ri->clause, OpExpr))
-			return InvalidOid;
-		op = (OpExpr *) ri->clause;
-		if (op->opno != matchop || list_length(op->args) != 2)
-			return InvalidOid;
-		matchclause = op;
+		if (op != NULL && op->opno == matchop && list_length(op->args) == 2)
+		{
+			if (matchclause != NULL)
+				return InvalidOid;	/* two @@@ quals */
+			matchclause = op;
+		}
+		else
+			others = lappend(others, ri->clause);
 	}
-	if (nquals != 1 || matchclause == NULL)
+	if (matchclause == NULL)
 		return InvalidOid;
 
 	/* the right-hand side must be a plan-time constant FtsQuery */
@@ -554,7 +598,9 @@ fts_find_pushdown_index(PlannerInfo *root, RelOptInfo *rel,
 	}
 
 	/* a bm25 index on this rel whose expression is the LHS */
-	return fts_rel_bm25_index(rel, (Node *) linitial(matchclause->args), false);
+	if (others == NIL)
+		return fts_rel_bm25_index(rel, (Node *) linitial(matchclause->args), false);
+	return fts_rel_partial_count_index(rel, (Node *) linitial(matchclause->args), others);
 }
 
 /*

@@ -58,6 +58,14 @@ All notable changes to pg_fts are documented here.
   0.069 ms (PG 17.10), 3.218 -> 0.072 ms (PG 18.6); `zzzq & ban:*` 0.916 -> 0.067;
   buffers 59 -> 17.  Not changed: `rare & (apple | ban:*)` (3.234 / 3.179 ms), where the
   required term is present and the OR group is still built.
+- **`count(*)` is answered from a partial fts index whose predicate the query's other
+  quals are equivalent to** (ROADMAP I17a).  `SELECT count(*) FROM t WHERE live AND d
+  @@@ q` with `CREATE INDEX ... WHERE live` now uses the index-native count.  The quals
+  must imply the predicate (the planner's `predOK`) and the predicate must imply the
+  quals (proved with the same predicate prover); `id <= 500` against a `WHERE id <=
+  1000` index, a volatile function or anything unprovable keeps the normal plan.  New
+  regression test `count_partial`: 8 query shapes, each count equal to a seq scan and
+  non-zero, pushed down exactly in the 3 equivalent cases, and after deletes.
 
 ### Tests
 

@@ -35,19 +35,15 @@ SELECT count(*) AS alpha FROM pi WHERE d @@@ 'alpha'::ftsquery;
   2000
 (1 row)
 
--- a query the predicate covers still uses the index, through the normal paths
--- (a bitmap scan since 1.14.3: the estimator reads the predOK partial index,
--- 100 rows, where 1.14.1-1.14.2 fell back to tsmatchsel, 1 row; planner_partial)
+-- a query whose other quals ARE the predicate is counted from the partial index
+-- (1.14.4, count_partial; 1.14.3 planned a bitmap scan, 1.14.1-1.14.2 a scan
+-- estimated at 1 row); the count is the same
 SET enable_seqscan = off;
 EXPLAIN (COSTS OFF) SELECT count(*) FROM pi WHERE d @@@ 'alpha'::ftsquery AND id <= 100;
-                              QUERY PLAN                               
------------------------------------------------------------------------
- Aggregate
-   ->  Bitmap Heap Scan on pi
-         Recheck Cond: ((d @@@ '''alpha'''::ftsquery) AND (id <= 100))
-         ->  Bitmap Index Scan on pi_fts
-               Index Cond: (d @@@ '''alpha'''::ftsquery)
-(5 rows)
+       QUERY PLAN       
+------------------------
+ Custom Scan (FtsCount)
+(1 row)
 
 SELECT count(*) AS alpha_le_100 FROM pi WHERE d @@@ 'alpha'::ftsquery AND id <= 100;
  alpha_le_100 
