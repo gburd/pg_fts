@@ -1,0 +1,15 @@
+== PG17 tree 7f233ca fix so 6d166470 v1142 so 894d0018; keep-last in source: 1
+PG17 v1142 so=894d0018: t/013_ranked_flush_race.pl ..  t/013_ranked_flush_race.pl (Wstat: 7424 (exited 29) Tests: 3 Failed: 3) Result: FAIL  # Failed test 'no backend terminated by a signal' # got: '1' # expected: '0' # Failed test 'every insert succeeded' 
+PG17 fix so=6d166470: t/013_ranked_flush_race.pl .. ok Result: PASS  
+PG17 v1142 so=894d0018: t/013_ranked_flush_race.pl ..  t/013_ranked_flush_race.pl (Wstat: 7424 (exited 29) Tests: 3 Failed: 3) Result: FAIL  # Failed test 'no backend terminated by a signal' # got: '1' # expected: '0' # Failed test 'every insert succeeded' 
+PG17 fix so=6d166470: t/013_ranked_flush_race.pl .. ok Result: PASS  
+PG17 v1142 so=894d0018: t/013_ranked_flush_race.pl ..  t/013_ranked_flush_race.pl (Wstat: 7424 (exited 29) Tests: 3 Failed: 3) Result: FAIL  # Failed test 'no backend terminated by a signal' # got: '1' # expected: '0' # Failed test 'every insert succeeded' 
+PG17 fix so=6d166470: t/013_ranked_flush_race.pl .. ok Result: PASS  
+== PG18 tree 7f233ca fix so 847f7474 v1142 so 546732a6; keep-last in source: 1
+PG18 v1142 so=546732a6: t/013_ranked_flush_race.pl ..  t/013_ranked_flush_race.pl (Wstat: 7424 (exited 29) Tests: 3 Failed: 3) Result: FAIL  # Failed test 'no backend terminated by a signal' # got: '1' # expected: '0' # Failed test 'every insert succeeded' 
+PG18 fix so=847f7474: t/013_ranked_flush_race.pl .. ok Result: PASS  
+PG18 v1142 so=546732a6: t/013_ranked_flush_race.pl ..  t/013_ranked_flush_race.pl (Wstat: 7424 (exited 29) Tests: 3 Failed: 3) Result: FAIL  # Failed test 'no backend terminated by a signal' # got: '1' # expected: '0' # Failed test 'every insert succeeded' 
+PG18 fix so=847f7474: t/013_ranked_flush_race.pl .. ok Result: PASS  
+PG18 v1142 so=546732a6: t/013_ranked_flush_race.pl ..  t/013_ranked_flush_race.pl (Wstat: 7424 (exited 29) Tests: 3 Failed: 3) Result: FAIL  # Failed test 'no backend terminated by a signal' # got: '1' # expected: '0' # Failed test 'every insert succeeded' 
+PG18 fix so=847f7474: t/013_ranked_flush_race.pl .. ok Result: PASS  
+T013AB_DONE

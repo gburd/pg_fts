@@ -1,0 +1,12 @@
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+0x00007f0ac249b3a7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+No source file named pg_fts_am.c.
+Breakpoint 1 (pg_fts_am.c:7348) pending.
+
+Breakpoint 1, bm25_readbuf (index=0x7f0ac2e43ed0, blk=0) at pg_fts_am.c:850
+850		return ReadBufferExtended(index, MAIN_FORKNUM, blk, RBM_NORMAL,
+#0  bm25_readbuf (index=0x7f0ac2e43ed0, blk=0) at pg_fts_am.c:850
+#1  bm25_flush_pending (index=index@entry=0x7f0ac2e43ed0) at pg_fts_am.c:7348
+#2  0x00007f0ac2dfeba0 in fts_merge (fcinfo=<optimized out>) at pg_fts_am.c:8010
+[Inferior 1 (process 252822) detached]

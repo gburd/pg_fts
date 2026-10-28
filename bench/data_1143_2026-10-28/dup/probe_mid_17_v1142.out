@@ -1,0 +1,47 @@
+SET
+SET
+ ndocs | avgdl | nterms 
+-------+-------+--------
+   300 |     2 |      4
+(1 row)
+
+ ranked_rows | distinct_ids 
+-------------+--------------
+         100 |           50
+(1 row)
+
+ ranked_rows_apple | distinct_ids_apple 
+-------------------+--------------------
+               300 |                250
+(1 row)
+
+ fts_search_rows | fts_search_distinct 
+-----------------+---------------------
+             100 |                  50
+(1 row)
+
+    df    
+----------
+ {50,250}
+(1 row)
+
+ where_count 
+-------------
+          50
+(1 row)
+
+ prefix_ranked_rows | prefix_distinct 
+--------------------+-----------------
+                 50 |              50
+(1 row)
+
+ and_ranked_rows | and_distinct 
+-----------------+--------------
+             100 |           50
+(1 row)
+
+ top10_rows | top10_distinct 
+------------+----------------
+         10 |              5
+(1 row)
+

@@ -1,0 +1,15 @@
+== PG17 so=6d166470
+PG17 run 1: readers_done=8 dup_top10_queries=0 dup_top1000_queries=2 errors=0 rows=26000
+PG17 run 2: readers_done=8 dup_top10_queries=0 dup_top1000_queries=3 errors=0 rows=26000
+PG17 run 3: readers_done=8 dup_top10_queries=0 dup_top1000_queries=2 errors=0 rows=26000
+PG17 run 4: readers_done=8 dup_top10_queries=0 dup_top1000_queries=8 errors=0 rows=26000
+PG17 run 5: readers_done=8 dup_top10_queries=0 dup_top1000_queries=0 errors=0 rows=26000
+segfaults: 0
+== PG18 so=847f7474
+PG18 run 1: readers_done=8 dup_top10_queries=0 dup_top1000_queries=3 errors=0 rows=26000
+PG18 run 2: readers_done=8 dup_top10_queries=0 dup_top1000_queries=4 errors=0 rows=26000
+PG18 run 3: readers_done=8 dup_top10_queries=0 dup_top1000_queries=3 errors=0 rows=26000
+PG18 run 4: readers_done=8 dup_top10_queries=0 dup_top1000_queries=0 errors=0 rows=26000
+PG18 run 5: readers_done=8 dup_top10_queries=0 dup_top1000_queries=0 errors=0 rows=26000
+segfaults: 0
+DUPRATE_DONE

@@ -1,0 +1,21 @@
+run 1 PG17 v1142: PG17 v1142 so=894d0018 secs=62 rows=26000 segments=8 |       1 dup_top10=0 dup_top1000=0  | segfaults in log: 0 | cores=0 start_failed=0 connfail=0 frame0: 
+run 1 PG17 fix: PG17 fix so=418b4166 secs=4 rows=26000 segments=8 |  | segfaults in log: 1 | cores=4 start_failed=0 connfail=0 frame0: in bm25_topk_visible 
+run 1 PG18 v1142: PG18 v1142 so=546732a6 secs=66 rows=26000 segments=8 |       1 dup_top10=0 dup_top1000=0  | segfaults in log: 0 | cores=0 start_failed=0 connfail=0 frame0: 
+run 1 PG18 fix: PG18 fix so=52261013 secs=67 rows=26000 segments=8 |       1 dup_top10=0 dup_top1000=0  | segfaults in log: 0 | cores=0 start_failed=0 connfail=0 frame0: 
+run 2 PG17 v1142: PG17 v1142 so=894d0018 secs=5 rows=26000 segments=8 |  | segfaults in log: 1 | cores=5 start_failed=0 connfail=0 frame0: in bm25_topk_visible 
+run 2 PG17 fix: PG17 fix so=418b4166 secs=4 rows=26000 segments=8 |  | segfaults in log: 1 | cores=4 start_failed=0 connfail=0 frame0: in bm25_topk_visible 
+run 2 PG18 v1142: PG18 v1142 so=546732a6 secs=63 rows=26000 segments=8 |       1 dup_top10=0 dup_top1000=0       1 dup_top10=0 dup_top1000=1  | segfaults in log: 0 | cores=0 start_failed=0 connfail=0 frame0: 
+run 2 PG18 fix: PG18 fix so=52261013 secs=6 rows=26000 segments=8 |  | segfaults in log: 1 | cores=7 start_failed=0 connfail=0 frame0: in bm25_topk_visible 
+run 3 PG17 v1142: PG17 v1142 so=894d0018 secs=4 rows=26000 segments=7 |  | segfaults in log: 1 | cores=4 start_failed=0 connfail=0 frame0: in bm25_topk_visible 
+run 3 PG17 fix: PG17 fix so=418b4166 secs=7 rows=26000 segments=7 |  | segfaults in log: 1 | cores=7 start_failed=0 connfail=0 frame0: in bm25_topk_visible 
+run 3 PG18 v1142: PG18 v1142 so=546732a6 secs=4 rows=26000 segments=8 |  | segfaults in log: 1 | cores=2 start_failed=0 connfail=0 frame0: in bm25_topk_visible 
+run 3 PG18 fix: PG18 fix so=52261013 secs=5 rows=26000 segments=8 |  | segfaults in log: 1 | cores=4 start_failed=0 connfail=0 frame0: in bm25_topk_visible 
+run 4 PG17 v1142: PG17 v1142 so=894d0018 secs=64 rows=26000 segments=8 |       1 dup_top10=0 dup_top1000=0  | segfaults in log: 0 | cores=0 start_failed=0 connfail=0 frame0: 
+run 4 PG17 fix: PG17 fix so=418b4166 secs=6 rows=26000 segments=8 |  | segfaults in log: 1 | cores=7 start_failed=0 connfail=0 frame0: in bm25_topk_visible 
+run 4 PG18 v1142: PG18 v1142 so=546732a6 secs=5 rows=26000 segments=7 |  | segfaults in log: 1 | cores=1 start_failed=0 connfail=0 frame0: in bm25_topk_visible 
+run 4 PG18 fix: PG18 fix so=52261013 secs=6 rows=26000 segments=8 |  | segfaults in log: 1 | cores=5 start_failed=0 connfail=0 frame0: in bm25_topk_visible 
+run 5 PG17 v1142: PG17 v1142 so=894d0018 secs=65 rows=26000 segments=8 |       1 dup_top10=0 dup_top1000=0  | segfaults in log: 0 | cores=0 start_failed=0 connfail=0 frame0: 
+run 5 PG17 fix: PG17 fix so=418b4166 secs=5 rows=26000 segments=8 |  | segfaults in log: 1 | cores=1 start_failed=0 connfail=0 frame0: in bm25_topk_visible 
+run 5 PG18 v1142: PG18 v1142 so=546732a6 secs=7 rows=26000 segments=8 |  | segfaults in log: 1 | cores=6 start_failed=0 connfail=0 frame0: in bm25_topk_visible 
+run 5 PG18 fix: PG18 fix so=52261013 secs=4 rows=26000 segments=8 |  | segfaults in log: 1 | cores=2 start_failed=0 connfail=0 frame0: in bm25_topk_visible 
+DSRATE_DONE

@@ -1,0 +1,32 @@
+SET
+SET
+ ndocs | avgdl | nterms 
+-------+-------+--------
+   250 |     2 |      3
+(1 row)
+
+ ranked_rows | distinct_ids 
+-------------+--------------
+          50 |           50
+(1 row)
+
+ ranked_rows_apple | distinct_ids_apple 
+-------------------+--------------------
+               250 |                250
+(1 row)
+
+ fts_search_rows | fts_search_distinct 
+-----------------+---------------------
+              50 |                  50
+(1 row)
+
+    df    
+----------
+ {50,250}
+(1 row)
+
+ where_count 
+-------------
+          50
+(1 row)
+
