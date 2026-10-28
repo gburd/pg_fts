@@ -91,9 +91,37 @@ SELECT 'vacuum_parallel ok' AS result;
 -- non-parallel VACUUMs still compact and truncate the space the merge freed
 -- (the first truncates the tail the parallel passes' pack left, the second
 -- packs and truncates the rest)
+-- A freed page is recycled only once no snapshot in any database could still
+-- see it (bm25_page_recyclable's XID gate), so another backend's open snapshot
+-- (e.g. an autovacuum ANALYZE) leaves the file large: serial_reclaims was f in
+-- 3 of 3 runs with a snapshot held open in another database, t in 3 of 3
+-- without (1.14.3; the check had failed 2 of 27 nix PG17 runs).  So wait for
+-- other snapshots to end first, bounded at 60 s.
+CREATE FUNCTION pg_temp.wait_other_snapshots() RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+  FOR i IN 1..600 LOOP
+    PERFORM pg_stat_clear_snapshot();   -- pg_stat_activity is cached per transaction
+    EXIT WHEN NOT EXISTS (SELECT 1 FROM pg_stat_activity
+                           WHERE (backend_xmin IS NOT NULL OR backend_xid IS NOT NULL)
+                             AND pid <> pg_backend_pid());
+    PERFORM pg_sleep(0.1);
+  END LOOP;
+END $$;
 DELETE FROM vp WHERE id % 100 = 10;
+SELECT pg_temp.wait_other_snapshots();
+ wait_other_snapshots 
+----------------------
+ 
+(1 row)
+
 VACUUM (PARALLEL 0) vp;
 DELETE FROM vp WHERE id % 100 = 11;
+SELECT pg_temp.wait_other_snapshots();
+ wait_other_snapshots 
+----------------------
+ 
+(1 row)
+
 VACUUM (PARALLEL 0) vp;
 SELECT pg_relation_size('vp_fts') < s0 / 2 AS serial_reclaims FROM vp_size;
  serial_reclaims 
