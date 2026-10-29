@@ -213,13 +213,15 @@ ftsdoc_from_parsed(ParsedText *prs, const uint32 *wpos, uint32 doclen, uint8 lab
  * inside a chunk reaches the cap, unless a thesaurus expands one word into
  * several positions (those still cap, as before) -- each chunk's ordinals
  * offset by the positions of the chunks before it.  So a document whose positions 1.14.3 got
- * right is analyzed identically.  A chunk ends after the last whitespace byte
- * in it (ASCII whitespace is never part of a multibyte character), or, with no
- * whitespace, at the last whole character (pg_mbcliplen): a cut inside a
- * character made the next chunk an invalid byte sequence.  A token that spans
- * a chunk boundary -- an HTML tag or comment with spaces inside, a multi-word
- * thesaurus phrase -- is not recognized across it; that is limited to
- * documents of more than 16,383 tokens, whose positions were wrong before.
+ * right is analyzed identically.  A cut is a token boundary of the configured
+ * parser, verified to reproduce the whole text's raw tokens on both sides
+ * (fts_cut_reproduces, CHANGELOG 1.15.1): 1.15.0 cut after any whitespace and
+ * split tags, comments and <script> bodies into words.  The fallback (no
+ * verified cut within 64 candidates, or a parser whose tokens do not point
+ * into its input) is that 1.15.0 rule: after the last whitespace byte (ASCII
+ * whitespace is never part of a multibyte character), or at the last whole
+ * character (pg_mbcliplen).  A multi-word thesaurus phrase that straddles a
+ * cut is not matched across it.
  */
 #define FTS_PARSE_CHUNK (MAXENTRYPOS - 1)
 
@@ -251,6 +253,85 @@ fts_parse_into(Oid cfgId, ParsedText *prs, uint32 **wposp, int *capwpos,
 	return (uint32) prs->pos;
 }
 
+/*
+ * The configured parser's raw token stream (no dictionaries), for choosing chunk
+ * cuts (CHANGELOG 1.15.1, ROADMAP I9a).  A token is (type, byte offset, length)
+ * relative to the parsed buffer.  Returns false if the parser hands back a
+ * token that does not point into the buffer (a custom parser may return a
+ * normalized copy): offsets are then unknown and the caller cannot verify cuts.
+ */
+typedef struct FtsRawTok
+{
+	int			type;
+	int			off;
+	int			len;
+} FtsRawTok;
+
+static bool
+fts_raw_tokens(TSParserCacheEntry *prsobj, char *buf, int len,
+			   FtsRawTok **toks, int *ntok, int *cap)
+{
+	void	   *prsdata;
+	char	   *lemm = NULL;
+	int			lenlemm = 0;
+	int			type;
+	bool		ok = true;
+
+	*ntok = 0;
+	prsdata = DatumGetPointer(FunctionCall2(&prsobj->prsstart,
+											PointerGetDatum(buf),
+											Int32GetDatum(len)));
+	while ((type = DatumGetInt32(FunctionCall3(&prsobj->prstoken,
+											   PointerGetDatum(prsdata),
+											   PointerGetDatum(&lemm),
+											   PointerGetDatum(&lenlemm)))) > 0)
+	{
+		if (lemm < buf || lenlemm < 0 || lemm + lenlemm > buf + len)
+		{
+			ok = false;
+			break;
+		}
+		if (*ntok == *cap)
+		{
+			*cap *= 2;
+			*toks = (FtsRawTok *) repalloc(*toks, sizeof(FtsRawTok) * *cap);	/* alloc-ok: one per token, palloc-bounded */
+		}
+		(*toks)[*ntok].type = type;
+		(*toks)[*ntok].off = (int) (lemm - buf);
+		(*toks)[*ntok].len = lenlemm;
+		(*ntok)++;
+	}
+	FunctionCall1(&prsobj->prsend, PointerGetDatum(prsdata));
+	return ok;
+}
+
+/*
+ * Does parsing str[from, to) alone reproduce exactly the whole text's tokens
+ * ref[i..) that lie in that range (same types, offsets and lengths, none
+ * missing)?  `from` and `to` are whole-text token starts (or the text's ends).
+ * scratch and sbuf (at least to - from + 1 bytes; the caller passes the
+ * whole-text buffer, whose tokens are kept as offsets) are workspace.
+ */
+static bool
+fts_cut_reproduces(TSParserCacheEntry *prsobj, const char *str, int from, int to,
+				   const FtsRawTok *ref, int nref, int i,
+				   FtsRawTok **scratch, int *scap, char *sbuf)
+{
+	int			n,
+				k;
+
+	memcpy(sbuf, str + from, to - from);
+	sbuf[to - from] = '\0';
+	if (!fts_raw_tokens(prsobj, sbuf, to - from, scratch, &n, scap))
+		return false;
+	for (k = 0; k < n; k++)
+		if (i + k >= nref || (*scratch)[k].type != ref[i + k].type ||
+			(*scratch)[k].off + from != ref[i + k].off ||
+			(*scratch)[k].len != ref[i + k].len)
+			return false;
+	return !(i + n < nref && ref[i + n].off < to);	/* none dropped at the end */
+}
+
 FtsDoc
 fts_analyze_with_config(Oid cfgId, const char *str, int len, uint8 label)
 {
@@ -274,13 +355,25 @@ fts_analyze_with_config(Oid cfgId, const char *str, int len, uint8 label)
 	if (base > MAXENTRYPOS - 1)
 	{
 		/* past the cap: parse again in chunks (the first parse is discarded) */
+		TSParserCacheEntry *prsobj = lookup_ts_parser_cache(lookup_ts_config_cache(cfgId)->prsId);
 		int			start = 0;
 		int			i;
+		int			ti = 0;		/* first whole-text token at or after start */
+		int			ncap = 1024,
+					scap = 1024,
+					nref = 0;
+		FtsRawTok  *ref = (FtsRawTok *) palloc(sizeof(FtsRawTok) * ncap);	/* alloc-ok: grows per token, palloc-bounded */
+		FtsRawTok  *scratch = (FtsRawTok *) palloc(sizeof(FtsRawTok) * scap);	/* alloc-ok: as above */
+		bool		haveref;
 
 		for (i = 0; i < prs.curwords; i++)
 			pfree(prs.words[i].word);	/* the dictionaries' lexemes, as to_tsany.c frees them */
 		prs.curwords = 0;
 		base = 0;
+		/* the whole text's raw token stream: the reference every cut must reproduce */
+		memcpy(buf, str, len);
+		buf[len] = '\0';
+		haveref = fts_raw_tokens(prsobj, buf, len, &ref, &nref, &ncap);
 		while (start < len)
 		{
 			int			end = len;
@@ -288,18 +381,68 @@ fts_analyze_with_config(Oid cfgId, const char *str, int len, uint8 label)
 			if (len - start > FTS_PARSE_CHUNK)
 			{
 				int			lim = pg_mbcliplen(str + start, len - start, FTS_PARSE_CHUNK);
+				bool		found = false;
 
-				end = start + lim;
-				while (end > start && !scanner_isspace(str[end - 1]))
-					end--;
-				if (end == start)
-					end = start + lim;	/* no whitespace: the last whole character */
-				if (end == start)
-					end = start + pg_mblen(str + start);	/* lim 0: an embedded NUL (C callers only) */
+				/*
+				 * Cut at the start of a whole-text token, the latest one that
+				 * fits, whose cut reproduces the whole text's tokens on both
+				 * sides: the chunk itself, and a look-ahead window after it
+				 * (a cut inside <script>, for one, loses the parser's ignore
+				 * state and the next chunk tokenizes differently).  A tag or
+				 * comment is one token, so a token boundary never splits it.
+				 */
+				if (haveref)
+				{
+					int			j,
+								tries = 0;
+
+					while (ti < nref && ref[ti].off < start)
+						ti++;
+					for (j = ti; j + 1 < nref && ref[j + 1].off <= start + lim; j++)
+						;
+					for (; j > ti && tries < 64; j--, tries++)
+					{
+						int			cut = ref[j].off;
+						int			w = j,
+									wend;
+
+						if (cut <= start)
+							break;
+						/* the look-ahead ends at a whole-text token start too */
+						while (w + 1 < nref && ref[w + 1].off <= cut + FTS_PARSE_CHUNK)
+							w++;
+						wend = (w + 1 < nref) ? ref[w].off : len;
+						if (wend <= cut)
+							wend = Min(len, cut + pg_mbcliplen(str + cut, len - cut, FTS_PARSE_CHUNK));
+						if (fts_cut_reproduces(prsobj, str, start, cut, ref, nref, ti,
+											   &scratch, &scap, buf) &&
+							fts_cut_reproduces(prsobj, str, cut, wend, ref, nref, j,
+											   &scratch, &scap, buf))
+						{
+							end = cut;
+							found = true;
+							break;
+						}
+					}
+				}
+				if (!found)
+				{
+					/* no verified cut (or a parser without token offsets):
+					 * after the last whitespace, as 1.15.0 did */
+					end = start + lim;
+					while (end > start && !scanner_isspace(str[end - 1]))
+						end--;
+					if (end == start)
+						end = start + lim;	/* no whitespace: the last whole character */
+					if (end == start)
+						end = start + pg_mblen(str + start);	/* lim 0: an embedded NUL (C callers only) */
+				}
 			}
 			base += fts_parse_into(cfgId, &prs, &wpos, &capwpos, str + start, end - start, base, buf);
 			start = end;
 		}
+		pfree(ref);
+		pfree(scratch);
 	}
 
 	doc = ftsdoc_from_parsed(&prs, wpos, base, label);

@@ -554,7 +554,9 @@ document longer than 16,383 tokens (earlier releases gave every later token posi
 NEAR past that point still does not match them: recompute a stored column
 (`UPDATE t SET d = to_ftsdoc('english', body) WHERE ftsdoc_length(d) > 16383`) and
 `REINDEX` an expression index over `to_ftsdoc(config, ...)` to gain them.  Nothing
-else changes for shorter documents.
+else changes for shorter documents.  1.15.0 split HTML markup at its internal chunk
+boundaries in such documents (tag attribute words indexed, positions shifted); recompute
+values 1.15.0 computed from long markup after installing 1.15.1.
 
 Backward compatibility
 -----------------------

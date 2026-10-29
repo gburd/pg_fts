@@ -4,32 +4,54 @@ All notable changes to pg_fts are documented here.
 
 ## Unreleased
 
-### Known issues (1.15.0)
+## 1.15.1 - RELEASE_DATE
 
-- **The I9 chunked re-parse splits HTML markup at chunk boundaries in documents over
-  16,383 tokens** (ROADMAP I9a).  Found 2026-10-29 by comparing 1.15.0's output with an
-  unchunked position-wide parser (the downstream `jimdawdy-hub/pg_fts` branch
-  `upgrade/freecase-130-20261015`, which vendors PostgreSQL's `parsetext` without the
-  16,383 clamp).  On a document of 5,000 `<a href="x1" class="c y z"> w1 v u t` elements
-  (20,000 words, 212 kB):
-  - 1.15.0 gives `ftsdoc_length` 20,077 against the exact 20,000.  The tag's inside is read
-    as words at the 11 boundaries, so `to_ftsdoc('english', t) @@@ 'href'` and `'class'` are
-    true; on 1.14.3 and the exact parser they are false.  The heap recheck evaluates the
-    same function, so the index and the recheck agree on that wrong answer.
-  - Positions after each boundary shift by the extra tokens.  The cross-tag phrase
-    `"t wN"` matches for 4,988 of 4,999 N, against 4,999 for the exact parser.  1.14.3
-    matches 4,095: those before position 16,383.
-  - The same happens to an HTML comment or a `<script>`/`<style>` body cut at a boundary.
-  - Documents of up to 16,383 tokens, and long documents without markup, are unaffected:
-    their output is byte-identical to the exact parser's on all 20 probes (10 shapes x
-    `simple`/`english`).
-  - The 1.15.0 CHANGELOG said only that such a token "is not recognized across" the cut.
-    That understated it: the token's pieces are indexed.
-  - Reproduction and numbers: `bench/data_150_2026-10-29/i9cmp/`.
-  - Fix planned for 1.15.1: choose cut points at the parser's own token boundaries,
-    verified against a parser-only pass of the whole text.  Vendoring `parsetext` was
-    rejected: PostgreSQL changed it inside the 17.x and 18.x minor series (18.6 added a
-    per-lexeme length check), so a copy would drift from the server it runs in.
+One fix, for a defect in 1.15.0's new configured-analyzer path (ROADMAP I9a), found the day
+1.15.0 shipped by comparing its output with an unchunked parser.  **No on-disk format change;
+no new or changed SQL objects** (`pg_fts--1.15.0--1.15.1.sql` is a no-op).  Measured on
+PostgreSQL 17.10 (`bench/RESULTS_151_2026-10-29.md`).
+
+### Fixed
+
+- **The chunked re-parse split HTML markup at chunk boundaries** (ROADMAP I9a).  Affects
+  `to_ftsdoc(config, text)` on documents over 16,383 tokens, since 1.15.0.  The re-parse
+  cut the text after any whitespace, so a tag, comment or `<script>`/`<style>` body that
+  straddled a cut was read as words, and every later position shifted.
+  - **Before (1.15.0):** a 20,000-word HTML document of 5,000 `<a href="x1" class="c y z">
+    w1 v u t` elements got `ftsdoc_length` 20,077 instead of 20,000.  `@@@ 'href'` and
+    `'class'` were true; they are false on 1.14.3 and on an exact parser.  A phrase across
+    each tag matched 4,988 of 4,999.
+  - **The fix:** a cut is now a token boundary of the configured parser.  It is checked
+    against a parser-only pass over the whole text: the chunk before the cut, and a
+    look-ahead window after it, must reproduce exactly the whole text's tokens (type,
+    offset, length).  A tag or comment is one token, so it is never split.  A cut inside
+    `<script>` loses the parser's ignore state, so the look-ahead check rejects it.  After
+    64 rejected candidates, or with a parser whose tokens do not point into its input, the
+    cut falls back to the 1.15.0 rule.
+  - **Checked against an exact reference:** the downstream `jimdawdy-hub/pg_fts` wide parser,
+    which vendors PostgreSQL's `parsetext` without the 16,383 clamp.  `to_ftsdoc(...)::text`
+    is byte-identical on all 28 probes: 14 long documents (plain, HTML tags, comments,
+    script/style, URLs/e-mail, hyphenation, CJK with and without spaces, numbers, long
+    words, mixed markup) x `simple`/`english`.  1.15.0 differed on the 4 markup documents
+    in both configurations.  The new `long_positions` block gives doclen 20,000, no tag,
+    comment or script words, and 4,999 of 4,999 cross-tag phrases.
+  - **Not done: vendoring `parsetext`.**  PostgreSQL changed it inside both minor series
+    (18.6 added a per-lexeme length check), so a copy would drift from the server it runs in.
+  - **Remaining limit:** a multi-word thesaurus phrase that straddles a cut is still not
+    matched across it.
+  - **Cost:** only documents over 16,383 tokens take this path.  Analyzing the 3 + 1 markup
+    documents of the probe set (`english`) went from 137.8 ms on 1.15.0 to 247.3 ms (median
+    of 5), the parser-only verification passes.  A document of up to 16,383 tokens is
+    parsed once, as before.
+  - **Recompute** a stored `ftsdoc` computed by 1.15.0 from markup over 16,383 tokens, and
+    REINDEX an expression index over one.  Values from 1.14.3 or earlier still need the
+    1.15.0 upgrade notice's recompute; values from plain text are unchanged.
+
+### Retracted
+
+- The 1.15.0 entry said a token straddling a chunk boundary "is not recognized across it".
+  It is worse than that: the token's pieces were indexed as words and later positions
+  shifted (above).
 
 ## 1.15.0 - 2026-10-29
 

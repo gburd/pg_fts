@@ -33,6 +33,25 @@ SELECT count(*) FILTER (WHERE to_ftsdoc('english', repeat('filler ', n) || '<a h
        count(DISTINCT ftsdoc_length(to_ftsdoc('english', repeat('filler ', n) || '<a href="zzhref" class="zzclass"> word')) - n) AS doclen_shapes,
        count(*) AS offsets
   FROM generate_series(2330, 2350) n;
+-- markup over 16,383 tokens (1.15.1, ROADMAP I9a): 1.15.0 cut the re-parse after any
+-- whitespace, so a tag, comment or <script> body straddling a cut was read as words
+-- (tag attribute names indexed, positions shifted).  Cuts are now whole-text parser token
+-- boundaries; the values equal an unchunked position-wide parser's.
+CREATE TABLE lpm AS
+SELECT 1 AS id, string_agg('<a href="x' || g || '" class="c y z"> w' || g || ' v u t ', '') AS t FROM generate_series(1, 5000) g
+UNION ALL SELECT 2, string_agg('<!-- a comment with spaces ' || g || ' --> b' || g || ' c d e ', '') FROM generate_series(1, 5000) g
+UNION ALL SELECT 3, string_agg('<script>var a' || g || ' = 1;</script> v' || g || ' w x y <style>.c{x:y}</style> ', '') FROM generate_series(1, 5000) g;
+ALTER TABLE lpm ADD COLUMN d ftsdoc;
+UPDATE lpm SET d = to_ftsdoc('simple', t);
+SELECT id, ftsdoc_length(d) AS doclen,
+       d @@@ 'href | class'::ftsquery AS tag_words,
+       d @@@ 'comment | spaces'::ftsquery AS comment_words,
+       d @@@ 'var'::ftsquery AS script_words
+  FROM lpm ORDER BY id;
+-- a phrase across every tag (positions not shifted): all 4,999
+SELECT count(*) AS cross_tag_phrases FROM lpm, generate_series(1, 4999) g
+ WHERE id = 1 AND d @@@ ('"t w' || (g + 1) || '"')::ftsquery;
+DROP TABLE lpm;
 -- a short text is unchanged (one chunk): the output of 1.14.3
 SELECT to_ftsdoc('english', 'The quick brown fox jumps over the lazy dog; the dog sleeps.');
 -- through an index with positions: a ranked phrase query past the cap
