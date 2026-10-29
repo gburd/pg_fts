@@ -6287,6 +6287,7 @@ bool_gate_driver(const BoolGate *g, const WandCursor *cursors, int ncur, bool *d
 	int		   *start = (int *) palloc(Max(q->nitems, 1) * sizeof(int));	/* alloc-ok: query items */
 	bool	   *pos = (bool *) palloc(Max(q->nitems, 1) * sizeof(bool));	/* alloc-ok: query items */
 	int		   *vord = (int *) palloc(Max(q->nitems, 1) * sizeof(int));	/* alloc-ok: query items */
+	double	   *tdf = (double *) palloc0(Max(g->nterms, 1) * sizeof(double));	/* alloc-ok: query term count */
 	int			nops = query_and_operands(q, ops, start, pos);
 	int			best = -1,
 				vi = 0,
@@ -6296,20 +6297,20 @@ bool_gate_driver(const BoolGate *g, const WandCursor *cursors, int ncur, bool *d
 
 	for (i = 0; i < q->nitems; i++)
 		vord[i] = (q->items[i].type == FTS_QI_VAL) ? vi++ : -1;
+	for (j = 0; j < ncur; j++)	/* a term's df over all its segment cursors, once */
+		if (cursors[j].termidx >= 0 && cursors[j].termidx < g->nterms)
+			tdf[cursors[j].termidx] += cursors[j].df;
 	for (j = 0; j < nops; j++)
 	{
 		int			n = ops[j];
 		double		cost = 0;
-		int			m,
-					t;
+		int			m;
 
 		if (!pos[n])
 			continue;
 		for (m = start[n]; m <= n; m++)
-			if (vord[m] >= 0)
-				for (t = 0; t < ncur; t++)
-					if (cursors[t].termidx == vord[m])
-						cost += cursors[t].df;
+			if (vord[m] >= 0 && vord[m] < g->nterms)
+				cost += tdf[vord[m]];
 		if (best < 0 || cost < bestcost)
 		{
 			best = n;
@@ -6327,6 +6328,7 @@ bool_gate_driver(const BoolGate *g, const WandCursor *cursors, int ncur, bool *d
 	pfree(start);
 	pfree(pos);
 	pfree(vord);
+	pfree(tdf);
 	return best >= 0 ? bestcost : -1;
 }
 

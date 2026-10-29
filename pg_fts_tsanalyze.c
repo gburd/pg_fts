@@ -22,6 +22,7 @@
 
 #include "pg_fts.h"
 #include "catalog/pg_type.h"
+#include "mb/pg_wchar.h"
 #include "parser/scansup.h"
 #include "tsearch/ts_cache.h"
 #include "tsearch/ts_type.h"
@@ -204,16 +205,50 @@ ftsdoc_from_parsed(ParsedText *prs, const uint32 *wpos, uint32 doclen, uint8 lab
  * ordinal in a 16-bit field capped at MAXENTRYPOS - 1 = 16,383, so through
  * 1.14.3 every token past the 16,383rd shared that position and a phrase
  * starting there could not match (the unconfigured analyzer was not capped).
- * Its own counter (prs.pos) is a full int32.  So text that could hold more
- * than FTS_PARSE_CHUNK tokens is parsed in chunks of at most that many bytes
- * -- a token is at least one byte, so no ordinal inside a chunk reaches the
- * cap -- split at whitespace, and each chunk's ordinals are offset by the
- * positions of the chunks before it.  A text no longer than one chunk is
- * parsed exactly as before.  Splitting at whitespace leaves the default
- * parser's token stream unchanged; a multi-word dictionary (thesaurus) phrase
- * that straddles a chunk boundary is not matched across it.
+ * Its own counter (prs.pos) is a full int32.
+ *
+ * The text is parsed whole, exactly as before.  Only when that parse ran past
+ * the cap is the result discarded and the text parsed again in chunks of at
+ * most FTS_PARSE_CHUNK bytes -- a token is at least one byte, so no ordinal
+ * inside a chunk reaches the cap -- each chunk's ordinals offset by the
+ * positions of the chunks before it.  So a document whose positions 1.14.3 got
+ * right is analyzed identically.  A chunk ends after the last whitespace byte
+ * in it (ASCII whitespace is never part of a multibyte character), or, with no
+ * whitespace, at the last whole character (pg_mbcliplen): a cut inside a
+ * character made the next chunk an invalid byte sequence.  A token that spans
+ * a chunk boundary -- an HTML tag or comment with spaces inside, a multi-word
+ * thesaurus phrase -- is not recognized across it; that is limited to
+ * documents of more than 16,383 tokens, whose positions were wrong before.
  */
 #define FTS_PARSE_CHUNK (MAXENTRYPOS - 1)
+
+/* parse str[0..len) into prs (appending), returning the words' true ordinals in
+ * *wposp (grown with prs->words), offset by base; returns the positions used */
+static uint32
+fts_parse_into(Oid cfgId, ParsedText *prs, uint32 **wposp, int *capwpos,
+			   const char *str, int len, uint32 base, char *buf)
+{
+	int			first = prs->curwords;
+	int			i;
+
+	/* parsetext wants a writable, NUL-terminated buffer */
+	memcpy(buf, str, len);
+	buf[len] = '\0';
+	prs->pos = 0;
+	parsetext(cfgId, prs, buf, len);
+	if (prs->curwords > *capwpos)
+	{
+		*capwpos = prs->lenwords;
+		*wposp = (uint32 *) repalloc(*wposp, sizeof(uint32) * *capwpos);	/* alloc-ok: grows with prs->lenwords (palloc-bounded) */
+	}
+	for (i = first; i < prs->curwords; i++)
+		(*wposp)[i] = base + prs->words[i].pos.pos;
+	if ((uint64) base + (uint64) prs->pos > FTS_POS_ORD_MASK)
+		ereport(ERROR,
+				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+				 errmsg("ftsdoc document has too many token positions")));
+	return (uint32) prs->pos;
+}
 
 FtsDoc
 fts_analyze_with_config(Oid cfgId, const char *str, int len, uint8 label)
@@ -222,52 +257,44 @@ fts_analyze_with_config(Oid cfgId, const char *str, int len, uint8 label)
 	FtsDoc		doc;
 	uint32	   *wpos;
 	int			capwpos;
-	uint32		base = 0;
-	int			start = 0;
+	uint32		base;
 	char	   *buf;
 
-	prs.lenwords = Max(Min(len, FTS_PARSE_CHUNK) / 6, 16);
+	prs.lenwords = Max(len / 6, 16);
 	prs.curwords = 0;
 	prs.pos = 0;
 	prs.words = (ParsedWord *) palloc(sizeof(ParsedWord) * prs.lenwords);
 	capwpos = prs.lenwords;
 	wpos = (uint32 *) palloc(sizeof(uint32) * capwpos);	/* alloc-ok: grows with prs.lenwords (palloc-bounded) */
-	buf = (char *) palloc(Min(len, FTS_PARSE_CHUNK) + 1);
+	buf = (char *) palloc(len + 1);
 
-	while (start < len)
+	base = fts_parse_into(cfgId, &prs, &wpos, &capwpos, str, len, 0, buf);
+	if (base > MAXENTRYPOS - 1)
 	{
-		int			end = len;
-		int			first = prs.curwords;
-		int			i;
+		/* past the cap: parse again in chunks (the first parse is discarded) */
+		int			start = 0;
 
-		if (len - start > FTS_PARSE_CHUNK)
+		prs.curwords = 0;
+		base = 0;
+		while (start < len)
 		{
-			/* end after the last whitespace byte inside the chunk; a chunk
-			 * with none (one 16 kB "word") is cut where it is */
-			end = start + FTS_PARSE_CHUNK;
-			while (end > start && !scanner_isspace(str[end - 1]))
-				end--;
-			if (end == start)
-				end = start + FTS_PARSE_CHUNK;
+			int			end = len;
+
+			if (len - start > FTS_PARSE_CHUNK)
+			{
+				int			lim = pg_mbcliplen(str + start, len - start, FTS_PARSE_CHUNK);
+
+				end = start + lim;
+				while (end > start && !scanner_isspace(str[end - 1]))
+					end--;
+				if (end == start)
+					end = start + lim;	/* no whitespace: the last whole character */
+				if (end == start)
+					end = start + pg_mblen(str + start);	/* cannot happen: lim >= 1 char */
+			}
+			base += fts_parse_into(cfgId, &prs, &wpos, &capwpos, str + start, end - start, base, buf);
+			start = end;
 		}
-		/* parsetext wants a writable, NUL-terminated buffer */
-		memcpy(buf, str + start, end - start);
-		buf[end - start] = '\0';
-		prs.pos = 0;
-		parsetext(cfgId, &prs, buf, end - start);
-		if (prs.curwords > capwpos)
-		{
-			capwpos = prs.lenwords;
-			wpos = (uint32 *) repalloc(wpos, sizeof(uint32) * capwpos);	/* alloc-ok: as above */
-		}
-		for (i = first; i < prs.curwords; i++)
-			wpos[i] = base + prs.words[i].pos.pos;
-		if ((uint64) base + (uint64) prs.pos > FTS_POS_ORD_MASK)
-			ereport(ERROR,
-					(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-					 errmsg("ftsdoc document has too many token positions")));
-		base += (uint32) prs.pos;
-		start = end;
 	}
 
 	doc = ftsdoc_from_parsed(&prs, wpos, base, label);

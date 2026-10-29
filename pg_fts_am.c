@@ -2748,7 +2748,11 @@ bm25_doclendir_cache(Relation index, const BM25MetaPageData *meta)
 	 * only at the end, so an ERROR here leaked it in CacheMemoryContext for
 	 * the backend's life.  `complete` stays false until the last builder
 	 * returns, so a chunk an ERROR leaves attached is never served: the next
-	 * call frees and rebuilds it (and so does a relcache flush).
+	 * call frees and rebuilds it (and so does a relcache flush).  Invariant:
+	 * nothing from here to `complete` may accept invalidations (open a
+	 * relation, take a heavyweight lock): a relcache rebuild of this index
+	 * would free the chunk under the builder.  The builders read buffers and
+	 * palloc only.
 	 */
 	index->rd_amcache = (void *) dc;
 	dc->generation = meta->generation;

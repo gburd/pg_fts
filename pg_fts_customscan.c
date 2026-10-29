@@ -559,7 +559,6 @@ fts_find_pushdown_index(PlannerInfo *root, RelOptInfo *rel,
 	ListCell   *lc;
 	OpExpr	   *matchclause = NULL;
 	List	   *others = NIL;	/* the quals besides @@@ */
-	int			nquals = 0;
 
 	if (!OidIsValid(matchop))
 		return InvalidOid;
@@ -575,7 +574,6 @@ fts_find_pushdown_index(PlannerInfo *root, RelOptInfo *rel,
 		RestrictInfo *ri = (RestrictInfo *) lfirst(lc);
 		OpExpr	   *op = IsA(ri->clause, OpExpr) ? (OpExpr *) ri->clause : NULL;
 
-		nquals++;
 		if (op != NULL && op->opno == matchop && list_length(op->args) == 2)
 		{
 			if (matchclause != NULL)

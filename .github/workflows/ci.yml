@@ -111,6 +111,11 @@ jobs:
               cat tmp_check/log/*.log tmp_check/log/regress_log_* 2>/dev/null | tail -120 || true
               exit 1
             }
+
+      - name: Reinstall the normal build (after the hooks build, pass or fail)
+        if: always()
+        run: |
+          PGBIN=/usr/lib/postgresql/${{ matrix.pg }}/bin
           make clean PG_CONFIG=$PGBIN/pg_config >/dev/null
           make PG_CONFIG=$PGBIN/pg_config
           sudo make install PG_CONFIG=$PGBIN/pg_config

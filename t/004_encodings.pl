@@ -153,4 +153,41 @@ SKIP:
 	$node->stop;
 }
 
+# --- I9 chunking (1.15.0): a UTF-8 text over 16,383 tokens is parsed in chunks; a
+# chunk with no whitespace is cut at the last whole character (pg_mbcliplen).  Cut
+# inside a character, the next chunk is an invalid byte sequence, and with a non-C
+# ctype the parser raises "invalid byte sequence for encoding UTF8" (the release
+# review of 1.15.0 found it before release).  Needs a UTF-8 ctype (C.UTF-8 on glibc).
+SKIP:
+{
+	my $loc;
+	for my $cand (qw(C.UTF-8 C.utf8 en_US.UTF-8 en_US.utf8))
+	{
+		my $out = `locale -a 2>/dev/null`;
+		if (defined $out && $out =~ /^\Q$cand\E$/mi) { $loc = $cand; last; }
+	}
+	skip 'no UTF-8 locale available on this host', 3 unless defined $loc;
+
+	my $node = PostgreSQL::Test::Cluster->new('enc_utf8_chunk');
+	$node->init(extra => [ '--encoding', 'UTF8', '--lc-ctype', $loc, '--lc-collate', 'C' ]);
+	$node->start;
+	$node->safe_psql('postgres', 'CREATE EXTENSION pg_fts');
+	# U+00E9 (2 bytes) U+6F22 (3 bytes) and a space every 1,000 pairs: 20,000 tokens
+	# of 5-byte words, no 16,383-byte window without whitespace -> whitespace splits
+	my $spaced = $node->safe_psql('postgres', q{
+		SELECT ftsdoc_length(to_ftsdoc('simple',
+		  repeat(convert_from('\xc3a9e6bca2'::bytea, 'UTF8') || ' ', 20000)))});
+	is($spaced, '20000', "UTF8/$loc: 20,000 multibyte words keep 20,000 positions");
+	# 6,000 pairs = 30,000 bytes and no whitespace at all: the hard cut must land on
+	# a character boundary (the word is too long to index, NOTICE only, no ERROR)
+	my ($rc, $out, $err) = $node->psql('postgres', q{
+		SET client_min_messages = warning;
+		SELECT ftsdoc_length(to_ftsdoc('simple',
+		  repeat(convert_from('\xc3a9e6bca2'::bytea, 'UTF8'), 6000) || repeat(' w', 17000)))});
+	is($rc, 0, "UTF8/$loc: a 30 kB whitespace-free run is cut on a character boundary")
+	  or diag("stderr: $err");
+	like($err, qr/^$/, "UTF8/$loc: no invalid-byte-sequence error") or diag($err);
+	$node->stop;
+}
+
 done_testing();
