@@ -4,7 +4,7 @@ All notable changes to pg_fts are documented here.
 
 ## Unreleased
 
-## 1.15.1 - RELEASE_DATE
+## 1.15.1 - 2026-10-29
 
 One fix, for a defect in 1.15.0's new configured-analyzer path (ROADMAP I9a), found the day
 1.15.0 shipped by comparing its output with an unchunked parser.  **No on-disk format change;
