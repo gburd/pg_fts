@@ -45,6 +45,19 @@ SELECT to_ftsdoc('simple', repeat('filler ', 17000) || 'alpha beta')::text
  t
 (1 row)
 
+-- a text over 16 kB but under 16,383 tokens is parsed whole, as 1.14.3 did: an HTML
+-- tag with spaces inside it, at every offset around byte 16,383, is a tag (not words)
+-- and the value is the same at each offset as the same text without the padding shift
+SELECT count(*) FILTER (WHERE to_ftsdoc('english', repeat('filler ', n) || '<a href="zzhref" class="zzclass"> word')
+                          @@@ 'zzhref | zzclass'::ftsquery) AS tag_words_indexed,
+       count(DISTINCT ftsdoc_length(to_ftsdoc('english', repeat('filler ', n) || '<a href="zzhref" class="zzclass"> word')) - n) AS doclen_shapes,
+       count(*) AS offsets
+  FROM generate_series(2330, 2350) n;
+ tag_words_indexed | doclen_shapes | offsets 
+-------------------+---------------+---------
+                 0 |             1 |      21
+(1 row)
+
 -- a short text is unchanged (one chunk): the output of 1.14.3
 SELECT to_ftsdoc('english', 'The quick brown fox jumps over the lazy dog; the dog sleeps.');
                                      to_ftsdoc                                     

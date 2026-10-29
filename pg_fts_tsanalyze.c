@@ -210,8 +210,9 @@ ftsdoc_from_parsed(ParsedText *prs, const uint32 *wpos, uint32 doclen, uint8 lab
  * The text is parsed whole, exactly as before.  Only when that parse ran past
  * the cap is the result discarded and the text parsed again in chunks of at
  * most FTS_PARSE_CHUNK bytes -- a token is at least one byte, so no ordinal
- * inside a chunk reaches the cap -- each chunk's ordinals offset by the
- * positions of the chunks before it.  So a document whose positions 1.14.3 got
+ * inside a chunk reaches the cap, unless a thesaurus expands one word into
+ * several positions (those still cap, as before) -- each chunk's ordinals
+ * offset by the positions of the chunks before it.  So a document whose positions 1.14.3 got
  * right is analyzed identically.  A chunk ends after the last whitespace byte
  * in it (ASCII whitespace is never part of a multibyte character), or, with no
  * whitespace, at the last whole character (pg_mbcliplen): a cut inside a
@@ -260,7 +261,8 @@ fts_analyze_with_config(Oid cfgId, const char *str, int len, uint8 label)
 	uint32		base;
 	char	   *buf;
 
-	prs.lenwords = Max(len / 6, 16);
+	/* the word array as to_tsvector sizes it (to_tsany.c: clamped to MaxAllocSize) */
+	prs.lenwords = Min(Max(len / 6, 16), (int) (MaxAllocSize / sizeof(ParsedWord)));
 	prs.curwords = 0;
 	prs.pos = 0;
 	prs.words = (ParsedWord *) palloc(sizeof(ParsedWord) * prs.lenwords);
@@ -273,7 +275,10 @@ fts_analyze_with_config(Oid cfgId, const char *str, int len, uint8 label)
 	{
 		/* past the cap: parse again in chunks (the first parse is discarded) */
 		int			start = 0;
+		int			i;
 
+		for (i = 0; i < prs.curwords; i++)
+			pfree(prs.words[i].word);	/* the dictionaries' lexemes, as to_tsany.c frees them */
 		prs.curwords = 0;
 		base = 0;
 		while (start < len)
@@ -290,7 +295,7 @@ fts_analyze_with_config(Oid cfgId, const char *str, int len, uint8 label)
 				if (end == start)
 					end = start + lim;	/* no whitespace: the last whole character */
 				if (end == start)
-					end = start + pg_mblen(str + start);	/* cannot happen: lim >= 1 char */
+					end = start + pg_mblen(str + start);	/* lim 0: an embedded NUL (C callers only) */
 			}
 			base += fts_parse_into(cfgId, &prs, &wpos, &capwpos, str + start, end - start, base, buf);
 			start = end;

@@ -46,8 +46,7 @@ mark).
   flushed documents both in the published segment and on the pending list, so the next
   flush folded them into a second segment, a lasting duplicate (found by the release
   review; not reproduced).  New TAP test `t/014_flush_publish_window.pl` stops the flusher
-  right after
-  the publish (a test-hooks build): 1.14.3 with the same pause returned 100 rows / 50
+  right after the publish (a test-hooks build): 1.14.3 with the same pause returned 100 rows / 50
   distinct ids, `LIMIT 10` 10 rows / 5 distinct, ndocs 300 and df `{100,300}` (3 of 3
   runs, PG 17.10 and 18.6); this release 50 / 50, 10 / 10, 250 and `{50,250}` (3 of 3).
 - **An ERROR while the per-index relcache cache was rebuilt leaked the cache** (ROADMAP

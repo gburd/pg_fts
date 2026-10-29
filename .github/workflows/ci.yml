@@ -95,7 +95,10 @@ jobs:
         # point through TEST-ONLY GUCs that exist only in a -DPG_FTS_TEST_HOOKS
         # build; the normal build above skips them.  Rebuild with the hooks,
         # run just those two with PG_FTS_TEST_HOOKS_BUILD=1 (a missing hook is
-        # then a failure, not a skip), and reinstall the normal build.
+        # then a failure, not a skip).  It is the job's last test step: nothing
+        # after it needs the normal build, and each matrix job gets a fresh
+        # runner.  (No `make clean` after it: that would delete regression.diffs
+        # before "Show diffs on failure" prints them.)
         continue-on-error: ${{ matrix.pg == 19 }}
         run: |
           PGBIN=/usr/lib/postgresql/${{ matrix.pg }}/bin
@@ -111,14 +114,6 @@ jobs:
               cat tmp_check/log/*.log tmp_check/log/regress_log_* 2>/dev/null | tail -120 || true
               exit 1
             }
-
-      - name: Reinstall the normal build (after the hooks build, pass or fail)
-        if: always()
-        run: |
-          PGBIN=/usr/lib/postgresql/${{ matrix.pg }}/bin
-          make clean PG_CONFIG=$PGBIN/pg_config >/dev/null
-          make PG_CONFIG=$PGBIN/pg_config
-          sudo make install PG_CONFIG=$PGBIN/pg_config
 
       - name: Show diffs on failure
         if: failure()

@@ -166,14 +166,14 @@ SKIP:
 		my $out = `locale -a 2>/dev/null`;
 		if (defined $out && $out =~ /^\Q$cand\E$/mi) { $loc = $cand; last; }
 	}
-	skip 'no UTF-8 locale available on this host', 3 unless defined $loc;
+	skip 'no UTF-8 locale available on this host', 4 unless defined $loc;
 
 	my $node = PostgreSQL::Test::Cluster->new('enc_utf8_chunk');
 	$node->init(extra => [ '--encoding', 'UTF8', '--lc-ctype', $loc, '--lc-collate', 'C' ]);
 	$node->start;
 	$node->safe_psql('postgres', 'CREATE EXTENSION pg_fts');
-	# U+00E9 (2 bytes) U+6F22 (3 bytes) and a space every 1,000 pairs: 20,000 tokens
-	# of 5-byte words, no 16,383-byte window without whitespace -> whitespace splits
+	# U+00E9 (2 bytes) U+6F22 (3 bytes) and a space after every pair: 20,000 tokens of
+	# 5-byte words -> the re-parse splits at whitespace
 	my $spaced = $node->safe_psql('postgres', q{
 		SELECT ftsdoc_length(to_ftsdoc('simple',
 		  repeat(convert_from('\xc3a9e6bca2'::bytea, 'UTF8') || ' ', 20000)))});
@@ -186,6 +186,7 @@ SKIP:
 		  repeat(convert_from('\xc3a9e6bca2'::bytea, 'UTF8'), 6000) || repeat(' w', 17000)))});
 	is($rc, 0, "UTF8/$loc: a 30 kB whitespace-free run is cut on a character boundary")
 	  or diag("stderr: $err");
+	is($out, '17000', "UTF8/$loc: ... and the 17,000 words after it keep their positions");
 	like($err, qr/^$/, "UTF8/$loc: no invalid-byte-sequence error") or diag($err);
 	$node->stop;
 }

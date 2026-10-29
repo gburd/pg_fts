@@ -25,6 +25,14 @@ SELECT to_ftsdoc('english', repeat('the running dogs ', 6000) || 'quick foxes ju
 -- the same positions as the unconfigured analyzer for plain words (which never capped)
 SELECT to_ftsdoc('simple', repeat('filler ', 17000) || 'alpha beta')::text
      = to_ftsdoc(repeat('filler ', 17000) || 'alpha beta')::text AS same_as_unconfigured;
+-- a text over 16 kB but under 16,383 tokens is parsed whole, as 1.14.3 did: an HTML
+-- tag with spaces inside it, at every offset around byte 16,383, is a tag (not words)
+-- and the value is the same at each offset as the same text without the padding shift
+SELECT count(*) FILTER (WHERE to_ftsdoc('english', repeat('filler ', n) || '<a href="zzhref" class="zzclass"> word')
+                          @@@ 'zzhref | zzclass'::ftsquery) AS tag_words_indexed,
+       count(DISTINCT ftsdoc_length(to_ftsdoc('english', repeat('filler ', n) || '<a href="zzhref" class="zzclass"> word')) - n) AS doclen_shapes,
+       count(*) AS offsets
+  FROM generate_series(2330, 2350) n;
 -- a short text is unchanged (one chunk): the output of 1.14.3
 SELECT to_ftsdoc('english', 'The quick brown fox jumps over the lazy dog; the dog sleeps.');
 -- through an index with positions: a ranked phrase query past the cap
