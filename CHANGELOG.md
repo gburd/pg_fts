@@ -31,7 +31,8 @@ Recompute a stored column for those rows and REINDEX an expression index over
 An expression index that is not rebuilt stays consistent with itself: it under-reports
 such phrases exactly as before, and the heap recheck (which re-evaluates the new
 function) never adds a row the index did not return.  Documents of up to 16,383 tokens
-are analyzed exactly as before.
+are analyzed exactly as before (byte-for-byte against 1.14.3 for HTML near the 16 kB
+mark).
 
 ### Fixed
 
@@ -41,7 +42,11 @@ are analyzed exactly as before.
   whose candidate pass fell between the two saw each flushed document in both, and the
   scores, `fts_index_df` and `fts_index_stats().ndocs` counted it twice.  The flush now
   publishes the segment and drops the sealed pages from the list in one metapage
-  update.  New TAP test `t/014_flush_publish_window.pl` stops the flusher right after
+  update.  This also closes a crash window: a crash between the two records left the
+  flushed documents both in the published segment and on the pending list, so the next
+  flush folded them into a second segment, a lasting duplicate (found by the release
+  review; not reproduced).  New TAP test `t/014_flush_publish_window.pl` stops the flusher
+  right after
   the publish (a test-hooks build): 1.14.3 with the same pause returned 100 rows / 50
   distinct ids, `LIMIT 10` 10 rows / 5 distinct, ndocs 300 and df `{100,300}` (3 of 3
   runs, PG 17.10 and 18.6); this release 50 / 50, 10 / 10, 250 and `{50,250}` (3 of 3).
@@ -104,7 +109,14 @@ are analyzed exactly as before.
   of at most 16,383 bytes, split at whitespace, with each chunk's ordinals offset by the
   positions before it; a text of one chunk is parsed exactly as before.
   `to_ftsdoc('simple', repeat('filler ', 17000) || 'alpha beta') @@@ '"alpha beta"'` is
-  now true (1.14.3: false), and its value equals the unconfigured analyzer's.  **Stored
+  now true (1.14.3: false), and its value equals the unconfigured analyzer's.  The text is
+  parsed whole first, exactly as before; only a parse that ran past the cap is redone in
+  chunks, so every document 1.14.3 analyzed correctly gets the same `ftsdoc`.  A chunk with
+  no whitespace is cut at the last whole character.  (Found by the release review, before
+  release: an earlier version of this change chunked any text over 16 kB, so an HTML tag
+  with spaces straddling the cut was read as words, and a whitespace-free CJK run was cut
+  inside a character -- "invalid byte sequence for encoding UTF8" on PG 17/18 with a UTF-8
+  ctype.  New `t/004_encodings.pl` case: FAIL on that version, PASS now.)  **Stored
   `ftsdoc` columns and expression indexes keep the positions they were built with**:
   recompute the column, or REINDEX, to gain them; until then such a phrase still does not
   match, as before.  A thesaurus phrase that straddles a chunk boundary is not matched
