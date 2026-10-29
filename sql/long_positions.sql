@@ -45,9 +45,21 @@ ALTER TABLE lpm ADD COLUMN d ftsdoc;
 UPDATE lpm SET d = to_ftsdoc('simple', t);
 SELECT id, ftsdoc_length(d) AS doclen,
        d @@@ 'href | class'::ftsquery AS tag_words,
-       d @@@ 'comment | spaces'::ftsquery AS comment_words,
-       d @@@ 'var'::ftsquery AS script_words
+       d @@@ 'comment | spaces'::ftsquery AS comment_words
   FROM lpm ORDER BY id;
+-- script bodies: none of the 5,000 identifiers inside <script> is indexed
+SELECT count(*) AS script_words FROM lpm, generate_series(1, 5000) g
+ WHERE id = 3 AND d @@@ ('a' || g)::ftsquery;
+-- markup longer than a chunk: a 40 kB <script> body and a 30 kB data: URI take no
+-- positions, so the chunk holds them whole (the first review version cut inside the
+-- script and indexed its contents: 28,500 positions instead of 18,000)
+CREATE TABLE lpl AS
+SELECT 1 AS id, repeat('w ', 9000) || '<script>' || repeat('var zz = 1; ', 3500) || '</script>' || repeat(' w', 9000) AS t
+UNION ALL SELECT 2, repeat('w ', 9000) || '<img src="data:image/png;base64,' || repeat('QUJD', 7500) || '"> tail' || repeat(' w', 9000);
+SELECT id, ftsdoc_length(to_ftsdoc('simple', t)) AS doclen,
+       to_ftsdoc('simple', t) @@@ 'zz | var | quj*'::ftsquery AS markup_words
+  FROM lpl ORDER BY id;
+DROP TABLE lpl;
 -- a phrase across every tag (positions not shifted): all 4,999
 SELECT count(*) AS cross_tag_phrases FROM lpm, generate_series(1, 4999) g
  WHERE id = 1 AND d @@@ ('"t w' || (g + 1) || '"')::ftsquery;

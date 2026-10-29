@@ -213,10 +213,12 @@ ftsdoc_from_parsed(ParsedText *prs, const uint32 *wpos, uint32 doclen, uint8 lab
  * inside a chunk reaches the cap, unless a thesaurus expands one word into
  * several positions (those still cap, as before) -- each chunk's ordinals
  * offset by the positions of the chunks before it.  So a document whose positions 1.14.3 got
- * right is analyzed identically.  A cut is a token boundary of the configured
- * parser, verified to reproduce the whole text's raw tokens on both sides
- * (fts_cut_reproduces, CHANGELOG 1.15.1): 1.15.0 cut after any whitespace and
- * split tags, comments and <script> bodies into words.  The fallback (no
+ * right is analyzed identically.  Since 1.15.1 (CHANGELOG, ROADMAP I9a) a
+ * chunk is bounded by positions -- only a token of a type the configuration
+ * maps to dictionaries takes one -- and ends at a token boundary of the
+ * configured parser verified to reproduce the whole text's raw tokens on both
+ * sides (fts_cut_reproduces): 1.15.0 cut every 16,383 bytes after whitespace
+ * and split tags, comments and <script> bodies into words.  The fallback (no
  * verified cut within 64 candidates, or a parser whose tokens do not point
  * into its input) is that 1.15.0 rule: after the last whitespace byte (ASCII
  * whitespace is never part of a multibyte character), or at the last whole
@@ -286,15 +288,21 @@ fts_raw_tokens(TSParserCacheEntry *prsobj, char *buf, int len,
 											   PointerGetDatum(&lemm),
 											   PointerGetDatum(&lenlemm)))) > 0)
 	{
-		if (lemm < buf || lenlemm < 0 || lemm + lenlemm > buf + len)
+		/* in the integer domain: no pointer is formed from lenlemm (AGENTS 16) */
+		if (lemm < buf || lemm > buf + len || lenlemm < 0 ||
+			(Size) lenlemm > (Size) ((buf + len) - lemm))
 		{
 			ok = false;
 			break;
 		}
 		if (*ntok == *cap)
 		{
+			Size		sz;
+
 			*cap *= 2;
-			*toks = (FtsRawTok *) repalloc(*toks, sizeof(FtsRawTok) * *cap);	/* alloc-ok: one per token, palloc-bounded */
+			sz = sizeof(FtsRawTok) * (Size) *cap;
+			/* one entry per token of the text: past 1 GB for a text of ~89M tokens */
+			*toks = (FtsRawTok *) (sz > MaxAllocSize ? repalloc_huge(*toks, sz) : repalloc(*toks, sz));
 		}
 		(*toks)[*ntok].type = type;
 		(*toks)[*ntok].off = (int) (lemm - buf);
@@ -308,13 +316,14 @@ fts_raw_tokens(TSParserCacheEntry *prsobj, char *buf, int len,
 /*
  * Does parsing str[from, to) alone reproduce exactly the whole text's tokens
  * ref[i..) that lie in that range (same types, offsets and lengths, none
- * missing)?  `from` and `to` are whole-text token starts (or the text's ends).
+ * missing)?  `from` and `to` are whole-text token starts (or the text's ends);
+ * for a look-ahead `probe` only the tokens that end before `to` are compared.
  * scratch and sbuf (at least to - from + 1 bytes; the caller passes the
  * whole-text buffer, whose tokens are kept as offsets) are workspace.
  */
 static bool
 fts_cut_reproduces(TSParserCacheEntry *prsobj, const char *str, int from, int to,
-				   const FtsRawTok *ref, int nref, int i,
+				   const FtsRawTok *ref, int nref, int i, bool probe,
 				   FtsRawTok **scratch, int *scap, char *sbuf)
 {
 	int			n,
@@ -325,11 +334,17 @@ fts_cut_reproduces(TSParserCacheEntry *prsobj, const char *str, int from, int to
 	if (!fts_raw_tokens(prsobj, sbuf, to - from, scratch, &n, scap))
 		return false;
 	for (k = 0; k < n; k++)
+	{
+		/* a look-ahead probe ends where the text does not: tokens whose
+		 * reference extends past its end are not comparable */
+		if (probe && i + k < nref && ref[i + k].off + ref[i + k].len > to)
+			return true;
 		if (i + k >= nref || (*scratch)[k].type != ref[i + k].type ||
 			(*scratch)[k].off + from != ref[i + k].off ||
 			(*scratch)[k].len != ref[i + k].len)
 			return false;
-	return !(i + n < nref && ref[i + n].off < to);	/* none dropped at the end */
+	}
+	return probe || !(i + n < nref && ref[i + n].off < to);	/* a cut drops none at its end */
 }
 
 FtsDoc
@@ -355,16 +370,23 @@ fts_analyze_with_config(Oid cfgId, const char *str, int len, uint8 label)
 	if (base > MAXENTRYPOS - 1)
 	{
 		/* past the cap: parse again in chunks (the first parse is discarded) */
-		TSParserCacheEntry *prsobj = lookup_ts_parser_cache(lookup_ts_config_cache(cfgId)->prsId);
+		TSConfigCacheEntry *cfg = lookup_ts_config_cache(cfgId);
+		TSParserCacheEntry *prsobj = lookup_ts_parser_cache(cfg->prsId);
 		int			start = 0;
 		int			i;
 		int			ti = 0;		/* first whole-text token at or after start */
 		int			ncap = 1024,
 					scap = 1024,
 					nref = 0;
-		FtsRawTok  *ref = (FtsRawTok *) palloc(sizeof(FtsRawTok) * ncap);	/* alloc-ok: grows per token, palloc-bounded */
+		int			budget = FTS_PARSE_CHUNK;	/* positions a chunk may use */
+		FtsRawTok  *ref = (FtsRawTok *) palloc(sizeof(FtsRawTok) * ncap);	/* alloc-ok: initial; grown huge-safe in fts_raw_tokens */
 		FtsRawTok  *scratch = (FtsRawTok *) palloc(sizeof(FtsRawTok) * scap);	/* alloc-ok: as above */
 		bool		haveref;
+
+/* a token of a type the configuration maps to dictionaries: the only kind that
+ * takes a position (blanks, tags, a <script> body in the parser's ignore state
+ * take none) */
+#define FTS_TOK_MAPPED(t) ((t) > 0 && (t) < cfg->lenmap && cfg->map[(t)].len > 0)
 
 		for (i = 0; i < prs.curwords; i++)
 			pfree(prs.words[i].word);	/* the dictionaries' lexemes, as to_tsany.c frees them */
@@ -377,70 +399,110 @@ fts_analyze_with_config(Oid cfgId, const char *str, int len, uint8 label)
 		while (start < len)
 		{
 			int			end = len;
+			int			first = prs.curwords;
+			uint32		used;
+			bool		found = false;
 
-			if (len - start > FTS_PARSE_CHUNK)
+			if (haveref)
 			{
-				int			lim = pg_mbcliplen(str + start, len - start, FTS_PARSE_CHUNK);
-				bool		found = false;
+				int			j,
+							mapped = 0,
+							tries = 0;
 
+				while (ti < nref && ref[ti].off < start)
+					ti++;
+				/* after a fallback cut, start is inside a token: every
+				 * candidate's chunk would begin with a partial token */
+				if (ti < nref && ref[ti].off != start)
+					tries = 64;
 				/*
-				 * Cut at the start of a whole-text token, the latest one that
-				 * fits, whose cut reproduces the whole text's tokens on both
-				 * sides: the chunk itself, and a look-ahead window after it
-				 * (a cut inside <script>, for one, loses the parser's ignore
-				 * state and the next chunk tokenizes differently).  A tag or
-				 * comment is one token, so a token boundary never splits it.
+				 * The chunk ends before the token that would take position
+				 * budget + 1: a chunk is bounded by positions, not bytes, so
+				 * markup that takes none (a long <script> body, a tag with a
+				 * large data: URI) fits in one chunk whatever its length.
 				 */
-				if (haveref)
+				for (j = ti; j < nref; j++)
 				{
-					int			j,
-								tries = 0;
+					if (FTS_TOK_MAPPED(ref[j].type) && ++mapped > budget)
+						break;
+				}
+				if (j >= nref)
+					found = true;	/* the rest of the text fits: end = len */
+				/*
+				 * Otherwise cut at the start of a whole-text token, the latest
+				 * one that fits, whose cut reproduces the whole text's tokens
+				 * on both sides: the chunk itself, and a look-ahead window
+				 * after it (a cut inside <script> loses the parser's ignore
+				 * state, so the next chunk would tokenize differently).  A tag
+				 * or comment is one token, so a token boundary never splits it.
+				 */
+				for (; !found && j > ti && tries < 64; j--, tries++)
+				{
+					int			cut = ref[j].off;
+					int			w,
+								wmapped = 0,
+								wend;
 
-					while (ti < nref && ref[ti].off < start)
-						ti++;
-					for (j = ti; j + 1 < nref && ref[j + 1].off <= start + lim; j++)
-						;
-					for (; j > ti && tries < 64; j--, tries++)
+					if (cut <= start)
+						break;
+					if (ref[j - 1].off == cut)
+						continue;	/* a compound and its first part share an offset: try the first only */
+					/* the look-ahead: the next chunk's worth of positions, ending at a token start */
+					for (w = j; w < nref; w++)
+						if (FTS_TOK_MAPPED(ref[w].type) && ++wmapped > budget)
+							break;
+					wend = (w < nref) ? ref[w].off : len;
+					if (wend <= cut)
+						wend = len;
+					if (fts_cut_reproduces(prsobj, str, start, cut, ref, nref, ti, false,
+										   &scratch, &scap, buf) &&
+						fts_cut_reproduces(prsobj, str, cut, wend, ref, nref, j, wend < len,
+										   &scratch, &scap, buf))
 					{
-						int			cut = ref[j].off;
-						int			w = j,
-									wend;
-
-						if (cut <= start)
-							break;
-						/* the look-ahead ends at a whole-text token start too */
-						while (w + 1 < nref && ref[w + 1].off <= cut + FTS_PARSE_CHUNK)
-							w++;
-						wend = (w + 1 < nref) ? ref[w].off : len;
-						if (wend <= cut)
-							wend = Min(len, cut + pg_mbcliplen(str + cut, len - cut, FTS_PARSE_CHUNK));
-						if (fts_cut_reproduces(prsobj, str, start, cut, ref, nref, ti,
-											   &scratch, &scap, buf) &&
-							fts_cut_reproduces(prsobj, str, cut, wend, ref, nref, j,
-											   &scratch, &scap, buf))
-						{
-							end = cut;
-							found = true;
-							break;
-						}
+						end = cut;
+						found = true;
 					}
 				}
-				if (!found)
-				{
-					/* no verified cut (or a parser without token offsets):
-					 * after the last whitespace, as 1.15.0 did */
-					end = start + lim;
-					while (end > start && !scanner_isspace(str[end - 1]))
-						end--;
-					if (end == start)
-						end = start + lim;	/* no whitespace: the last whole character */
-					if (end == start)
-						end = start + pg_mblen(str + start);	/* lim 0: an embedded NUL (C callers only) */
-				}
 			}
-			base += fts_parse_into(cfgId, &prs, &wpos, &capwpos, str + start, end - start, base, buf);
+			if (!found && len - start > FTS_PARSE_CHUNK)
+			{
+				/*
+				 * No verified cut (or a parser without token offsets): at most
+				 * FTS_PARSE_CHUNK bytes, after the last whitespace, as 1.15.0
+				 * did -- a token is at least one byte, so the positions fit.
+				 * Markup that straddles this cut is read as words.
+				 */
+				int			lim = pg_mbcliplen(str + start, len - start, FTS_PARSE_CHUNK);
+
+				elog(DEBUG1, "pg_fts analyzer: no verified chunk cut after byte %d of %d; cutting after whitespace",
+					 start, len);
+				end = start + lim;
+				while (end > start && !scanner_isspace(str[end - 1]))
+					end--;
+				if (end == start)
+					end = start + lim;	/* no whitespace: the last whole character */
+				if (end == start)
+					end = start + pg_mblen(str + start);	/* lim 0: an embedded NUL (C callers only) */
+			}
+			used = fts_parse_into(cfgId, &prs, &wpos, &capwpos, str + start, end - start, base, buf);
+			if (used > MAXENTRYPOS - 1 && budget > 1 && end - start > 1)
+			{
+				/*
+				 * The chunk took more positions than it has tokens (a thesaurus
+				 * substitution adds positions), so some were capped: undo it
+				 * and retry with half the budget.
+				 */
+				for (i = first; i < prs.curwords; i++)
+					pfree(prs.words[i].word);
+				prs.curwords = first;
+				budget /= 2;
+				continue;
+			}
+			base += used;
 			start = end;
+			budget = FTS_PARSE_CHUNK;
 		}
+#undef FTS_TOK_MAPPED
 		pfree(ref);
 		pfree(scratch);
 	}

@@ -8,44 +8,59 @@ All notable changes to pg_fts are documented here.
 
 One fix, for a defect in 1.15.0's new configured-analyzer path (ROADMAP I9a), found the day
 1.15.0 shipped by comparing its output with an unchunked parser.  **No on-disk format change;
-no new or changed SQL objects** (`pg_fts--1.15.0--1.15.1.sql` is a no-op).  Measured on
-PostgreSQL 17.10 (`bench/RESULTS_151_2026-10-29.md`).
+no new or changed SQL objects** (`pg_fts--1.15.0--1.15.1.sql` is a no-op).  Probe
+comparison on PostgreSQL 17.10; gate on 17.10 and 18.6 (`bench/RESULTS_151_2026-10-29.md`).
 
 ### Fixed
 
 - **The chunked re-parse split HTML markup at chunk boundaries** (ROADMAP I9a).  Affects
-  `to_ftsdoc(config, text)` on documents over 16,383 tokens, since 1.15.0.  The re-parse
-  cut the text after any whitespace, so a tag, comment or `<script>`/`<style>` body that
-  straddled a cut was read as words, and every later position shifted.
+  `to_ftsdoc(config, text)` on documents over 16,383 positions, since 1.15.0.  The re-parse
+  cut the text into chunks of at most 16,383 bytes, each after a whitespace, so a tag,
+  comment or `<script>`/`<style>` body that straddled a cut was read as words, and every
+  later position shifted.
   - **Before (1.15.0):** a 20,000-word HTML document of 5,000 `<a href="x1" class="c y z">
     w1 v u t` elements got `ftsdoc_length` 20,077 instead of 20,000.  `@@@ 'href'` and
     `'class'` were true; they are false on 1.14.3 and on an exact parser.  A phrase across
-    each tag matched 4,988 of 4,999.
-  - **The fix:** a cut is now a token boundary of the configured parser.  It is checked
-    against a parser-only pass over the whole text: the chunk before the cut, and a
-    look-ahead window after it, must reproduce exactly the whole text's tokens (type,
-    offset, length).  A tag or comment is one token, so it is never split.  A cut inside
-    `<script>` loses the parser's ignore state, so the look-ahead check rejects it.  After
-    64 rejected candidates, or with a parser whose tokens do not point into its input, the
-    cut falls back to the 1.15.0 rule.
+    each tag matched 4,988 of 4,999.  A 40 kB `<script>` body got 24,811 positions instead of
+    18,000.
+  - **Chunks are bounded by positions, not bytes.**  Only a token whose type the
+    configuration maps to dictionaries takes a position, so blanks, tags and a `<script>`
+    body (the parser's ignore state) take none.  A chunk holds up to 16,383 positions,
+    however many bytes that spans.
+  - **Each cut is a token boundary of the configured parser.**  It is checked against a
+    parser-only pass over the whole text: the chunk before the cut, and a look-ahead window
+    of the next chunk's worth of positions after it, must reproduce exactly the whole text's
+    tokens (type, byte offset, length).  A tag or comment is one token, so it is not split.
+    A cut that would lose the parser's ignore state inside `<script>` fails the look-ahead
+    check.
+  - **Retry when positions overflow.**  If a chunk still takes more than 16,383 positions (a
+    thesaurus can add positions), its words are discarded and it is retried with half the
+    budget.
+  - **Fallback:** after 64 rejected candidates, or with a parser whose tokens do not point
+    into its input, the 1.15.0 rule (at most 16,383 bytes, cut after whitespace), with a
+    `DEBUG1` message.
   - **Checked against an exact reference:** the downstream `jimdawdy-hub/pg_fts` wide parser,
     which vendors PostgreSQL's `parsetext` without the 16,383 clamp.  `to_ftsdoc(...)::text`
-    is byte-identical on all 28 probes: 14 long documents (plain, HTML tags, comments,
-    script/style, URLs/e-mail, hyphenation, CJK with and without spaces, numbers, long
-    words, mixed markup) x `simple`/`english`.  1.15.0 differed on the 4 markup documents
-    in both configurations.  The new `long_positions` block gives doclen 20,000, no tag,
-    comment or script words, and 4,999 of 4,999 cross-tag phrases.
-  - **Not done: vendoring `parsetext`.**  PostgreSQL changed it inside both minor series
-    (18.6 added a per-lexeme length check), so a copy would drift from the server it runs in.
+    is byte-identical on all 32 probes: 16 long documents x `simple`/`english`.  The
+    documents are plain text, HTML tags, comments, script/style, URLs/e-mail, hyphenation,
+    CJK with and without spaces, numbers, long words, mixed markup, a 40 kB `<script>` and a
+    30 kB `data:` URI.  1.15.0 differed on the 6 markup documents.  The fallback never ran
+    on them.  The new `long_positions` blocks check doclen, markup words, script
+    identifiers and 4,999 of 4,999 cross-tag phrases.
+  - **Not done: vendoring `parsetext`.**  PostgreSQL 18.6 changed it (a per-lexeme length
+    check), so a copy would drift from the server it runs in.
   - **Remaining limit:** a multi-word thesaurus phrase that straddles a cut is still not
-    matched across it.
-  - **Cost:** only documents over 16,383 tokens take this path.  Analyzing the 3 + 1 markup
-    documents of the probe set (`english`) went from 137.8 ms on 1.15.0 to 247.3 ms (median
-    of 5), the parser-only verification passes.  A document of up to 16,383 tokens is
-    parsed once, as before.
-  - **Recompute** a stored `ftsdoc` computed by 1.15.0 from markup over 16,383 tokens, and
-    REINDEX an expression index over one.  Values from 1.14.3 or earlier still need the
-    1.15.0 upgrade notice's recompute; values from plain text are unchanged.
+    matched across it.  So with a thesaurus configuration a 1.15.1 value can also differ
+    from 1.15.0's on plain text, because the cuts moved.
+  - **Cost:** only documents over 16,383 positions take this path.  Analyzing the 4
+    long-markup documents of the probe set (`english`) went from 137.9 ms on 1.15.0 to
+    220.3 ms (median of 5), the verification passes.  The reference token list takes 12
+    bytes per raw token and grows past 1 GB (huge allocation) only for texts of about 89M
+    tokens.
+  - **Recompute** a stored `ftsdoc` computed by 1.15.0 from markup over 16,383 positions,
+    and REINDEX an expression index over one.  Values from 1.14.3 or earlier still need the
+    1.15.0 upgrade notice's recompute.  Values from plain text without a thesaurus are
+    unchanged.
 
 ### Retracted
 
