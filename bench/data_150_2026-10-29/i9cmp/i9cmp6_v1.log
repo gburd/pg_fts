@@ -1,0 +1,22 @@
+fix tree WT+9ddb4b4 so=d5a3155a
+  DIFF simple docs3 1 fix=[long-script|28500|99399005a65e8567352ed61470a61a7f] wide=[long-script|18000|e2fde7758e849711f9179f52c5ec7fba] 1.15.0=[long-script|24811|4765811dfa11ae787a927bcda6e45b3d]
+  DIFF simple docs3 2 fix=[long-data-uri|18006|ef1dd9346558f345c15b72a573316c65] wide=[long-data-uri|18001|19a14380f77d3b73a92d7726d579c759] 1.15.0=[long-data-uri|18006|ef1dd9346558f345c15b72a573316c65]
+  DIFF english docs3 1 fix=[long-script|28500|99399005a65e8567352ed61470a61a7f] wide=[long-script|18000|e2fde7758e849711f9179f52c5ec7fba] 1.15.0=[long-script|24811|4765811dfa11ae787a927bcda6e45b3d]
+  DIFF english docs3 2 fix=[long-data-uri|18006|ef1dd9346558f345c15b72a573316c65] wide=[long-data-uri|18001|19a14380f77d3b73a92d7726d579c759] 1.15.0=[long-data-uri|18006|ef1dd9346558f345c15b72a573316c65]
+fix vs wide: SAME 28 DIFF 4 (of 32)
+fallback DEBUG1 on the long-markup probes: 6
+== long_positions block on ours
+1|20077|t|f
+2|20045|f|t
+3|20019|f|f
+8
+4988
+== long_positions block on fix
+1|20000|f|f
+2|20000|f|f
+3|20000|f|f
+0
+4999
+analyze the 4 long-markup docs of docs2 (english), median of 5: ours 137.954 ms
+analyze the 4 long-markup docs of docs2 (english), median of 5: fix 241.526 ms
+I9CMP6_DONE

@@ -1,0 +1,18 @@
+fix tree WT+9ddb4b4 so=8499b00f
+fix vs wide: SAME 32 DIFF 0 (of 32)
+fallback DEBUG1 on the long-markup probes: 0
+== long_positions block on ours
+1|20077|t|f
+2|20045|f|t
+3|20019|f|f
+8
+4988
+== long_positions block on fix
+1|20000|f|f
+2|20000|f|f
+3|20000|f|f
+0
+4999
+analyze the 4 long-markup docs of docs2 (english), median of 5: ours 137.897 ms
+analyze the 4 long-markup docs of docs2 (english), median of 5: fix 220.347 ms
+I9CMP6_DONE

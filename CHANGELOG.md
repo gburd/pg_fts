@@ -54,9 +54,9 @@ comparison on PostgreSQL 17.10; gate on 17.10 and 18.6 (`bench/RESULTS_151_2026-
     from 1.15.0's on plain text, because the cuts moved.
   - **Cost:** only documents over 16,383 positions take this path.  Analyzing the 4
     long-markup documents of the probe set (`english`) went from 137.9 ms on 1.15.0 to
-    220.3 ms (median of 5), the verification passes.  The reference token list takes 12
-    bytes per raw token and grows past 1 GB (huge allocation) only for texts of about 89M
-    tokens.
+    220.3 ms (median of 5), the verification passes.  The reference token list (and a scratch
+    list per verification parse) takes 12 bytes per raw token; it switches to a huge
+    allocation past about 67M tokens, where 1.15.0 handled such a text in ordinary memory.
   - **Recompute** a stored `ftsdoc` computed by 1.15.0 from markup over 16,383 positions,
     and REINDEX an expression index over one.  Values from 1.14.3 or earlier still need the
     1.15.0 upgrade notice's recompute.  Values from plain text without a thesaurus are

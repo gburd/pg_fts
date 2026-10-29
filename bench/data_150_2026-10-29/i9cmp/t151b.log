@@ -1,0 +1,5 @@
+long_positions rc=2 in 1 s: not ok 1     - long_positions                            765 ms
+== lpl on ours: 1|24811|t 2|18006|f 
+== lpl on wide: 1|18000|f 2|18001|f 
+t/004 rc=0 t/004_encodings.pl .. ok Result: PASS 
+T151B_DONE

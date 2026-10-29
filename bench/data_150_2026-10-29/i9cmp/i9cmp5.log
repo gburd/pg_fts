@@ -1,0 +1,6 @@
+fix tree WT+b162a42 so=d4ad1554
+fix vs wide: SAME 28 DIFF 0
+fix: doclen(english)=20000 href=f class=f phrase_t_wN_of_4999=4999
+analyze 4 long HTML docs (english), median of 5: ours 137.750 ms
+analyze 4 long HTML docs (english), median of 5: fix 247.255 ms
+I9CMP5_DONE

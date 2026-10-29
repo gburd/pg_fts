@@ -209,11 +209,10 @@ ftsdoc_from_parsed(ParsedText *prs, const uint32 *wpos, uint32 doclen, uint8 lab
  *
  * The text is parsed whole, exactly as before.  Only when that parse ran past
  * the cap is the result discarded and the text parsed again in chunks of at
- * most FTS_PARSE_CHUNK bytes -- a token is at least one byte, so no ordinal
- * inside a chunk reaches the cap, unless a thesaurus expands one word into
- * several positions (those still cap, as before) -- each chunk's ordinals
- * offset by the positions of the chunks before it.  So a document whose positions 1.14.3 got
- * right is analyzed identically.  Since 1.15.1 (CHANGELOG, ROADMAP I9a) a
+ * most FTS_PARSE_CHUNK positions, each chunk's ordinals offset by the
+ * positions of the chunks before it (a chunk that still overflows -- a
+ * thesaurus adds positions -- is retried with half the budget).  So a
+ * document whose positions 1.14.3 got right is analyzed identically.  Since 1.15.1 (CHANGELOG, ROADMAP I9a) a
  * chunk is bounded by positions -- only a token of a type the configuration
  * maps to dictionaries takes one -- and ends at a token boundary of the
  * configured parser verified to reproduce the whole text's raw tokens on both
@@ -408,12 +407,15 @@ fts_analyze_with_config(Oid cfgId, const char *str, int len, uint8 label)
 				int			j,
 							mapped = 0,
 							tries = 0;
+				bool		aligned;
 
 				while (ti < nref && ref[ti].off < start)
 					ti++;
-				/* after a fallback cut, start is inside a token: every
-				 * candidate's chunk would begin with a partial token */
-				if (ti < nref && ref[ti].off != start)
+				/* after a fallback cut, start can be inside a token: then the
+				 * reference does not describe this chunk's tokens, so neither
+				 * the position count nor a candidate cut can be trusted */
+				aligned = (ti < nref && ref[ti].off == start);
+				if (!aligned)
 					tries = 64;
 				/*
 				 * The chunk ends before the token that would take position
@@ -426,7 +428,7 @@ fts_analyze_with_config(Oid cfgId, const char *str, int len, uint8 label)
 					if (FTS_TOK_MAPPED(ref[j].type) && ++mapped > budget)
 						break;
 				}
-				if (j >= nref)
+				if (j >= nref && aligned)
 					found = true;	/* the rest of the text fits: end = len */
 				/*
 				 * Otherwise cut at the start of a whole-text token, the latest
@@ -464,7 +466,7 @@ fts_analyze_with_config(Oid cfgId, const char *str, int len, uint8 label)
 					}
 				}
 			}
-			if (!found && len - start > FTS_PARSE_CHUNK)
+			if (!found && len - start > Min(budget, FTS_PARSE_CHUNK))
 			{
 				/*
 				 * No verified cut (or a parser without token offsets): at most
@@ -472,7 +474,7 @@ fts_analyze_with_config(Oid cfgId, const char *str, int len, uint8 label)
 				 * did -- a token is at least one byte, so the positions fit.
 				 * Markup that straddles this cut is read as words.
 				 */
-				int			lim = pg_mbcliplen(str + start, len - start, FTS_PARSE_CHUNK);
+				int			lim = pg_mbcliplen(str + start, len - start, Min(budget, FTS_PARSE_CHUNK));
 
 				elog(DEBUG1, "pg_fts analyzer: no verified chunk cut after byte %d of %d; cutting after whitespace",
 					 start, len);

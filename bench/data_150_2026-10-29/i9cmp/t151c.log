@@ -1,0 +1,8 @@
+fix tree WT+057fcc5 so=ebc309c7
+fix vs wide: SAME 32 DIFF 0 (of 32)
+fallback DEBUG1 over all 32: 0
+long_positions rc=2 in 1 s
+== new blocks on ours: 1|20077|t|f 2|20045|f|t 3|20019|f|f 8|5000 1|24811|t 2|18006|t 
+== new blocks on wide: 1|20000|f|f 2|20000|f|f 3|20000|f|f 0|5000 1|18000|f 2|18001|f 
+t/004 rc=0 t/004_encodings.pl .. ok Result: PASS 
+T151C_DONE

@@ -1,0 +1,33 @@
+== ours
+SET
+DROP TABLE
+SELECT 3
+ALTER TABLE
+UPDATE 3
+1|20077|t|f|f
+2|20045|f|t|f
+3|20019|f|f|f
+4988
+== wide
+SET
+DROP TABLE
+SELECT 3
+ALTER TABLE
+UPDATE 3
+1|20000|f|f|f
+2|20000|f|f|f
+3|20000|f|f|f
+4999
+== fix
+SET
+DROP TABLE
+SELECT 3
+ALTER TABLE
+UPDATE 3
+1|20000|f|f|f
+2|20000|f|f|f
+3|20000|f|f|f
+4999
+long_positions rc=2
+t/004 rc=0 t/004_encodings.pl .. ok Result: PASS 
+T151_DONE
