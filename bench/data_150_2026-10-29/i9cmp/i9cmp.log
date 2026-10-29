@@ -1,0 +1,25 @@
+ours: 1.15.0 so=f65960c9
+wide: 1.13.0 so=96926a97
+== config simple
+  1 SAME ours=[plain|138000|24000|ce64be054a939dcce4ca62a96942033a] wide=[plain|138000|24000|ce64be054a939dcce4ca62a96942033a]
+  2 SAME ours=[html-tags-every-200b|115786|10000|2de5e36fabcc1c8cd76d3993d7df9144] wide=[html-tags-every-200b|115786|10000|2de5e36fabcc1c8cd76d3993d7df9144]
+  3 SAME ours=[html-comments|147786|6000|f1644ea7d31be13cea7bea65f90776ce] wide=[html-comments|147786|6000|f1644ea7d31be13cea7bea65f90776ce]
+  4 SAME ours=[urls-emails|142786|20000|709803bb872fee013536b831b341dfb0] wide=[urls-emails|142786|20000|709803bb872fee013536b831b341dfb0]
+  5 SAME ours=[hyphenated|190893|60000|dbb7dd872054ab4f1d7eb66b05ae1e2d] wide=[hyphenated|190893|60000|dbb7dd872054ab4f1d7eb66b05ae1e2d]
+  6 SAME ours=[cjk-no-space|46000|17000|bdf675acf8baaa29714c20dd9f917e50] wide=[cjk-no-space|46000|17000|bdf675acf8baaa29714c20dd9f917e50]
+  7 SAME ours=[cjk-spaced|60000|20000|b38b455b7b3efb3a2f7ec40c52138571] wide=[cjk-spaced|60000|20000|b38b455b7b3efb3a2f7ec40c52138571]
+  8 SAME ours=[script-style|165286|2500|3192221aeb1896a07d76ea925c4cbcb9] wide=[script-style|165286|2500|3192221aeb1896a07d76ea925c4cbcb9]
+  9 SAME ours=[numbers|146084|24000|c56fdd02ee4ca45ee87f5536df23c138] wide=[numbers|146084|24000|c56fdd02ee4ca45ee87f5536df23c138]
+  10 SAME ours=[long-words|816894|18000|a02c4fbbcb0c308fc742dca2ad2122fd] wide=[long-words|816894|18000|a02c4fbbcb0c308fc742dca2ad2122fd]
+== config english
+  1 SAME ours=[plain|138000|24000|ce64be054a939dcce4ca62a96942033a] wide=[plain|138000|24000|ce64be054a939dcce4ca62a96942033a]
+  2 SAME ours=[html-tags-every-200b|115786|10000|64eba0ef6ee02b26152092f25a4c2c92] wide=[html-tags-every-200b|115786|10000|64eba0ef6ee02b26152092f25a4c2c92]
+  3 SAME ours=[html-comments|147786|6000|f1644ea7d31be13cea7bea65f90776ce] wide=[html-comments|147786|6000|f1644ea7d31be13cea7bea65f90776ce]
+  4 SAME ours=[urls-emails|142786|20000|d75eaafb50aab89f7379d402de2ce8dd] wide=[urls-emails|142786|20000|d75eaafb50aab89f7379d402de2ce8dd]
+  5 SAME ours=[hyphenated|190893|60000|a7421219d6e0d41a9ec8e05ecaad3a9b] wide=[hyphenated|190893|60000|a7421219d6e0d41a9ec8e05ecaad3a9b]
+  6 SAME ours=[cjk-no-space|46000|17000|bdf675acf8baaa29714c20dd9f917e50] wide=[cjk-no-space|46000|17000|bdf675acf8baaa29714c20dd9f917e50]
+  7 SAME ours=[cjk-spaced|60000|20000|b38b455b7b3efb3a2f7ec40c52138571] wide=[cjk-spaced|60000|20000|b38b455b7b3efb3a2f7ec40c52138571]
+  8 SAME ours=[script-style|165286|2500|3192221aeb1896a07d76ea925c4cbcb9] wide=[script-style|165286|2500|3192221aeb1896a07d76ea925c4cbcb9]
+  9 SAME ours=[numbers|146084|24000|c56fdd02ee4ca45ee87f5536df23c138] wide=[numbers|146084|24000|c56fdd02ee4ca45ee87f5536df23c138]
+  10 SAME ours=[long-words|816894|18000|a02c4fbbcb0c308fc742dca2ad2122fd] wide=[long-words|816894|18000|a02c4fbbcb0c308fc742dca2ad2122fd]
+I9CMP_DONE

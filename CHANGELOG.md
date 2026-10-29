@@ -4,6 +4,33 @@ All notable changes to pg_fts are documented here.
 
 ## Unreleased
 
+### Known issues (1.15.0)
+
+- **The I9 chunked re-parse splits HTML markup at chunk boundaries in documents over
+  16,383 tokens** (ROADMAP I9a).  Found 2026-10-29 by comparing 1.15.0's output with an
+  unchunked position-wide parser (the downstream `jimdawdy-hub/pg_fts` branch
+  `upgrade/freecase-130-20261015`, which vendors PostgreSQL's `parsetext` without the
+  16,383 clamp).  On a document of 5,000 `<a href="x1" class="c y z"> w1 v u t` elements
+  (20,000 words, 212 kB):
+  - 1.15.0 gives `ftsdoc_length` 20,077 against the exact 20,000.  The tag's inside is read
+    as words at the 11 boundaries, so `to_ftsdoc('english', t) @@@ 'href'` and `'class'` are
+    true; on 1.14.3 and the exact parser they are false.  The heap recheck evaluates the
+    same function, so the index and the recheck agree on that wrong answer.
+  - Positions after each boundary shift by the extra tokens.  The cross-tag phrase
+    `"t wN"` matches for 4,988 of 4,999 N, against 4,999 for the exact parser.  1.14.3
+    matches 4,095: those before position 16,383.
+  - The same happens to an HTML comment or a `<script>`/`<style>` body cut at a boundary.
+  - Documents of up to 16,383 tokens, and long documents without markup, are unaffected:
+    their output is byte-identical to the exact parser's on all 20 probes (10 shapes x
+    `simple`/`english`).
+  - The 1.15.0 CHANGELOG said only that such a token "is not recognized across" the cut.
+    That understated it: the token's pieces are indexed.
+  - Reproduction and numbers: `bench/data_150_2026-10-29/i9cmp/`.
+  - Fix planned for 1.15.1: choose cut points at the parser's own token boundaries,
+    verified against a parser-only pass of the whole text.  Vendoring `parsetext` was
+    rejected: PostgreSQL changed it inside the 17.x and 18.x minor series (18.6 added a
+    per-lexeme length check), so a copy would drift from the server it runs in.
+
 ## 1.15.0 - 2026-10-29
 
 Two fixes for known issues (I20: a ranked scan could return a pending row twice during a
