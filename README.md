@@ -399,6 +399,13 @@ build: pg_search **72 s**, pg_fts 238 s (no `fts_vacuum` needed), pg_textsearch 
   * **Where pg_fts does not win.**  pg_search builds 3.3x faster.  On `world & war` (both
     terms frequent, their best documents spread over many blocks; 2%, spreads overlapping)
     and on a 4-term OR (4%), pg_search is slightly faster.
+  * **On TIN's published rig** (`bench/RESULTS_M4_2026-10-29.md`, EC2 i7i.8xlarge, 8 vCPU /
+    32 GB per engine, 59.7M Stack Overflow posts, a synthetic 2-15-word query trace, one run
+    per engine): against pg_search 0.25.2, pg_fts 1.15.1 is ahead on conjunctions and phrases
+    (125 vs 53 tps, p99 626 vs 1,511 ms).  It is behind on long disjunctions (mean 1,555 vs 334
+    ms; mixed workload 26 vs 45 tps) and far behind on concurrent updates (25 vs 999 UPDATEs/s
+    at a 1,000/s target, readers 1.7 vs 26.7 tps).  Its build needed 132-141 GB with
+    `maintenance_work_mem = 24GB` (pg_search 64 GB).  ROADMAP I21, I22.
   * **Relevance** (`bench/RESULTS_1144_2026-10-28.md`, BEIR test qrels, pg_search
     0.26.1, x86): NDCG@10 on SciFact 0.685 (pg_fts, English) vs 0.634 (pg_search) vs
     0.568 (ts_rank); on NFCorpus 0.324 vs 0.300 vs 0.300.  With no stemming (`simple`)

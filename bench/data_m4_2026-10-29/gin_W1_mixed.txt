@@ -1,0 +1,3 @@
+pgbench: error: connection to server on socket "/tmp/.s.PGSQL.6500" failed: Connection refused
+	Is the server running locally and accepting connections on that socket?
+pgbench: error: could not create connection for setup

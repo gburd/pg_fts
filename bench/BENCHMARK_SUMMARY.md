@@ -520,7 +520,19 @@ Kept because the corrections are part of the result.
 
 Measured as of 1.10.0: single-client latency, **concurrent throughput** (16/32/64
 clients, all four engines), index size, build time, and match-count correctness.
-Still unmeasured: **ingest/update throughput** and **cold-cache (disk-bound) latency**.
+Still unmeasured: **cold-cache (disk-bound) latency**.  **Ingest/update under readers** was
+measured on 2026-10-29 on TIN's rig (`RESULTS_M4_2026-10-29.md`, i7i.8xlarge, 8 vCPU / 32 GB per
+engine, 59.7M Stack Overflow posts, one run per engine).  With OR top-10 readers and a 1,000
+UPDATE/s target for 600 s, UPDATEs completed:
+- pg_search 0.25.2: 599,489, readers 26.7 tps;
+- pg_textsearch 1.4.0: 1,033, readers 46.6 tps;
+- pg_fts 1.15.1: 19,038, readers 1.7 tps;
+- GIN: the server was OOM-killed.
+
+Same rig:
+- AND + phrase: pg_fts 125.3 tps vs pg_search 52.8.
+- Mixed AND/OR/phrase: pg_fts 26.4 tps vs pg_search 45.4 (pg_fts long ORs: mean 1,555 ms).
+- Build RAM: pg_fts 132-141 GB vs pg_search 64 GB.
 **Ranking quality** was measured on 2026-10-28 (`RESULTS_1144_2026-10-28.md` section 5,
 BEIR test qrels, x86, one cluster): NDCG@10 SciFact pg_fts (English) 0.6848, pg_fts
 (`simple`, no stemming) 0.6650, pg_search 0.26.1 0.6339, ts_rank 0.5684; NFCorpus 0.3240,

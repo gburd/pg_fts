@@ -1,0 +1,15 @@
+pgbench (18.6)
+transaction type: /nvme/m4/upd.sql
+scaling factor: 1
+query mode: extended
+number of clients: 4
+number of threads: 2
+maximum number of tries: 1
+duration: 600 s
+number of transactions actually processed: 1033
+number of failed transactions: 0 (0.000%)
+latency average = 2331.404 ms
+latency stddev = 37251.912 ms
+rate limit schedule lag: avg 5.981 (max 35.280) ms
+initial connection time = 5.773 ms
+tps = 1.719243 (without initial connection time)

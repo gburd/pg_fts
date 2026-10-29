@@ -188,9 +188,15 @@ absence is not evidence of parity (`bench/COVERAGE_AUDIT_2026-09-10.md`):
   do it at all.
   Correction recorded there: an earlier claim that vchord *collapses* was wrong — it
   peaks at 8 clients and declines only 4.7-7.2% by 32.
-- **Ingest / update throughput.** We measure bulk build only. Sustained INSERT rows/s,
-  DELETE/UPDATE cost, and how latency degrades as the pending list grows between
-  merges are unmeasured for every engine.
+- **Ingest / update throughput** -- measured once, on TIN's rig (`bench/RESULTS_M4_2026-10-29.md`).
+  A 1,000 UPDATE/s target for 600 s, with OR top-10 readers, completed:
+  - pg_search 0.25.2: 599,489 UPDATEs, readers 26.7 tps;
+  - pg_textsearch 1.4.0: 1,033 UPDATEs, readers 46.6 tps;
+  - pg_fts 1.15.1: 19,038 UPDATEs, readers 1.7 tps;
+  - GIN: OOM-killed.
+
+  pg_fts is weakest here (ROADMAP I21).  Bulk INSERT rows/s and DELETE cost are still
+  unmeasured across engines.
 - **Ranking quality (NDCG / recall vs a reference)** -- measured for pg_fts, pg_search
   0.26.1 and ts_rank on two BEIR sets only (`bench/RESULTS_1144_2026-10-28.md` section 5):
   NDCG@10 SciFact 0.6848 / 0.6339 / 0.5684, NFCorpus 0.3240 / 0.3000 / 0.3001.

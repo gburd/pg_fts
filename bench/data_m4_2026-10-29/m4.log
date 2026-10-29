@@ -1,0 +1,92 @@
+15:34:46 prep: 7z md5 7fad535401201f725067170ee3b7bb87 (archive.org lists 7fad535401201f725067170ee3b7bb87)
+
+   Date      Time    Attr         Size   Compressed  Name
+------------------- ----- ------------ ------------  ------------------------
+2024-04-06 22:07:09 ....A 103933385042  23026928152  Posts.xml
+------------------- ----- ------------ ------------  ------------------------
+2024-04-06 22:07:09       103933385042  23026928152  1 files
+docs 59705427 queries 3762
+16:13:06 prep done in 2216 s: posts.tsv 57G, 59705427 rows; queries 3762; md5 posts 7bb0118039a1 queries 1636eaa6fb11
+16:24:12 base loaded in 663 s: 59705427 posts, heap+toast 48 GB, queries and 1254, or 1254, phrase 1254
+16:43:21 engine fts: copy base (83G)
+16:43:23 engine fts: versions pg_search 0.25.2, pg_textsearch 1.4.0, pg_fts 1.15.0 | postgres (PostgreSQL) 18.6
+16:43:23 engine fts: build (MemoryMax 32G): CREATE EXTENSION pg_fts; CREATE INDEX posts_ix ON posts USING fts (to_ftsdoc('english', content)) WITH (positions = on);
+16:49:53 engine fts: build rc=2 in 390 s (6m30s); index  (all non-pkey relations added: ); peak cgroup memory 32.0 GB
+	This probably means the server terminated abnormally
+	before or while processing the request.
+connection to server was lost
+16:49:53 engine pdb: copy base (83G)
+16:49:54 engine pdb: versions pg_search 0.25.2, pg_textsearch 1.4.0, pg_fts 1.15.0 | postgres (PostgreSQL) 18.6
+16:49:54 engine pdb: build (MemoryMax 64G): CREATE EXTENSION pg_search CASCADE; CREATE INDEX posts_ix ON posts USING bm25 (id, content) WITH (key_field = 'id');
+17:05:30 engine pdb: build rc=0 in 927 s (15m27s); index 28 GB (all non-pkey relations added: 28 GB); peak cgroup memory 64.0 GB
+17:05:36 pdb check and: plan [Custom Scan (ParadeDB Base Scan),]; of 30 trace entries: nonempty=24 rows=182
+17:05:39 pdb check or: plan [Custom Scan (ParadeDB Base Scan),]; of 30 trace entries: nonempty=30 rows=300
+17:05:47 pdb check phrase: plan [Custom Scan (ParadeDB Base Scan),]; of 30 trace entries: nonempty=14 rows=14
+17:11:49 pdb W1_mixed: number of transactions actually processed: 13684 number of failed transactions: 0 (0.000%) latency average = 352.381 ms tps = 45.405398 (without initial connection time)  - number of transactions actually processed: 4481 (tps = 14.868576)  - number of failed transactions: 0 (0.000%)  - latency average = 169.388 ms  - number of transactions actually processed: 4602 (tps = 15.270070)  - number of failed transactions: 0 (0.000%)  - latency average = 333.975 ms  - number of transactions actually processed: 4601 (tps = 15.266752)  - number of failed transactions: 0 (0.000%)  - latency average = 545.424 ms  | n=13684 p50=207.7ms p90=857.7ms p99=1748.3ms
+17:17:50 pdb W2_and_phrase: number of transactions actually processed: 15857 number of failed transactions: 0 (0.000%) latency average = 303.252 ms tps = 52.761387 (without initial connection time)  - number of transactions actually processed: 7974 (tps = 26.532087)  - number of failed transactions: 0 (0.000%)  - latency average = 152.812 ms  - number of transactions actually processed: 7883 (tps = 26.229300)  - number of failed transactions: 0 (0.000%)  - latency average = 454.799 ms  | n=15857 p50=183.4ms p90=751.8ms p99=1511.0ms
+17:27:52 pdb W3_or_with_updates: readers number of transactions actually processed: 16072 latency average = 598.697 ms tps = 26.724691 (without initial connection time)  | n=16072 p50=386.8ms p90=1303.1ms p99=2954.8ms | updates number of transactions actually processed: 599489 number of failed transactions: 0 (0.000%) tps = 999.156092 (without initial connection time) 
+17:27:52 pdb after W3: index 28 GB; peak cgroup memory 32.0 GB
+17:28:07 engine pdb DONE
+17:28:07 engine pgts: copy base (83G)
+17:28:08 engine pgts: versions pg_search 0.25.2, pg_textsearch 1.4.0, pg_fts 1.15.0 | postgres (PostgreSQL) 18.6
+17:28:08 engine pgts: build (MemoryMax 128G): CREATE EXTENSION pg_textsearch; CREATE INDEX posts_ix ON posts USING bm25 (content) WITH (text_config = 'english');
+18:15:06 engine pgts: build rc=0 in 2814 s (46m54s); index 19 GB (all non-pkey relations added: 19 GB); peak cgroup memory 128.0 GB
+18:15:09 pgts check and: n/a (unsupported)
+18:15:15 pgts check or: plan [Index Scan using posts_ix,]; of 30 trace entries: nonempty=30 rows=300
+18:15:15 pgts check phrase: n/a (unsupported)
+18:15:15 pgts W1_mixed: n/a (no supported query kind among: and or phrase)
+18:15:15 pgts W2_and_phrase: n/a (no supported query kind among: and phrase)
+18:25:16 pgts W3_or_with_updates: readers number of transactions actually processed: 28025 latency average = 342.984 ms tps = 46.649414 (without initial connection time)  | n=28025 p50=219.7ms p90=847.7ms p99=1590.7ms | updates number of transactions actually processed: 1033 number of failed transactions: 0 (0.000%) tps = 1.719243 (without initial connection time) 
+18:25:16 pgts after W3: index 19 GB; peak cgroup memory 9.6 GB
+18:25:16 engine pgts DONE
+18:25:16 engine gin: copy base (83G)
+18:25:17 engine gin: versions pg_search 0.25.2, pg_textsearch 1.4.0, pg_fts 1.15.0 | postgres (PostgreSQL) 18.6
+18:25:17 engine gin: build (MemoryMax 64G): CREATE INDEX posts_ix ON posts USING gin (to_tsvector('english', content));
+19:02:23 engine gin: build rc=0 in 2214 s (36m54s); index 16 GB (all non-pkey relations added: 16 GB); peak cgroup memory 64.0 GB
+19:03:12 gin check and: plan [Bitmap Index Scan on posts_ix,]; of 30 trace entries: nonempty=25 rows=232
+19:13:13 gin check or: plan [Bitmap Index Scan on posts_ix,]; of 30 trace entries: ERROR:  canceling statement due to statement timeout
+19:13:58 gin check phrase: plan [Bitmap Index Scan on posts_ix,]; of 30 trace entries: nonempty=17 rows=48
+19:14:05 gin W1_mixed:  | no log
+19:14:05 gin W2_and_phrase:  | no log
+19:14:05 gin W3_or_with_updates: readers  | no log | updates 
+19:14:05 gin after W3: index ; peak cgroup memory 32.0 GB
+19:14:06 engine gin DONE
+19:14:38 engine fts: copy base (83G)
+19:14:39 engine fts: versions pg_search 0.25.2, pg_textsearch 1.4.0, pg_fts 1.15.0 | postgres (PostgreSQL) 18.6
+19:14:39 engine fts: build (MemoryMax 64G): CREATE EXTENSION pg_fts; CREATE INDEX posts_ix ON posts USING fts (to_ftsdoc('english', content)) WITH (positions = on);
+19:24:32 engine fts: build rc=1 in 592 s (9m52s); index  (all non-pkey relations added: ); peak cgroup memory 64.0 GB
+ERROR:  invalid byte sequence for encoding "UTF8": 0xe4 0x96
+CONTEXT:  parallel worker
+19:48:43 engine fts: copy base (83G)
+19:48:44 engine fts: versions pg_search 0.25.2, pg_textsearch 1.4.0, pg_fts 1.15.1 | postgres (PostgreSQL) 18.6
+19:48:44 engine fts: build (MemoryMax 64G): CREATE EXTENSION pg_fts; CREATE INDEX posts_ix ON posts USING fts (to_ftsdoc('english', content)) WITH (positions = on);
+20:15:03 engine fts: build rc=2 in 1579 s (26m19s); index  (all non-pkey relations added: ); peak cgroup memory 64.0 GB
+	This probably means the server terminated abnormally
+	before or while processing the request.
+connection to server was lost
+20:22:07 gin W2_and_phrase: number of transactions actually processed: 188 number of failed transactions: 0 (0.000%) latency average = 26560.699 ms tps = 0.602394 (without initial connection time)  - number of transactions actually processed: 96 (tps = 0.307605)  - number of failed transactions: 0 (0.000%)  - latency average = 4526.073 ms  - number of transactions actually processed: 92 (tps = 0.294788)  - number of failed transactions: 0 (0.000%)  - latency average = 3601.171 ms  | n=188 p50=330.2ms p90=12759.8ms p99=48170.6ms
+20:22:07 gin W2: server alive after: yes; OOM kills in the unit so far: 4
+20:26:49 engine fts: copy base (83G)
+20:26:50 engine fts: versions pg_search 0.25.2, pg_textsearch 1.4.0, pg_fts 1.15.1 | postgres (PostgreSQL) 18.6
+20:26:50 engine fts: build (MemoryMax 192G): CREATE EXTENSION pg_fts; CREATE INDEX posts_ix ON posts USING fts (to_ftsdoc('english', content)) WITH (positions = on);
+20:58:37 engine fts: build rc=0 in 1903 s (31m43s); index 26 GB (all non-pkey relations added: 26 GB); peak cgroup memory 140.8 GB
+20:58:41 fts check and: plan [Index Scan using posts_ix,]; of 30 trace entries: ERROR:  syntax error in ftsquery: "not & for & that & user & what & i & m & struggling"
+20:58:52 fts check or: plan [Index Scan using posts_ix,]; of 30 trace entries: ERROR:  syntax error in ftsquery: "not | for | that | user | what | i | m | struggling"
+20:58:55 fts check phrase: plan [Index Scan using posts_ix,]; of 30 trace entries: nonempty=17 rows=48
+20:59:17 fts W1_mixed: number of transactions actually processed: 142 number of failed transactions: 0 (0.000%) latency average = 1071.543 ms tps = 14.931745 (without initial connection time)  - number of transactions actually processed: 42 (tps = 4.416432)  - number of failed transactions: 0 (0.000%)  - latency average = 101.533 ms  - number of transactions actually processed: 37 (tps = 3.890666)  - number of failed transactions: 0 (0.000%)  - latency average = 911.964 ms  - number of transactions actually processed: 63 (tps = 6.624647)  - number of failed transactions: 0 (0.000%)  - latency average = 115.507 ms  | n=142 p50=91.9ms p90=798.7ms p99=2384.0ms
+20:59:23 fts W2_and_phrase: number of transactions actually processed: 189 number of failed transactions: 0 (0.000%) latency average = 203.965 ms tps = 78.444915 (without initial connection time)  - number of transactions actually processed: 93 (tps = 38.599879)  - number of failed transactions: 0 (0.000%)  - latency average = 79.251 ms  - number of transactions actually processed: 96 (tps = 39.845036)  - number of failed transactions: 0 (0.000%)  - latency average = 91.189 ms  | n=189 p50=58.7ms p90=202.4ms p99=420.4ms
+21:09:24 fts W3_or_with_updates: readers number of transactions actually processed: 94 latency average = 19622.686 ms tps = 0.815383 (without initial connection time)  | n=94 p50=3855.9ms p90=21244.1ms p99=34796.1ms | updates number of transactions actually processed: 600415 number of failed transactions: 0 (0.000%) tps = 997.932200 (without initial connection time) 
+21:09:24 fts after W3: index 45 GB; peak cgroup memory 32.0 GB
+21:09:57 engine fts DONE
+21:21:15 engine fts: copy base (83G)
+21:21:16 engine fts: versions pg_search 0.25.2, pg_textsearch 1.4.0, pg_fts 1.15.1 | postgres (PostgreSQL) 18.6
+21:21:16 engine fts: build (MemoryMax 192G): CREATE EXTENSION pg_fts; CREATE INDEX posts_ix ON posts USING fts (to_ftsdoc('english', content)) WITH (positions = on);
+21:53:01 engine fts: build rc=0 in 1901 s (31m41s); index 26 GB (all non-pkey relations added: 26 GB); peak cgroup memory 132.0 GB
+21:53:06 fts check and: plan [Index Scan using posts_ix,]; of 30 trace entries: nonempty=25 rows=232
+21:53:28 fts check or: plan [Index Scan using posts_ix,]; of 30 trace entries: nonempty=30 rows=300
+21:53:30 fts check phrase: plan [Index Scan using posts_ix,]; of 30 trace entries: nonempty=17 rows=48
+21:59:35 fts W1_mixed: number of transactions actually processed: 7988 number of failed transactions: 0 (0.000%) latency average = 606.179 ms tps = 26.394834 (without initial connection time)  - number of transactions actually processed: 2585 (tps = 8.541643)  - number of failed transactions: 0 (0.000%)  - latency average = 119.210 ms  - number of transactions actually processed: 2675 (tps = 8.839031)  - number of failed transactions: 0 (0.000%)  - latency average = 1555.066 ms  - number of transactions actually processed: 2728 (tps = 9.014160)  - number of failed transactions: 0 (0.000%)  - latency average = 127.733 ms  | n=7988 p50=138.2ms p90=1952.9ms p99=5714.5ms | clients aborted: 0 of 16 ()
+22:05:36 fts W2_and_phrase: number of transactions actually processed: 37659 number of failed transactions: 0 (0.000%) latency average = 127.692 ms tps = 125.301175 (without initial connection time)  - number of transactions actually processed: 18757 (tps = 62.409361)  - number of failed transactions: 0 (0.000%)  - latency average = 126.513 ms  - number of transactions actually processed: 18901 (tps = 62.888486)  - number of failed transactions: 0 (0.000%)  - latency average = 128.563 ms  | n=37659 p50=83.3ms p90=296.2ms p99=626.2ms | clients aborted: 0 of 16 ()
+22:18:20 fts W3_or_with_updates: readers number of transactions actually processed: 1037 latency average = 9551.836 ms tps = 1.675071 (without initial connection time)  | n=1037 p50=5208.1ms p90=23632.5ms p99=47033.8ms | reader clients aborted: 0 of 16 | updates number of transactions actually processed: 19038 number of failed transactions: 0 (0.000%) tps = 24.925536 (without initial connection time)  aborted: 0
+22:18:20 fts after W3: index 44 GB; peak cgroup memory 32.0 GB
+22:18:24 engine fts DONE

@@ -1,0 +1,27 @@
+pgbench (18.6)
+transaction type: multiple scripts
+scaling factor: 1
+query mode: extended
+number of clients: 16
+number of threads: 8
+maximum number of tries: 1
+duration: 60 s
+number of transactions actually processed: 7430
+number of failed transactions: 0 (0.000%)
+latency average = 129.848 ms
+initial connection time = 7.434 ms
+tps = 123.221260 (without initial connection time)
+SQL script 1: /nvme/m4/fts_W2_and_phrase_and.sql
+ - weight: 1 (targets 50.0% of total)
+ - 3712 transactions (50.0% of total)
+ - number of transactions actually processed: 3712 (tps = 61.560877)
+ - number of failed transactions: 0 (0.000%)
+ - latency average = 127.485 ms
+ - latency stddev = 135.478 ms
+SQL script 2: /nvme/m4/fts_W2_and_phrase_phrase.sql
+ - weight: 1 (targets 50.0% of total)
+ - 3718 transactions (50.0% of total)
+ - number of transactions actually processed: 3718 (tps = 61.660383)
+ - number of failed transactions: 0 (0.000%)
+ - latency average = 131.223 ms
+ - latency stddev = 148.883 ms

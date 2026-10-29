@@ -1,0 +1,31 @@
+pgbench (18.6)
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+transaction type: multiple scripts
+scaling factor: 1
+query mode: extended
+number of clients: 16
+number of threads: 8
+maximum number of tries: 1
+duration: 300 s
+number of transactions actually processed: 37659
+number of failed transactions: 0 (0.000%)
+latency average = 127.692 ms
+initial connection time = 11.756 ms
+tps = 125.301175 (without initial connection time)
+SQL script 1: /nvme/m4/fts_W2_and_phrase_and.sql
+ - weight: 1 (targets 50.0% of total)
+ - 18757 transactions (49.8% of total)
+ - number of transactions actually processed: 18757 (tps = 62.409361)
+ - number of failed transactions: 0 (0.000%)
+ - latency average = 126.513 ms
+ - latency stddev = 138.731 ms
+SQL script 2: /nvme/m4/fts_W2_and_phrase_phrase.sql
+ - weight: 1 (targets 50.0% of total)
+ - 18901 transactions (50.2% of total)
+ - number of transactions actually processed: 18901 (tps = 62.888486)
+ - number of failed transactions: 0 (0.000%)
+ - latency average = 128.563 ms
+ - latency stddev = 142.713 ms

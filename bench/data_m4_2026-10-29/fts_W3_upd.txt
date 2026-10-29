@@ -1,0 +1,37 @@
+pgbench (18.6)
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+transaction type: /nvme/m4/upd.sql
+scaling factor: 1
+query mode: extended
+number of clients: 4
+number of threads: 2
+maximum number of tries: 1
+duration: 600 s
+number of transactions actually processed: 19038
+number of failed transactions: 0 (0.000%)
+latency average = 161.348 ms
+latency stddev = 10855.643 ms
+rate limit schedule lag: avg 2.397 (max 30.440) ms
+initial connection time = 4.197 ms
+tps = 24.925536 (without initial connection time)

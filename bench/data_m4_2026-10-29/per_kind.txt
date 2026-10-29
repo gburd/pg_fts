@@ -1,0 +1,20 @@
+== pdb_W1_mixed
+SQL script 1: /nvme/m4/pdb_W1_mixed_and.sql	 number of transactions actually processed: 4481 (tps = 14.868576)	 latency average = 169.388 ms
+SQL script 2: /nvme/m4/pdb_W1_mixed_or.sql	 number of transactions actually processed: 4602 (tps = 15.270070)	 latency average = 333.975 ms
+SQL script 3: /nvme/m4/pdb_W1_mixed_phrase.sql	 number of transactions actually processed: 4601 (tps = 15.266752)	 latency average = 545.424 ms
+== pdb_W2_and_phrase
+SQL script 1: /nvme/m4/pdb_W2_and_phrase_and.sql	 number of transactions actually processed: 7974 (tps = 26.532087)	 latency average = 152.812 ms
+SQL script 2: /nvme/m4/pdb_W2_and_phrase_phrase.sql	 number of transactions actually processed: 7883 (tps = 26.229300)	 latency average = 454.799 ms
+== gin_W2_and_phrase
+SQL script 1: /nvme/m4/gin_W2_and_phrase_and.sql	 number of transactions actually processed: 96 (tps = 0.307605)	 latency average = 4526.073 ms
+SQL script 2: /nvme/m4/gin_W2_and_phrase_phrase.sql	 number of transactions actually processed: 92 (tps = 0.294788)	 latency average = 3601.171 ms
+== fts_W1_mixed
+SQL script 1: /nvme/m4/fts_W1_mixed_and.sql	 number of transactions actually processed: 2585 (tps = 8.541643)	 latency average = 119.210 ms
+SQL script 2: /nvme/m4/fts_W1_mixed_or.sql	 number of transactions actually processed: 2675 (tps = 8.839031)	 latency average = 1555.066 ms
+SQL script 3: /nvme/m4/fts_W1_mixed_phrase.sql	 number of transactions actually processed: 2728 (tps = 9.014160)	 latency average = 127.733 ms
+== fts_W2_and_phrase
+SQL script 1: /nvme/m4/fts_W2_and_phrase_and.sql	 number of transactions actually processed: 18757 (tps = 62.409361)	 latency average = 126.513 ms
+SQL script 2: /nvme/m4/fts_W2_and_phrase_phrase.sql	 number of transactions actually processed: 18901 (tps = 62.888486)	 latency average = 128.563 ms
+pdb_W3_upd: number of transactions actually processed: 599489 latency average = 3.678 ms tps = 999.156092 (without initial connection time) 
+pgts_W3_upd: number of transactions actually processed: 1033 latency average = 2331.404 ms tps = 1.719243 (without initial connection time) 
+fts_W3_upd: number of transactions actually processed: 19038 latency average = 161.348 ms tps = 24.925536 (without initial connection time) 
