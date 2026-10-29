@@ -1,4 +1,4 @@
--- count_partial (1.14.4, ROADMAP I17a): count(*) is answered from a PARTIAL fts
+-- count_partial (1.15.0, ROADMAP I17a): count(*) is answered from a PARTIAL fts
 -- index when the query's other quals are equivalent to the index predicate.
 -- Through 1.14.3 the pushdown skipped every partial index (1.14.1 made it, rightly,
 -- stop counting from one whose predicate the quals do not match).  A partial index

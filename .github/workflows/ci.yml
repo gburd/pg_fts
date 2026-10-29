@@ -208,7 +208,7 @@ jobs:
           # of a palloc'd chunk stays inside the AllocSet block, so ASan never
           # sees it (PostgreSQL's allocator is not poisoned); cassert logs it
           # as a WARNING at pfree / context reset (ROADMAP I10, CHANGELOG
-          # 1.14.4).  The 1.14.3 short-dfs read (Codeberg #9) was invisible to
+          # 1.15.0).  The 1.14.3 short-dfs read (Codeberg #9) was invisible to
           # the grep above for the same reason.
           if grep -E "detected write past chunk end|problem in alloc set|detected double pfree" "$D/log"; then
             echo "the cassert allocator reported a corrupt chunk"; cat "$D/log"; exit 1

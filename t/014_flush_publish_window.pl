@@ -5,7 +5,7 @@
 # fell between the two saw every flushed document both in the segment and on the
 # pending list: a LIMIT 10 returned 10 rows with 5 distinct ids, and N and df
 # counted those documents twice (since 1.13.0, when ranked scans began merging
-# pending documents; CHANGELOG 1.14.4).  1.14.4 does both in one update.
+# pending documents; CHANGELOG 1.15.0).  1.15.0 does both in one update.
 #
 # Deterministic with a test-hooks build (-DPG_FTS_TEST_HOOKS): the flusher waits on
 # pg_fts.test_flush_pause_advisory_key right after the publish, which through

@@ -1,4 +1,4 @@
--- ranked_driven_and (1.14.4, ROADMAP I19a/I19b, Codeberg #6): a ranked pure-boolean
+-- ranked_driven_and (1.15.0, ROADMAP I19a/I19b, Codeberg #6): a ranked pure-boolean
 -- AND whose cheapest required operand is small is driven from that operand's
 -- postings.  Through 1.14.3 `rare & (a | b)` took the BoolGate walk over a's and b's
 -- cursors: with few matches the threshold stayed low, a gate-rejected pivot never

@@ -307,7 +307,7 @@ fts_planner(Query *parse, const char *query_string, int cursorOptions,
 
 /*
  * A partial bm25 index on `rel` over `expr` whose predicate is EQUIVALENT to
- * the query's other quals (1.14.4, ROADMAP I17a), or InvalidOid.  A partial
+ * the query's other quals (1.15.0, ROADMAP I17a), or InvalidOid.  A partial
  * index holds exactly the rows its predicate P admits, so its count of q is
  * the count of `P AND q`; that answers `R AND q` (R = the other quals) only
  * when every row satisfying R satisfies P (predOK: check_index_predicates has
@@ -355,7 +355,7 @@ fts_rel_partial_count_index(RelOptInfo *rel, Node *expr, List *others)
  * index whose predicate the query implies (predOK), when the rel has no
  * non-partial one: see fts_matchsel.  The count pushdown takes a partial index
  * only through fts_rel_partial_count_index, when its predicate is equivalent
- * to the query's other quals (1.14.4).  1.14.0 and earlier walked
+ * to the query's other quals (1.15.0).  1.14.0 and earlier walked
  * RelationGetIndexList, which includes all of these: wrong counts and planning
  * errors (CHANGELOG 1.14.1).  A get_relation_info_hook that prunes
  * rel->indexlist (pg_hint_plan) therefore disables the count pushdown and the
@@ -568,7 +568,7 @@ fts_find_pushdown_index(PlannerInfo *root, RelOptInfo *rel,
 
 	/*
 	 * Exactly one @@@ qual.  Any other quals must be EQUIVALENT to a partial
-	 * index's predicate (1.14.4, ROADMAP I17a): see below.
+	 * index's predicate (1.15.0, ROADMAP I17a): see below.
 	 */
 	foreach(lc, baserestrictinfo)
 	{

@@ -918,7 +918,7 @@ bm25_lookup_pattern(Relation index, const BM25SegMeta *seg,
 			matches = pattern ? RE_compile_and_execute(pattern, de->term,
 				de->termlen, REG_ADVANCED, C_COLLATION_OID, 0, NULL) :
 				varstr_levenshtein_less_equal(term, it->termlen, de->term,
-					de->termlen, 1, 1, 1, it->distance, true) <= it->distance;
+					de->termlen, 1, 1, 1, it->distance, true) <= (int) it->distance;
 			if (matches)
 			{
 				BM25Posting *post;
@@ -1062,7 +1062,7 @@ eval_not_parity(FtsQuery q)
 
 /*
  * The operands of the AND chain at the root of q's RPN (ROADMAP I19a/I19b,
- * CHANGELOG 1.14.4): `a & (b | c) & !d` -> a, (b | c), !d.  Each is reported by
+ * CHANGELOG 1.15.0): `a & (b | c) & !d` -> a, (b | c), !d.  Each is reported by
  * the RPN index where its subtree ENDS (ops[]); start[n] is where node n's
  * subtree starts, so its items are start[n]..n, and pos[n] says the subtree has
  * no NOT.  Every match satisfies every operand.  Returns the number of
@@ -1144,7 +1144,7 @@ query_and_operands(FtsQuery q, int *ops, int *start, bool *pos)
 /*
  * Does a plain positive term that every match must hold (an operand of the
  * root AND chain) have no posting in this segment (ROADMAP I19b, CHANGELOG
- * 1.14.4)?  Then the segment contributes nothing, and bm25_eval_query skips
+ * 1.15.0)?  Then the segment contributes nothing, and bm25_eval_query skips
  * building the other operands' sets -- `zzzq & (apple | ban:*)` built both OR
  * operands in full before meeting the empty `zzzq`.  Only plain terms are
  * tested (a dictionary lookup each); a prefix/fuzzy/regex leaf has no cheap
@@ -1416,7 +1416,7 @@ bm25_fuzzy_terms(Relation index, const BM25SegMeta *seg,
 				bool ascii = query_ascii;
 				int j;
 
-				for (j = 0; ascii && j < de->termlen; j++)
+				for (j = 0; ascii && j < (int) de->termlen; j++)
 					if ((unsigned char) de->term[j] >= 0x80)
 						ascii = false;
 				if (ascii && k < FTS_LEV_MAXQ)
@@ -6271,7 +6271,7 @@ bool_gate_may_admit(BoolGate *g, const WandCursor *cursors, int ncur)
 
 /*
  * The driver of a pure-boolean query that is an AND at the root (ROADMAP I19a,
- * CHANGELOG 1.14.4): among the operands of the top-level AND chain, the
+ * CHANGELOG 1.15.0): among the operands of the top-level AND chain, the
  * positive one (no NOT inside) whose leaves' summed df is smallest.  Every
  * match satisfies that operand, and a positive AND/OR tree of plain terms is
  * satisfied only by a document holding at least one of its leaves, so the
@@ -6331,7 +6331,7 @@ bool_gate_driver(const BoolGate *g, const WandCursor *cursors, int ncur, bool *d
 }
 
 /*
- * fts_search_driven (ROADMAP I19a, CHANGELOG 1.14.4): exact top-k for a
+ * fts_search_driven (ROADMAP I19a, CHANGELOG 1.15.0): exact top-k for a
  * pure-boolean AND whose cheapest required operand (bool_gate_driver) is much
  * smaller than the rest -- `rare & (a | b)`.  The BoolGate walk visits every
  * posting of the OR group there: a gate-rejected pivot never raises the

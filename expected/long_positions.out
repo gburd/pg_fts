@@ -1,4 +1,4 @@
--- long_positions (1.14.4, ROADMAP I9): the configured analyzer kept token positions
+-- long_positions (1.15.0, ROADMAP I9): the configured analyzer kept token positions
 -- past 16,383.  parsetext() stores each ordinal in a 16-bit field capped at 16,383,
 -- so through 1.14.3 every token after the 16,383rd shared one position and a phrase
 -- there never matched (PR #12).  Now long text is parsed in chunks under the cap and

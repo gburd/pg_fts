@@ -200,7 +200,7 @@ ftsdoc_from_parsed(ParsedText *prs, const uint32 *wpos, uint32 doclen, uint8 lab
 /*
  * fts_analyze_with_config -- analyze text using a specific TS configuration.
  *
- * Positions (CHANGELOG 1.14.4, ROADMAP I9): parsetext() stores each token's
+ * Positions (CHANGELOG 1.15.0, ROADMAP I9): parsetext() stores each token's
  * ordinal in a 16-bit field capped at MAXENTRYPOS - 1 = 16,383, so through
  * 1.14.3 every token past the 16,383rd shared that position and a phrase
  * starting there could not match (the unconfigured analyzer was not capped).

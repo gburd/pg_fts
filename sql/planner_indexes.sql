@@ -20,7 +20,7 @@ SELECT fts_count('pi_fts', 'alpha'::ftsquery) AS in_partial_index;
 EXPLAIN (COSTS OFF) SELECT count(*) FROM pi WHERE d @@@ 'alpha'::ftsquery;
 SELECT count(*) AS alpha FROM pi WHERE d @@@ 'alpha'::ftsquery;
 -- a query whose other quals ARE the predicate is counted from the partial index
--- (1.14.4, count_partial; 1.14.3 planned a bitmap scan, 1.14.1-1.14.2 a scan
+-- (1.15.0, count_partial; 1.14.3 planned a bitmap scan, 1.14.1-1.14.2 a scan
 -- estimated at 1 row); the count is the same
 SET enable_seqscan = off;
 EXPLAIN (COSTS OFF) SELECT count(*) FROM pi WHERE d @@@ 'alpha'::ftsquery AND id <= 100;

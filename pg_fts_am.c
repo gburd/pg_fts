@@ -2584,7 +2584,7 @@ typedef struct BM25DoclenDirCache
 	Size		used;			/* bytes of this chunk in use (appenders copy this much) */
 	int			budget_mb;		/* pg_fts.doclen_cache_mb it was built under */
 	int			ndictdirs;		/* I7: dictionary-index directories cached */
-	bool		complete;		/* every builder finished (1.14.4: attached early) */
+	bool		complete;		/* every builder finished (1.15.0: attached early) */
 	BM25DictDir dictdirs[BM25_MAX_SEGMENTS];
 	BM25DoclenDir segs[BM25_MAX_SEGMENTS];
 	/* packed regions follow in the SAME allocation: uint64 docid[ndocid] then
@@ -2743,8 +2743,8 @@ bm25_doclendir_cache(Relation index, const BM25MetaPageData *meta)
 	MemoryContextSwitchTo(old);
 	/*
 	 * Attach every chunk to rd_amcache the moment it exists (CHANGELOG
-	 * 1.14.4): the scan and the two builders below can raise (a read error,
-	 * CHECK_FOR_INTERRUPTS, palloc), and until 1.14.4 the chunk was attached
+	 * 1.15.0): the scan and the two builders below can raise (a read error,
+	 * CHECK_FOR_INTERRUPTS, palloc), and until 1.15.0 the chunk was attached
 	 * only at the end, so an ERROR here leaked it in CacheMemoryContext for
 	 * the backend's life.  `complete` stays false until the last builder
 	 * returns, so a chunk an ERROR leaves attached is never served: the next
@@ -3958,9 +3958,9 @@ bm25_meta_add_segment(Relation index, const BM25SegMeta *seg, BM25PendingClear *
 	else
 	{
 		/*
-		 * A pending flush (CHANGELOG 1.14.4): the segment's documents were
+		 * A pending flush (CHANGELOG 1.15.0): the segment's documents were
 		 * counted into the totals at insert time, so the totals stay; drop the
-		 * sealed pages from the list IN THE SAME record.  Until 1.14.4 this was
+		 * sealed pages from the list IN THE SAME record.  Until 1.15.0 this was
 		 * a second metapage update, and a scan that read the metapage in
 		 * between saw every flushed document both in the new segment and on
 		 * the pending list (a ranked scan returned it twice).

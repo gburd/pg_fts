@@ -1100,10 +1100,13 @@ SELECT count(*) FROM (
 
   <itemizedlist>
    <listitem><para>
-    The configured analyzer inherits PostgreSQL's 16,383-position cap. A phrase
-    after 17,000 filler words can fail on <literal>to_ftsdoc('simple', text)</literal>
-    but match on unconfigured <literal>to_ftsdoc(text)</literal>, which stores
-    wider positions. Existing values cannot recover positions already lost.
+    Before 1.15.0 the configured analyzer inherited PostgreSQL's 16,383-position
+    cap: every token after the 16,383rd shared one position, so a phrase there
+    did not match <literal>to_ftsdoc('simple', text)</literal>.  1.15.0 keeps
+    the true positions (long text is parsed in chunks, split at whitespace; a
+    thesaurus phrase straddling a chunk boundary is not matched across it).
+    Values computed by an earlier release keep the capped positions until they
+    are recomputed, or the expression index rebuilt.
    </para></listitem>
    <listitem>
     <para>

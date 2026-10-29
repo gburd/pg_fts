@@ -5,7 +5,7 @@
 # changes.  Through 1.14.3 the chunk was attached to rd_amcache only after the
 # last builder, so an ERROR in between (a cancel, a read error, out of memory)
 # leaked it for the backend's life, once per failed rebuild (since 1.5.8;
-# CHANGELOG 1.14.4).  1.14.4 attaches each chunk as soon as it exists.
+# CHANGELOG 1.15.0).  1.15.0 attaches each chunk as soon as it exists.
 #
 # Deterministic with a test-hooks build: pg_fts.test_cache_build_error raises an
 # ERROR between the builders.  One session forces 40 failed rebuilds (a merge
@@ -85,7 +85,7 @@ my ($nerr, $b0, $b1) = split / /, $l[-1];
 diag("rebuild errors=$nerr CacheMemoryContext used before=$b0 after=$b1");
 is($nerr, '40', 'all 40 rebuilds raised the hook ERROR');
 cmp_ok($l[-2], '==', 10, 'ranked query still answers after the failed rebuilds');
-# CacheMemoryContext used_bytes over the 40 failed rebuilds: see CHANGELOG 1.14.4 for
+# CacheMemoryContext used_bytes over the 40 failed rebuilds: see CHANGELOG 1.15.0 for
 # the measured growth on 1.14.3 (about one cache chunk per failed rebuild) and on the
 # fix.  64 kB is far above the fix's noise and far below the 1.14.3 growth.
 cmp_ok($b1 - $b0, '<', 64 * 1024, 'CacheMemoryContext did not grow per failed rebuild');

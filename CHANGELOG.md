@@ -4,6 +4,35 @@ All notable changes to pg_fts are documented here.
 
 ## Unreleased
 
+## 1.15.0 - RELEASE_DATE
+
+Two fixes for known issues (I20: a ranked scan could return a pending row twice during a
+flush; I8: a cache leak on an ERROR during a relcache rebuild), a CI gap (I10), and four
+changes to how queries run or what `to_ftsdoc` returns, which is why this is a minor
+release and not 1.14.4: a ranked AND is driven from its cheapest operand (I19a, Codeberg
+#6), the collect path skips an AND with an absent required term (I19b), `count(*)` can be
+answered from a partial index (I17a), and the configured analyzer keeps positions past
+16,383 (I9, PR #12).  **No on-disk format change; no REINDEX for the index format; no new
+or changed SQL objects** (`pg_fts--1.14.3--1.15.0.sql` is a no-op).  But see "Upgrade
+notice" for stored `ftsdoc` values of documents longer than 16,383 tokens.  Measured on
+PostgreSQL 17.10 and 18.6 (`bench/RESULTS_1144_2026-10-28.md`).
+
+### Upgrade notice: documents longer than 16,383 tokens
+
+`to_ftsdoc(config, text)` now stores the true position of every token (I9).  A value
+computed before the upgrade keeps the old positions, in which every token after the
+16,383rd has position 16,383, so a phrase or NEAR there still does not match it.
+Recompute a stored column for those rows and REINDEX an expression index over
+`to_ftsdoc(config, ...)` to gain them:
+
+    UPDATE t SET d = to_ftsdoc('english', body) WHERE ftsdoc_length(d) > 16383;
+    REINDEX INDEX CONCURRENTLY t_expr_fts;
+
+An expression index that is not rebuilt stays consistent with itself: it under-reports
+such phrases exactly as before, and the heap recheck (which re-evaluates the new
+function) never adds a row the index did not return.  Documents of up to 16,383 tokens
+are analyzed exactly as before.
+
 ### Fixed
 
 - **A ranked scan during a pending flush could return a pending row twice** (ROADMAP
@@ -80,6 +109,12 @@ All notable changes to pg_fts are documented here.
   recompute the column, or REINDEX, to gain them; until then such a phrase still does not
   match, as before.  A thesaurus phrase that straddles a chunk boundary is not matched
   across it.  New regression test `long_positions` (5 checks fail on 1.14.3).
+
+- **Three MSVC C4018 signed/unsigned warnings** (Codeberg #7, reported with the
+  build that confirmed the 1.14.3 MSVC link fix): a fuzzy distance and a dictionary term
+  length compared as `uint32` against `int`.  Both values are bounded (a fuzzy distance
+  is at most INT_MAX on input, a term at most 2,047 bytes), so the casts change no
+  result.
 
 ### Tests
 

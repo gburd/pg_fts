@@ -439,7 +439,7 @@ term_spans(FtsDoc doc, FtsQuery q, FtsQueryItem *it)
 				memcmp(candidate, term, it->termlen) == 0;
 		else if (it->flags & FTS_QF_FUZZY)
 			matches = varstr_levenshtein_less_equal(term, it->termlen,
-				candidate, e->len, 1, 1, 1, it->distance, true) <= it->distance;
+				candidate, e->len, 1, 1, 1, it->distance, true) <= (int) it->distance;
 		else
 			matches = RE_compile_and_execute(pattern, (char *) candidate,
 				e->len, REG_ADVANCED, C_COLLATION_OID, 0, NULL);

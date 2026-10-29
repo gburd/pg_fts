@@ -241,10 +241,10 @@ Use `WITH (positions=on)` for compound proximity without heap rechecks, also
 when combined with AND and NOT. Weighted/expanded terms still use exact
 rechecks, and so does a document whose positions were not stored or are
 oversized (that document alone).
-The configured analyzer inherits PostgreSQL's position cap of 16,383; matches
-beyond it can be lost. The unconfigured `to_ftsdoc(text)` analyzer stores wider
-positions (ROADMAP I9); existing document vectors cannot recover spacing
-already lost on input.
+Since 1.15.0 the configured analyzer (`to_ftsdoc(config, text)`) keeps positions
+past PostgreSQL's 16,383-position cap, as the unconfigured `to_ftsdoc(text)` always
+did.  A stored `ftsdoc` column or expression index built by an earlier release keeps
+the capped positions until it is recomputed or rebuilt (see Upgrading).
 
 Example
 -------
@@ -547,6 +547,14 @@ Install the new build, then `ALTER EXTENSION pg_fts UPDATE`; no release since
 to keep it online): it can return rows that do not match and miss rows that do, and
 the upgrade does not repair either.  Rebuild it whatever a check says; CHANGELOG
 1.14.2 has the cause and the SQL checks (run them with bitmap scans off).
+
+From 1.15.0, `to_ftsdoc(config, text)` stores the true position of every token of a
+document longer than 16,383 tokens (earlier releases gave every later token position
+16,383).  Values computed before the upgrade keep the old positions, so a phrase or
+NEAR past that point still does not match them: recompute a stored column
+(`UPDATE t SET d = to_ftsdoc('english', body) WHERE ftsdoc_length(d) > 16383`) and
+`REINDEX` an expression index over `to_ftsdoc(config, ...)` to gain them.  Nothing
+else changes for shorter documents.
 
 Backward compatibility
 -----------------------
