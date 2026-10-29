@@ -1,0 +1,23 @@
+== PG17 postgres (PostgreSQL) 17.10: primary wal_consistency_checking=generic, standby in recovery=t
+installcheck on primary rc=0 34 ok 0 not ok
+churn rc=0
+standby replayed to 0/D607ACB8: t (after 2s); standby up: yes
+standby log: FATAL/PANIC 0, 'inconsistent page' 0
+  standby 'rare' heap=24000 idx=24000 expr=24000
+  standby 'alpha & w7' heap=1501 idx=1501 expr=1501
+  standby '"alpha beta"' heap=44779 idx=44779 expr=44779
+  standby 'fresh' heap=24000 idx=24000 expr=24000
+WAL generic records: 
+PG17 WALCC OK
+== PG18 postgres (PostgreSQL) 18.6: primary wal_consistency_checking=generic, standby in recovery=t
+installcheck on primary rc=0 34 ok 0 not ok
+churn rc=0
+standby replayed to 0/D64AA320: t (after 1s); standby up: yes
+standby log: FATAL/PANIC 0, 'inconsistent page' 0
+  standby 'rare' heap=24000 idx=24000 expr=24000
+  standby 'alpha & w7' heap=1501 idx=1501 expr=1501
+  standby '"alpha beta"' heap=44779 idx=44779 expr=44779
+  standby 'fresh' heap=24000 idx=24000 expr=24000
+WAL generic records: 
+PG18 WALCC OK
+WALCC_DONE

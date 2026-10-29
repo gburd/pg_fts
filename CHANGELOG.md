@@ -4,7 +4,7 @@ All notable changes to pg_fts are documented here.
 
 ## Unreleased
 
-## 1.15.0 - RELEASE_DATE
+## 1.15.0 - 2026-10-29
 
 Two fixes for known issues (I20: a ranked scan could return a pending row twice during a
 flush; I8: a cache leak on an ERROR during a relcache rebuild), a CI gap (I10), and four
@@ -15,7 +15,8 @@ answered from a partial index (I17a), and the configured analyzer keeps position
 16,383 (I9, PR #12).  **No on-disk format change; no REINDEX for the index format; no new
 or changed SQL objects** (`pg_fts--1.14.3--1.15.0.sql` is a no-op).  But see "Upgrade
 notice" for stored `ftsdoc` values of documents longer than 16,383 tokens.  Measured on
-PostgreSQL 17.10 and 18.6 (`bench/RESULTS_1144_2026-10-28.md`).
+PostgreSQL 17.10 and 18.6 (`bench/RESULTS_1144_2026-10-28.md`); qualified on x86_64 and
+aarch64, with I3 run on Neon (`bench/RESULTS_150_2026-10-29.md`).
 
 ### Upgrade notice: documents longer than 16,383 tokens
 

@@ -1,0 +1,27 @@
+LSN1=0/8911FD0
+ ENDPOINT  ADDRESS          TIMELINE                          BRANCH NAME  LSN  STATUS              
+ atbuild   127.0.0.1:55433  2edce02164b75988a34f3d03e68459d8  atbuild      ---  running, no pidfile 
+ main      127.0.0.1:55432  c1fe7906269c1ae0cf0a5aed1788919e  main         ---  running             
+atbuild
+main
+Created timeline 'aae9325b3f15f1b4d1e940dcef0bac0b' at Lsn 0/8911FD0 for tenant: 802304af049eef67208238f380e4d5b8. Ancestor timeline: 'main'
+Starting existing endpoint atb2...
+Starting postgres node at 'postgresql://cloud_admin@127.0.0.1:56500/postgres'
+ ENDPOINT  ADDRESS          TIMELINE                          BRANCH NAME  LSN  STATUS              
+ atb2      127.0.0.1:56500  aae9325b3f15f1b4d1e940dcef0bac0b  atbuild2     ---  running             
+ atbuild   127.0.0.1:55433  2edce02164b75988a34f3d03e68459d8  atbuild      ---  running, no pidfile 
+ main      127.0.0.1:55432  c1fe7906269c1ae0cf0a5aed1788919e  main         ---  running             
+branch rare (heap) = 4000 (expect 4000: the count at LSN1)
+  branch 'rare' heap=4000 idx=4000 expr=4000
+  branch 'alpha & w7' heap=17288 idx=17288 expr=17288
+  branch 'w3 | w5' heap=34259 idx=34259 expr=34259
+  branch '"alpha beta"' heap=28571 idx=28571 expr=28571
+  branch 'fresh' heap=0 idx=0 expr=0
+  branch 'alpha & !w9' heap=182713 idx=182713 expr=182713
+  branch ranked top-20 == oracle: yes
+  branch segments 1 ndocs 200000
+  branch write+merge: branchonly=500 (expect 500)
+  main sees the branch's rows: 0 (expect 0)
+pageserver walredo errors: 0
+I3 NEON BRANCH RESULT: ok=1
+NEONBRANCH_DONE

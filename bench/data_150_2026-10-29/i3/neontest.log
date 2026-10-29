@@ -1,0 +1,46 @@
+pg_fts tree 5a01219 default_version = '1.15.0' against postgres (PostgreSQL) 17.5 (1e01fcea2a6b38180021aa83e0051d95286d9096); so=a928656a
+tenant 802304af049eef67208238f380e4d5b8 successfully created on the pageserver
+Created an initial timeline 'c1fe7906269c1ae0cf0a5aed1788919e' for tenant: 802304af049eef67208238f380e4d5b8
+Setting tenant 802304af049eef67208238f380e4d5b8 as a default one
+compute: PostgreSQL 17.5 (1e01fcea2a6b38180021aa83e0051d95286d9096) o; shared_buffers 16MB; file cache 0
+CHECK built: OK 'rare'=4000 'alpha & w7'=17288 'w3 | w5'=34259 '"alpha beta"'=28571 'fresh'=0 'alpha & !w9'=182713; segments 1; index blocks 268
+CHECK deleted_vacuumed: OK 'rare'=3637 'alpha & w7'=15716 'w3 | w5'=31145 '"alpha beta"'=25974 'fresh'=0 'alpha & !w9'=166104; segments 1; index blocks 276
+CHECK pending_flushed: OK 'rare'=33637 'alpha & w7'=16026 'w3 | w5'=31765 '"alpha beta"'=55974 'fresh'=30000 'alpha & !w9'=195794; segments 7; index blocks 1278
+CHECK merged: OK 'rare'=33637 'alpha & w7'=16026 'w3 | w5'=31765 '"alpha beta"'=55974 'fresh'=30000 'alpha & !w9'=195794; segments 1; index blocks 1868
+CHECK fts_vacuumed: OK 'rare'=24000 'alpha & w7'=12821 'w3 | w5'=25411 '"alpha beta"'=44779 'fresh'=24000 'alpha & !w9'=156635; segments 1; index blocks 233
+== restart the compute: every page now comes from the pageserver
+CHECK after_compute_restart: OK 'rare'=24000 'alpha & w7'=12821 'w3 | w5'=25411 '"alpha beta"'=44779 'fresh'=24000 'alpha & !w9'=156635; segments 1; index blocks 233
+== branch at LSN 0/8911FD0 (after build, before deletes; rare count then 4000)
+command failed: attempting to create a duplicate primary endpoint on tenant 802304af049eef67208238f380e4d5b8, timeline 2edce02164b75988a34f3d03e68459d8: endpoint "atbuild" exists already. please don't do this, it is not supported.
+psql: error: connection to server at "127.0.0.1", port 55433 failed: received invalid response to SSL negotiation: H
+branch rare (heap) =  (expect 4000)
+psql: error: connection to server at "127.0.0.1", port 55433 failed: received invalid response to SSL negotiation: H
+psql: error: connection to server at "127.0.0.1", port 55433 failed: received invalid response to SSL negotiation: H
+psql: error: connection to server at "127.0.0.1", port 55433 failed: received invalid response to SSL negotiation: H
+psql: error: connection to server at "127.0.0.1", port 55433 failed: received invalid response to SSL negotiation: H
+psql: error: connection to server at "127.0.0.1", port 55433 failed: received invalid response to SSL negotiation: H
+psql: error: connection to server at "127.0.0.1", port 55433 failed: received invalid response to SSL negotiation: H
+psql: error: connection to server at "127.0.0.1", port 55433 failed: received invalid response to SSL negotiation: H
+psql: error: connection to server at "127.0.0.1", port 55433 failed: received invalid response to SSL negotiation: H
+psql: error: connection to server at "127.0.0.1", port 55433 failed: received invalid response to SSL negotiation: H
+psql: error: connection to server at "127.0.0.1", port 55433 failed: received invalid response to SSL negotiation: H
+psql: error: connection to server at "127.0.0.1", port 55433 failed: received invalid response to SSL negotiation: H
+psql: error: connection to server at "127.0.0.1", port 55433 failed: received invalid response to SSL negotiation: H
+psql: error: connection to server at "127.0.0.1", port 55433 failed: received invalid response to SSL negotiation: H
+psql: error: connection to server at "127.0.0.1", port 55433 failed: received invalid response to SSL negotiation: H
+psql: error: connection to server at "127.0.0.1", port 55433 failed: received invalid response to SSL negotiation: H
+psql: error: connection to server at "127.0.0.1", port 55433 failed: received invalid response to SSL negotiation: H
+psql: error: connection to server at "127.0.0.1", port 55433 failed: received invalid response to SSL negotiation: H
+psql: error: connection to server at "127.0.0.1", port 55433 failed: received invalid response to SSL negotiation: H
+psql: error: connection to server at "127.0.0.1", port 55433 failed: received invalid response to SSL negotiation: H
+/tmp/neontest.sh: line 42: [: : integer expression expected
+psql: error: connection to server at "127.0.0.1", port 55433 failed: received invalid response to SSL negotiation: H
+psql: error: connection to server at "127.0.0.1", port 55433 failed: received invalid response to SSL negotiation: H
+psql: error: connection to server at "127.0.0.1", port 55433 failed: received invalid response to SSL negotiation: H
+psql: error: connection to server at "127.0.0.1", port 55433 failed: received invalid response to SSL negotiation: H
+CHECK branch_at_build_lsn: FAIL 'rare'= 'alpha & w7'= 'w3 | w5'= '"alpha beta"'= 'fresh'= 'alpha & !w9'= ZERO RANKED_MISMATCH; segments ; index blocks 
+psql: error: connection to server at "127.0.0.1", port 55433 failed: received invalid response to SSL negotiation: H
+branch sees main's later insert:  rows (expect 0)
+pageserver log errors: 2 (walredo: 0); compute log errors: 39
+I3 NEON RESULT: ok=0
+NEONTEST_DONE

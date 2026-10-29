@@ -1,0 +1,37 @@
+== PG17 v1143 so=4567397b 84|b71f6eeff0fd46dcd0253af5fb8b198e
+  [build & (apple | banana | w1 | w2 | w3 | w4 | w5 | w6 | w7 | w8)] top10=<none> walk_equal=yes heap_matches=0
+    run 1 median of 21 (after 4 warm): 15.282 ms
+    run 2 median of 21 (after 4 warm): 15.363 ms
+    run 3 median of 21 (after 4 warm): 15.353 ms
+  [rare & (apple | banana | w1 | w2 | w3 | w4 | w5 | w6 | w7 | w8)] top10=123456 walk_equal=yes heap_matches=1
+    run 1 median of 21 (after 4 warm): 5.278 ms
+    run 2 median of 21 (after 4 warm): 5.276 ms
+    run 3 median of 21 (after 4 warm): 5.303 ms
+== PG17 r150 so=73e91440 84|b71f6eeff0fd46dcd0253af5fb8b198e
+  [build & (apple | banana | w1 | w2 | w3 | w4 | w5 | w6 | w7 | w8)] top10=<none> walk_equal=yes heap_matches=0
+    run 1 median of 21 (after 4 warm): 0.748 ms
+    run 2 median of 21 (after 4 warm): 0.750 ms
+    run 3 median of 21 (after 4 warm): 0.750 ms
+  [rare & (apple | banana | w1 | w2 | w3 | w4 | w5 | w6 | w7 | w8)] top10=123456 walk_equal=yes heap_matches=1
+    run 1 median of 21 (after 4 warm): 0.285 ms
+    run 2 median of 21 (after 4 warm): 0.287 ms
+    run 3 median of 21 (after 4 warm): 0.286 ms
+== PG18 v1143 so=c063a505 84|b71f6eeff0fd46dcd0253af5fb8b198e
+  [build & (apple | banana | w1 | w2 | w3 | w4 | w5 | w6 | w7 | w8)] top10=<none> walk_equal=yes heap_matches=0
+    run 1 median of 21 (after 4 warm): 15.321 ms
+    run 2 median of 21 (after 4 warm): 15.338 ms
+    run 3 median of 21 (after 4 warm): 15.285 ms
+  [rare & (apple | banana | w1 | w2 | w3 | w4 | w5 | w6 | w7 | w8)] top10=123456 walk_equal=yes heap_matches=1
+    run 1 median of 21 (after 4 warm): 5.281 ms
+    run 2 median of 21 (after 4 warm): 5.289 ms
+    run 3 median of 21 (after 4 warm): 5.276 ms
+== PG18 r150 so=97252cb3 84|b71f6eeff0fd46dcd0253af5fb8b198e
+  [build & (apple | banana | w1 | w2 | w3 | w4 | w5 | w6 | w7 | w8)] top10=<none> walk_equal=yes heap_matches=0
+    run 1 median of 21 (after 4 warm): 0.749 ms
+    run 2 median of 21 (after 4 warm): 0.754 ms
+    run 3 median of 21 (after 4 warm): 0.750 ms
+  [rare & (apple | banana | w1 | w2 | w3 | w4 | w5 | w6 | w7 | w8)] top10=123456 walk_equal=yes heap_matches=1
+    run 1 median of 21 (after 4 warm): 0.285 ms
+    run 2 median of 21 (after 4 warm): 0.286 ms
+    run 3 median of 21 (after 4 warm): 0.286 ms
+B10_DONE

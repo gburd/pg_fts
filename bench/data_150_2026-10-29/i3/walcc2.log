@@ -1,0 +1,15 @@
+churn WAL 0/307FEB0 .. 0/B8C0738
+Type                                           N      (%)          Record size      (%)             FPI size      (%)        Combined size      (%)
+Generic/Generic                            10866 (  3.75)              1786418 (  6.91)            116072904 ( 99.98)            117859322 ( 83.03)
+Total                                     289524                      25855241 [18.21%]            116094320 [81.79%]            141949561 [100%]
+Generic records in the churn: 10866; block images kept only for the consistency check ('for WAL verification'): 20536
+standby replayed: t; 'inconsistent page' in standby log: 0
+metapage pd_lower=7240 pd_upper=8184; flipped one bit of byte 3632 (an unused segs[] slot)
+write after corruption rc=0
+records of that write touching block 0 of t_d:
+	blkref #0: rel 1663/5/16444 fork main blk 301 (FPW); hole: offset: 1316, length: 1692
+rmgr: Generic     len (rec/tot):     62/  7398, tx:        746, lsn: 0/0C001B78, prev 0/0C0001D8, desc: Generic 
+	blkref #0: rel 1663/5/16446 fork main blk 42 (FPW); hole: offset: 80, length: 8104
+	blkref #1: rel 1663/5/16446 fork main blk 0 (FPW); hole: offset: 7240, length: 944
+NEGATIVE CONTROL: standby 'inconsistent page' lines: 0; standby alive: yes
+WALCC2_DONE

@@ -1,0 +1,30 @@
+zip sha256 f429f8698e693b78 (expect f429f8698e693b78)
+== PG17 v1143 so=e9a87a95 default_version = '1.14.3'
+PG17 v1143 run 1: readers_done=8 dup_top10=0 dup_top1000=0 errors=0 rows=26000 segments=8
+PG17 v1143 run 2: readers_done=8 dup_top10=0 dup_top1000=0 errors=0 rows=26000 segments=8
+PG17 v1143 run 3: readers_done=8 dup_top10=0 dup_top1000=0 errors=0 rows=26000 segments=7
+PG17 v1143 run 4: readers_done=8 dup_top10=0 dup_top1000=0 errors=0 rows=26000 segments=8
+PG17 v1143 run 5: readers_done=8 dup_top10=0 dup_top1000=0 errors=0 rows=26000 segments=8
+PG17 v1143 segfaults: 0
+== PG17 r150 so=89acfb47 default_version = '1.15.0'
+PG17 r150 run 1: readers_done=8 dup_top10=0 dup_top1000=0 errors=0 rows=26000 segments=8
+PG17 r150 run 2: readers_done=8 dup_top10=0 dup_top1000=0 errors=0 rows=26000 segments=7
+PG17 r150 run 3: readers_done=8 dup_top10=0 dup_top1000=0 errors=0 rows=26000 segments=8
+PG17 r150 run 4: readers_done=8 dup_top10=0 dup_top1000=0 errors=0 rows=26000 segments=8
+PG17 r150 run 5: readers_done=8 dup_top10=0 dup_top1000=0 errors=0 rows=26000 segments=8
+PG17 r150 segfaults: 0
+== PG18 v1143 so=3a271ca6 default_version = '1.14.3'
+PG18 v1143 run 1: readers_done=8 dup_top10=0 dup_top1000=0 errors=0 rows=26000 segments=8
+PG18 v1143 run 2: readers_done=8 dup_top10=0 dup_top1000=0 errors=0 rows=26000 segments=6
+PG18 v1143 run 3: readers_done=8 dup_top10=0 dup_top1000=0 errors=0 rows=26000 segments=6
+PG18 v1143 run 4: readers_done=8 dup_top10=0 dup_top1000=0 errors=0 rows=26000 segments=8
+PG18 v1143 run 5: readers_done=8 dup_top10=0 dup_top1000=0 errors=0 rows=26000 segments=8
+PG18 v1143 segfaults: 0
+== PG18 r150 so=e1edfec5 default_version = '1.15.0'
+PG18 r150 run 1: readers_done=8 dup_top10=0 dup_top1000=0 errors=0 rows=26000 segments=8
+PG18 r150 run 2: readers_done=8 dup_top10=0 dup_top1000=0 errors=0 rows=26000 segments=8
+PG18 r150 run 3: readers_done=8 dup_top10=0 dup_top1000=0 errors=0 rows=26000 segments=8
+PG18 r150 run 4: readers_done=8 dup_top10=0 dup_top1000=0 errors=0 rows=26000 segments=8
+PG18 r150 run 5: readers_done=8 dup_top10=0 dup_top1000=0 errors=0 rows=26000 segments=8
+PG18 r150 segfaults: 0
+DUPRATE150_DONE
