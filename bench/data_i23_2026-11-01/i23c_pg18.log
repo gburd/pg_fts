@@ -1,0 +1,36 @@
+  [so=v1151 bf8c821a]
+  CORR v1151 [(zzzq | zzzx) & (t10 | t2:*)] top10=de46e015 n=1 ids=<none>
+  CORR v1151 [zzzq & (t10 | t2:*)] top10=de46e015 n=1 ids=<none>
+  CORR v1151 [(zzzq | build) & (t10 | t2:*)] top10=d167f610 n=10 ids=84744,608548,138665,231101,315834,269616,331240,385161,45448
+  [so=head 00070fff]
+  CORR head [(zzzq | zzzx) & (t10 | t2:*)] top10=de46e015 n=1 ids=<none>
+  CORR head [zzzq & (t10 | t2:*)] top10=de46e015 n=1 ids=<none>
+  CORR head [(zzzq | build) & (t10 | t2:*)] top10=d167f610 n=10 ids=84744,608548,138665,231101,315834,269616,331240,385161,45448
+  heap RD=0 PR=84
+T round=1 so=v1151 RD=612.522 T1=0.070 PR=622.019
+T round=1 so=head RD=0.077 T1=0.071 PR=621.544
+T round=1 so=head2 RD=0.076 T1=0.070 PR=621.679
+T round=1 so=head2 RD=0.075 T1=0.070 PR=620.355
+T round=1 so=head RD=0.076 T1=0.070 PR=620.879
+T round=1 so=v1151 RD=617.606 T1=0.070 PR=622.069
+T round=2 so=head2 RD=0.076 T1=0.071 PR=621.837
+T round=2 so=head RD=0.075 T1=0.070 PR=621.362
+T round=2 so=v1151 RD=616.866 T1=0.070 PR=622.170
+T round=2 so=v1151 RD=619.054 T1=0.070 PR=621.331
+T round=2 so=head RD=0.076 T1=0.070 PR=619.886
+T round=2 so=head2 RD=0.075 T1=0.071 PR=621.167
+T round=3 so=v1151 RD=619.665 T1=0.070 PR=620.918
+T round=3 so=head RD=0.075 T1=0.071 PR=620.567
+T round=3 so=head2 RD=0.075 T1=0.070 PR=621.505
+T round=3 so=head2 RD=0.076 T1=0.070 PR=620.490
+T round=3 so=head RD=0.075 T1=0.070 PR=622.193
+T round=3 so=v1151 RD=618.933 T1=0.071 PR=620.232
+T round=4 so=head2 RD=0.076 T1=0.070 PR=620.576
+T round=4 so=head RD=0.077 T1=0.072 PR=622.011
+T round=4 so=v1151 RD=619.448 T1=0.071 PR=621.039
+T round=4 so=v1151 RD=612.396 T1=0.070 PR=621.222
+T round=4 so=head RD=0.076 T1=0.070 PR=620.983
+T round=4 so=head2 RD=0.075 T1=0.070 PR=621.504
+BUFS v1151 RD=shared hit=2217 read=1478 T1=shared hit=17 PR=shared hit=3719 read=98
+BUFS head RD=shared hit=21 read=1 T1=shared hit=17 PR=shared hit=2246 read=1575
+I23C_DONE

@@ -1,0 +1,86 @@
+Sun Nov  1 21:50:42 UTC 2026
+6.12.113+deb13-cloud-amd64
+CPU(s):                                  128
+Model name:                              Intel(R) Xeon(R) Platinum 8375C CPU @ 2.90GHz
+Thread(s) per core:                      2
+CPU(s) scaling MHz:                      32%
+NUMA node(s):                            2
+always madvise [never]
+built v1143 md5=52c3aa2f GITREV=10a03ac
+built v1151 md5=59628606 GITREV=551b13a
+built head md5=2ea05724 GITREV=1b3ca35
+built head2 md5=a1e64bbd GITREV=1b3ca35
+initdb: warning: enabling "trust" authentication for local connections
+initdb: hint: You can change this by editing pg_hba.conf or using the option -A, or --auth-local and --auth-host, the next time you run initdb.
+  [so=head 2ea05724]
+
+corpus build_rows=84 md5=b71f6eeff0fd
+  [so=v1143 52c3aa2f]
+  CORR v1143 [build | apple | banana | w1 | w2 | w3 | w4 | w5 | w6 | w7 | w8] top10=e06f663c n=10 walk_equal=yes
+  CORR v1143 [(zzzq | zzzx) & (apple | ban:*)] top10=de46e015 n=1 walk_equal=yes
+  CORR v1143 [zzzq & (apple | ban:*)] top10=de46e015 n=1 walk_equal=yes
+  CORR v1143 [build & (apple | banana | w1 | w2 | w3 | w4 | w5 | w6 | w7 | w8)] top10=de46e015 n=1 walk_equal=yes
+  CORR v1143 heap OR=179097 RD=0
+  [so=v1151 59628606]
+  CORR v1151 [build | apple | banana | w1 | w2 | w3 | w4 | w5 | w6 | w7 | w8] top10=e06f663c n=10 walk_equal=yes
+  CORR v1151 [(zzzq | zzzx) & (apple | ban:*)] top10=de46e015 n=1 walk_equal=yes
+  CORR v1151 [zzzq & (apple | ban:*)] top10=de46e015 n=1 walk_equal=yes
+  CORR v1151 [build & (apple | banana | w1 | w2 | w3 | w4 | w5 | w6 | w7 | w8)] top10=de46e015 n=1 walk_equal=yes
+  CORR v1151 heap OR=179097 RD=0
+  [so=head 2ea05724]
+  CORR head [build | apple | banana | w1 | w2 | w3 | w4 | w5 | w6 | w7 | w8] top10=e06f663c n=10 walk_equal=yes
+  CORR head [(zzzq | zzzx) & (apple | ban:*)] top10=de46e015 n=1 walk_equal=yes
+  CORR head [zzzq & (apple | ban:*)] top10=de46e015 n=1 walk_equal=yes
+  CORR head [build & (apple | banana | w1 | w2 | w3 | w4 | w5 | w6 | w7 | w8)] top10=de46e015 n=1 walk_equal=yes
+  CORR head heap OR=179097 RD=0
+T round=1 so=v1143 OR=1.187 RD=3.773 T1=3.783 AND=19.026
+T round=1 so=v1151 OR=1.192 RD=3.785 T1=0.072 AND=0.717
+T round=1 so=head OR=1.210 RD=0.079 T1=0.071 AND=0.712
+T round=1 so=head2 OR=1.196 RD=0.079 T1=0.072 AND=0.715
+T round=1 so=head2 OR=1.199 RD=0.078 T1=0.071 AND=0.717
+T round=1 so=head OR=1.193 RD=0.078 T1=0.071 AND=0.716
+T round=1 so=v1151 OR=1.188 RD=3.795 T1=0.071 AND=0.711
+T round=1 so=v1143 OR=1.191 RD=3.790 T1=3.769 AND=18.893
+T round=2 so=head2 OR=1.190 RD=0.080 T1=0.072 AND=0.718
+T round=2 so=head OR=1.195 RD=0.079 T1=0.072 AND=0.709
+T round=2 so=v1151 OR=1.185 RD=3.783 T1=0.071 AND=0.717
+T round=2 so=v1143 OR=1.190 RD=3.795 T1=3.784 AND=18.967
+T round=2 so=v1143 OR=1.182 RD=3.777 T1=3.785 AND=18.963
+T round=2 so=v1151 OR=1.192 RD=3.786 T1=0.073 AND=0.710
+T round=2 so=head OR=1.193 RD=0.078 T1=0.072 AND=0.709
+T round=2 so=head2 OR=1.206 RD=0.078 T1=0.072 AND=0.739
+T round=3 so=v1143 OR=1.182 RD=3.773 T1=3.790 AND=18.963
+T round=3 so=v1151 OR=1.201 RD=3.795 T1=0.071 AND=0.715
+T round=3 so=head OR=1.200 RD=0.078 T1=0.071 AND=0.799
+T round=3 so=head2 OR=1.197 RD=0.079 T1=0.072 AND=0.713
+T round=3 so=head2 OR=1.195 RD=0.078 T1=0.072 AND=0.715
+T round=3 so=head OR=1.202 RD=0.078 T1=0.072 AND=0.710
+T round=3 so=v1151 OR=1.195 RD=3.787 T1=0.072 AND=0.713
+T round=3 so=v1143 OR=1.190 RD=3.785 T1=3.773 AND=18.940
+T round=4 so=head2 OR=1.201 RD=0.079 T1=0.071 AND=0.704
+T round=4 so=head OR=1.192 RD=0.079 T1=0.072 AND=0.707
+T round=4 so=v1151 OR=1.195 RD=3.789 T1=0.072 AND=0.714
+T round=4 so=v1143 OR=1.178 RD=3.840 T1=3.786 AND=19.025
+T round=4 so=v1143 OR=1.190 RD=3.768 T1=3.789 AND=19.064
+T round=4 so=v1151 OR=1.190 RD=3.805 T1=0.072 AND=0.713
+T round=4 so=head OR=1.196 RD=0.078 T1=0.071 AND=0.737
+T round=4 so=head2 OR=1.195 RD=0.078 T1=0.071 AND=0.712
+T round=5 so=v1143 OR=1.189 RD=3.783 T1=3.778 AND=18.839
+T round=5 so=v1151 OR=1.189 RD=3.795 T1=0.071 AND=0.713
+T round=5 so=head OR=1.192 RD=0.078 T1=0.071 AND=0.715
+T round=5 so=head2 OR=1.199 RD=0.080 T1=0.072 AND=0.714
+T round=5 so=head2 OR=1.191 RD=0.078 T1=0.071 AND=0.714
+T round=5 so=head OR=1.193 RD=0.079 T1=0.071 AND=0.715
+T round=5 so=v1151 OR=1.190 RD=3.798 T1=0.071 AND=0.714
+T round=5 so=v1143 OR=1.189 RD=3.790 T1=3.783 AND=18.893
+T round=6 so=head2 OR=1.198 RD=0.078 T1=0.072 AND=0.717
+T round=6 so=head OR=1.195 RD=0.078 T1=0.071 AND=0.714
+T round=6 so=v1151 OR=1.202 RD=3.793 T1=0.071 AND=0.720
+T round=6 so=v1143 OR=1.184 RD=3.782 T1=3.778 AND=18.877
+T round=6 so=v1143 OR=1.184 RD=3.771 T1=3.775 AND=19.022
+T round=6 so=v1151 OR=1.189 RD=3.808 T1=0.072 AND=0.720
+T round=6 so=head OR=1.208 RD=0.078 T1=0.072 AND=0.711
+T round=6 so=head2 OR=1.201 RD=0.078 T1=0.071 AND=0.712
+BUFS v1143 OR=shared hit=1779 RD=shared hit=64 T1=shared hit=59
+BUFS head OR=shared hit=1779 RD=shared hit=22 T1=shared hit=17
+I23_DONE

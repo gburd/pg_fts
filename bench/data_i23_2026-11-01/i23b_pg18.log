@@ -1,0 +1,64 @@
+built PG18 v1143 md5=8ff3eb7d GITREV=10a03ac
+built PG18 v1151 md5=bf8c821a GITREV=551b13a
+built PG18 head md5=00070fff GITREV=1b3ca35
+built PG18 head2 md5=95bb6703 GITREV=1b3ca35
+  [so=head 00070fff]
+
+corpus rows=640000 build=84 md5=bcbdc6469dcd
+  CORR v1143 [build | t10 | t11 | t12 | t13 | t14 | t15 | t16 | t17 | t18 | t19] top10=dc0c9da0 n=10 walk_equal=yes
+  CORR v1143 [build | t40 | t42 | t44 | t46 | t48 | t50 | t52 | t54 | t56 | t58] top10=50aabd2c n=10 walk_equal=yes
+  CORR v1151 [build | t10 | t11 | t12 | t13 | t14 | t15 | t16 | t17 | t18 | t19] top10=dc0c9da0 n=10 walk_equal=yes
+  CORR v1151 [build | t40 | t42 | t44 | t46 | t48 | t50 | t52 | t54 | t56 | t58] top10=50aabd2c n=10 walk_equal=yes
+  CORR head [build | t10 | t11 | t12 | t13 | t14 | t15 | t16 | t17 | t18 | t19] top10=dc0c9da0 n=10 walk_equal=yes
+  CORR head [build | t40 | t42 | t44 | t46 | t48 | t50 | t52 | t54 | t56 | t58] top10=50aabd2c n=10 walk_equal=yes
+  heap A=636051 B=491444
+T round=1 so=v1143 A=97.911 B=41.188
+T round=1 so=v1151 A=97.377 B=41.162
+T round=1 so=head A=98.036 B=41.472
+T round=1 so=head2 A=97.545 B=41.464
+T round=1 so=head2 A=98.428 B=41.468
+T round=1 so=head A=97.633 B=41.524
+T round=1 so=v1151 A=98.257 B=41.223
+T round=1 so=v1143 A=98.470 B=41.233
+T round=2 so=head2 A=97.712 B=41.419
+T round=2 so=head A=97.765 B=41.478
+T round=2 so=v1151 A=97.611 B=41.384
+T round=2 so=v1143 A=97.889 B=41.111
+T round=2 so=v1143 A=98.202 B=41.032
+T round=2 so=v1151 A=97.253 B=41.354
+T round=2 so=head A=97.705 B=41.482
+T round=2 so=head2 A=98.762 B=41.596
+T round=3 so=v1143 A=97.839 B=41.102
+T round=3 so=v1151 A=97.929 B=41.231
+T round=3 so=head A=98.253 B=41.532
+T round=3 so=head2 A=97.863 B=41.463
+T round=3 so=head2 A=97.670 B=41.565
+T round=3 so=head A=97.921 B=41.528
+T round=3 so=v1151 A=97.462 B=41.218
+T round=3 so=v1143 A=97.523 B=41.376
+T round=4 so=head2 A=97.970 B=41.485
+T round=4 so=head A=97.611 B=41.408
+T round=4 so=v1151 A=97.297 B=41.160
+T round=4 so=v1143 A=98.642 B=41.016
+T round=4 so=v1143 A=97.901 B=40.960
+T round=4 so=v1151 A=97.312 B=41.194
+T round=4 so=head A=97.758 B=41.453
+T round=4 so=head2 A=97.716 B=41.446
+T round=5 so=v1143 A=97.813 B=41.170
+T round=5 so=v1151 A=98.671 B=41.149
+T round=5 so=head A=98.451 B=41.342
+T round=5 so=head2 A=98.105 B=41.509
+T round=5 so=head2 A=97.560 B=41.480
+T round=5 so=head A=97.761 B=41.525
+T round=5 so=v1151 A=98.451 B=41.613
+T round=5 so=v1143 A=98.005 B=41.189
+T round=6 so=head2 A=97.712 B=42.446
+T round=6 so=head A=97.782 B=41.504
+T round=6 so=v1151 A=97.566 B=41.255
+T round=6 so=v1143 A=98.925 B=41.022
+T round=6 so=v1143 A=98.327 B=41.114
+T round=6 so=v1151 A=97.372 B=41.296
+T round=6 so=head A=98.982 B=41.437
+T round=6 so=head2 A=98.827 B=41.437
+BUFS head A shared hit=32615 read=534
+I23B_DONE

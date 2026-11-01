@@ -13,21 +13,27 @@ All notable changes to pg_fts are documented here.
   the other operands.  The reporter measured 17.7 ms for that against 0.35 ms for
   `zzzq & kur:*` on 1.15.1.  Now an operand made only of plain terms joined by OR is
   empty in a segment when every term is absent; the lookups stop at the first present
-  term.  Unmeasured here; the new `ranked_driven_and` checks compare index buffers with
-  the single-term form and check results against the seq-scan oracle with a reading
-  present only in later segments and pending rows.
+  term.  Measured on c6id.metal, ranked top-10, warm, 12 samples per build
+  (`bench/RESULTS_I23_2026-11-01.md`): `(zzzq | zzzx) & (apple | ban:*)` on the
+  reporter's 400k-row corpus 3.792 -> 0.076 ms (PG 17.10) and 3.794 -> 0.078 ms (PG 18.6);
+  the same shape on a 640k-row, 60-token-per-row index 618.3 -> 0.076 ms (buffers 3,695 ->
+  22), results identical.  Not changed: an operand with a present reading
+  (`(zzzq | build) & ...`, 621 ms), which still builds the group.  Regression checks in
+  `ranked_driven_and` compare index buffers with the single-term form and check results
+  against the seq-scan oracle, including a reading present only in later segments and
+  pending rows, and two shapes (a NOT, a prefix) the skip must not take.
 
-### Known issues
+### Not reproduced
 
-- **A pure OR may be about 5-8% slower than on 1.14.3** (reported on Codeberg #6, not
-  reproduced here): `build | (10 terms)` on a 640k-row corpus, 519-547 ms on 1.14.3 and
-  557-582 ms on 1.15.1, median of 21 over three alternating `.so` swaps.  1.15.x adds no
-  per-posting work to a pure OR: the I19a check needs a gate, which a pure OR does not
-  build, and the MaxScore walk's source is unchanged.  Its object code is not: the walk
-  and the I19a dispatch are both inlined into `bm25_topk_candidates_range`, which grew
-  from 16,367 to 17,995 bytes (gcc 14.4 -O2), and the inlined walk went from 378
-  instructions with 97 stack operands to 364 with 105.  Whether that is the cause is
-  unmeasured (ROADMAP I23).
+- **A pure OR 5-8% slower than on 1.14.3** (Codeberg #6: `build | (10 terms)` on a
+  640k-row corpus, 519-547 ms on 1.14.3 and 557-582 ms on 1.15.1).  On c6id.metal, with
+  the `.so` swapped under one index as the reporter did, a 10-term OR differs from 1.14.3
+  by +0.04% (400k rows, PG 17.10), +0.25% (PG 18.6), -0.45% and +0.28% (640k rows, 98 and
+  41 ms queries, PG 18.6), against an A/A spread (the same tree built twice) of up to
+  0.21%; index buffers on the 400k corpus are 1,779 on both
+  (`bench/RESULTS_I23_2026-11-01.md`).  1.15.x adds no
+  per-posting work to a pure OR (the I19a check needs a gate, which a pure OR does not
+  build).  ROADMAP I23 stays open for the reporter's environment.
 
 ## 1.15.1 - 2026-10-29
 
