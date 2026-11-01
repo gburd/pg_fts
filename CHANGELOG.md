@@ -4,6 +4,31 @@ All notable changes to pg_fts are documented here.
 
 ## Unreleased
 
+### Changed
+
+- **The collect path skips a segment when an AND operand of plain-term readings is all
+  absent there** (ROADMAP I19b, Codeberg #6).  1.15.0 skipped a segment only for a single
+  plain required term with no posting in it; an operand that is an OR of plain terms, the
+  shape an analyzer gives a word with two lemmas (`(zzzq | zzzx) & kur:*`), still built
+  the other operands.  The reporter measured 17.7 ms for that against 0.35 ms for
+  `zzzq & kur:*` on 1.15.1.  Now an operand made only of plain terms joined by OR is
+  empty in a segment when every term is absent; the lookups stop at the first present
+  term.  Unmeasured here; the new `ranked_driven_and` checks compare index buffers with
+  the single-term form and check results against the seq-scan oracle with a reading
+  present only in later segments and pending rows.
+
+### Known issues
+
+- **A pure OR may be about 5-8% slower than on 1.14.3** (reported on Codeberg #6, not
+  reproduced here): `build | (10 terms)` on a 640k-row corpus, 519-547 ms on 1.14.3 and
+  557-582 ms on 1.15.1, median of 21 over three alternating `.so` swaps.  1.15.x adds no
+  per-posting work to a pure OR: the I19a check needs a gate, which a pure OR does not
+  build, and the MaxScore walk's source is unchanged.  Its object code is not: the walk
+  and the I19a dispatch are both inlined into `bm25_topk_candidates_range`, which grew
+  from 16,367 to 17,995 bytes (gcc 14.4 -O2), and the inlined walk went from 378
+  instructions with 97 stack operands to 364 with 105.  Whether that is the cause is
+  unmeasured (ROADMAP I23).
+
 ## 1.15.1 - 2026-10-29
 
 One fix, for a defect in 1.15.0's new configured-analyzer path (ROADMAP I9a), found the day

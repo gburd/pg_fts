@@ -1142,13 +1142,16 @@ query_and_operands(FtsQuery q, int *ops, int *start, bool *pos)
 }
 
 /*
- * Does a plain positive term that every match must hold (an operand of the
- * root AND chain) have no posting in this segment (ROADMAP I19b, CHANGELOG
- * 1.15.0)?  Then the segment contributes nothing, and bm25_eval_query skips
+ * Does an operand of the root AND chain that every match must hold have no
+ * posting in this segment (ROADMAP I19b, CHANGELOG 1.15.0 and Unreleased)?
+ * Then the segment contributes nothing, and bm25_eval_query skips
  * building the other operands' sets -- `zzzq & (apple | ban:*)` built both OR
  * operands in full before meeting the empty `zzzq`.  Only plain terms are
  * tested (a dictionary lookup each); a prefix/fuzzy/regex leaf has no cheap
- * emptiness test, and a weighted one is left to the normal evaluation.
+ * emptiness test, and a weighted one is left to the normal evaluation.  An
+ * operand that is an OR of plain terms (a word with several readings,
+ * `(zzzq | zzzx) & kur:*`, Codeberg #6) is empty when every term is absent; the
+ * lookups stop at the first present one.
  */
 static bool
 bm25_required_term_absent(Relation index, const BM25SegMeta *seg, FtsQuery q)
@@ -1168,12 +1171,28 @@ bm25_required_term_absent(Relation index, const BM25SegMeta *seg, FtsQuery q)
 	nops = query_and_operands(q, ops, start, pos);
 	for (j = 0; j < nops && !absent; j++)
 	{
-		FtsQueryItem *it = &q->items[ops[j]];
+		int			n = ops[j],
+					m;
 
-		if (it->type == FTS_QI_VAL &&
-			(it->flags & (FTS_QF_PREFIX | FTS_QF_FUZZY | FTS_QF_REGEX | FTS_QF_WEIGHTED)) == 0 &&
-			bm25_lookup_df(index, seg, FTS_QUERY_ITEMTEXT(q, it), it->termlen) == 0)
-			absent = true;
+		/* shape first (no I/O): plain terms joined by OR only */
+		absent = true;
+		for (m = start[n]; m <= n && absent; m++)
+		{
+			FtsQueryItem *it = &q->items[m];
+
+			if (it->type == FTS_QI_VAL
+				? (it->flags & (FTS_QF_PREFIX | FTS_QF_FUZZY | FTS_QF_REGEX | FTS_QF_WEIGHTED)) != 0
+				: it->op != FTS_OP_OR)
+				absent = false;
+		}
+		for (m = start[n]; m <= n && absent; m++)
+		{
+			FtsQueryItem *it = &q->items[m];
+
+			if (it->type == FTS_QI_VAL &&
+				bm25_lookup_df(index, seg, FTS_QUERY_ITEMTEXT(q, it), it->termlen) != 0)
+				absent = false;
+		}
 	}
 	pfree(ops);
 	pfree(start);

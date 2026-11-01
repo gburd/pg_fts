@@ -76,16 +76,36 @@ BEGIN
 END $$;
 SELECT pg_temp.hits('rare & (apple | banana)') < pg_temp.hits('apple | banana') * 3 / 4 AS driven_reads_less;
 SELECT pg_temp.hits('zzzq & (apple | banana | cherry | ban:*)') < pg_temp.hits('zzzq & ban:*') * 2 AS collect_skips_or_group;
+-- an AND operand that is an OR of plain terms (a word with two readings, Codeberg #6):
+-- every reading absent from the segment skips it as a single absent term does
+-- (the group costs about 19 buffers here: 42 -> 23 above; the second reading's
+-- lookups a few).  Only the first column tells the change apart (1.15.1: f); the
+-- second is a sanity bound that holds either way.
+SELECT r <= t + 10 AS readings_like_absent_term, r < b AS readings_skip_or_group
+  FROM (SELECT pg_temp.hits('(zzzq | zzzx) & (apple | banana | cherry | ban:*)') AS r,
+               pg_temp.hits('zzzq & (apple | banana | cherry | ban:*)') AS t,
+               pg_temp.hits('rare & (apple | banana | cherry | ban:*)') AS b) h;
 RESET enable_seqscan; RESET enable_bitmapscan;
 
 -- multi-segment + pending: a second segment and pending rows hold the driver too
 SET pg_fts.pending_flush_threshold = 20;   -- inline flushes: new segments
-INSERT INTO rd SELECT g, to_ftsdoc('simple', 'rare apple w' || (g % 300)) FROM generate_series(20001, 20040) g;
+INSERT INTO rd SELECT g, to_ftsdoc('simple', 'rare apple late w' || (g % 300)) FROM generate_series(20001, 20040) g;
 SELECT fts_index_nsegments('rd_fts') > 1 AS several_segments;
 SET pg_fts.pending_flush_threshold = 0;
-INSERT INTO rd SELECT g, to_ftsdoc('simple', 'rare banana cherry') FROM generate_series(20041, 20050) g;
+INSERT INTO rd SELECT g, to_ftsdoc('simple', 'rare banana cherry late') FROM generate_series(20041, 20050) g;
 RESET pg_fts.pending_flush_threshold;
 SELECT q, length(o) > 0 AS nonempty, pg_temp.ranked(q) = o AS full_same_as_oracle,
        pg_temp.top10(q) = pg_temp.walk10(q) AS top10_same_as_walk
   FROM (SELECT q, pg_temp.oracle(q) AS o FROM rq WHERE q ~ 'rare') s ORDER BY q;
+-- an operand of readings: `late` is in no row of the first segment (skipped there)
+-- and only in the later segments and the pending rows, which must still match.  The
+-- next two match every apple row, and would match none if the shape test let a NOT
+-- (`!zzzx` is true everywhere) or a prefix (`app` alone is absent) through; the last
+-- matches nothing and checks only that the skip agrees with the oracle there.
+SELECT q, length(o) > 0 AS nonempty, pg_temp.ranked(q) = o AS full_same_as_oracle,
+       pg_temp.top10(q) = pg_temp.walk10(q) AS top10_same_as_walk
+  FROM (SELECT q, pg_temp.oracle(q) AS o
+          FROM (VALUES ('(zzzq | late) & (apple | ban:*)'), ('(late | zzzq) & app:*'),
+                       ('(zzzq | !zzzx) & app:*'), ('(zzzq | app:*) & (apple | ban:*)'),
+                       ('(zzzq | zzzx) & (apple | ban:*)')) v(q)) s ORDER BY q;
 DROP TABLE rd, rq;
