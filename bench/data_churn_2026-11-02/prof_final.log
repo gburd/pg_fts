@@ -1,0 +1,19 @@
+so md5=e0d3a9f9
+Terminated
+== P2_S3_patch10 (patch top-10 x600)
+    25.49%  postgres  pg_fts.so          [.] __pg_bm25_sm_validate
+    19.76%  postgres  pg_fts.so          [.] __sm_get_chunk_offset
+    16.49%  postgres  pg_fts.so          [.] __pg_bm25_sm_next_member
+    11.92%  postgres  pg_fts.so          [.] __sm_get_size_impl
+     5.86%  postgres  pg_fts.so          [.] __pg_bm25_sm_maximum
+     4.71%  postgres  pg_fts.so          [.] fts_search_bestfirst_n
+     3.99%  postgres  pg_fts.so          [.] __pg_bm25_sm_contains
+     2.63%  postgres  pg_fts.so          [.] bm25_dict_seek.isra.0
+Terminated
+== P2_S3_remove (remove top-200 x60)
+    50.44%  postgres  pg_fts.so             [.] fts_search_bestfirst_n
+    27.67%  postgres  postgres              [.] ItemPointerCompare
+     6.81%  postgres  pg_fts.so             [.] ItemPointerCompare@plt
+     6.29%  postgres  pg_fts.so             [.] __sm_get_chunk_offset
+     3.06%  postgres  pg_fts.so             [.] __pg_bm25_sm_contains
+PROF_DONE

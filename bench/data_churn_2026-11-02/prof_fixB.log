@@ -1,0 +1,21 @@
+so md5=2e381d7a
+Terminated
+== P0_fresh (remove top-200 x40)
+    58.07%  postgres  pg_fts.so          [.] fts_search_bestfirst_n
+    31.19%  postgres  postgres           [.] ItemPointerCompare
+     8.17%  postgres  pg_fts.so          [.] ItemPointerCompare@plt
+Terminated
+== P1_S2_notomb (remove top-200 x20)
+    59.06%  postgres  pg_fts.so             [.] fts_search_bestfirst_n
+    31.61%  postgres  postgres              [.] ItemPointerCompare
+     8.16%  postgres  pg_fts.so             [.] ItemPointerCompare@plt
+Terminated
+== P2_S3_patch10 (patch top-10 x200)
+    88.41%  postgres  pg_fts.so             [.] __sm_get_chunk_offset
+     4.98%  postgres  pg_fts.so             [.] __pg_bm25_sm_validate
+Terminated
+== P2_S3_remove (remove top-200 x20)
+    74.99%  postgres  pg_fts.so             [.] __sm_get_chunk_offset
+    13.52%  postgres  pg_fts.so             [.] fts_search_bestfirst_n
+     7.31%  postgres  postgres              [.] ItemPointerCompare
+PROF_DONE

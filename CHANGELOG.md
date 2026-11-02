@@ -4,6 +4,64 @@ All notable changes to pg_fts are documented here.
 
 ## Unreleased
 
+### Fixed
+
+- **Ranked top-k became 60-300x slower after deletes scattered over a large heap, until a
+  REINDEX** (reported 2026-11-02 from a production index, 1.88M rows, after moving 23,313
+  rows and an `fts_vacuum`).  The heap VACUUM that follows tombstones the deleted rows on
+  the packed segment, and `fts_vacuum` keeps a single packed segment as it is, so the
+  tombstones stay until a merge rewrites it.  Each scored posting is checked against the
+  segment's tombstone set, a sparsemap that holds about one chunk per tombstone when the
+  deleted rows are spread across the heap.  Two lookup costs grew with the chunk count:
+  - The sparsemap cursor ignored a cached chunk that starts after the looked-up index,
+    which is where a lookup lands when it falls in the gap before that chunk -- nearly
+    every live docid.  Every such lookup walked the chunk list from the start (fixed in
+    the vendored `sm.c`; the cursor now resumes from the chunk before, after checking it
+    is that chunk's neighbour).
+  - The best-first paths visit posting blocks out of docid order and reset the cursor per
+    block, so each visited block walked the chunk list from the start.  They now seek
+    from per-scan checkpoints: up to 1,024 tombstones spaced evenly by docid, each with a
+    cursor on it.
+  - `fts_anomalous_docs` checked tombstones with no cursor at all (one walk per posting);
+    it now keeps one per term.
+
+  Measured on c6id.metal, PG 18.6, a 1.9M-row `doclen_sidecar = off` index (about 150
+  words a row) after moving every 80th row and the same fts_vacuum / VACUUM order
+  (`bench/RESULTS_CHURN_2026-11-02.md`): ranked top-200 of a term in 6% of rows 3,640 ->
+  64 ms (fresh build 54 ms), top-200 of a 1% term 238 -> 14.5 ms (10.3), top-10 of a 0.5%
+  term 62 -> 3.5 ms (0.35); the top-200 ids of the common term are identical across
+  builds at every step.  What is left of the top-10 cost is per scan: validating the
+  tombstone blob (25% of its profile) and building the checkpoints (about a third).
+  Workaround on 1.15.1 and earlier: REINDEX after a bulk delete (measured); `fts_vacuum`
+  does not help, because it keeps a single packed segment, tombstones and all.
+  New regression test `ranked_tombstones`: scattered deletes, the freed slots reused by
+  rows without the query terms, ranked single-term / AND / OR shapes against a seq-scan
+  oracle and the docid-order walk (6 of its 12 shapes fail when the WAND paths skip the
+  tombstone check).
+- **Ranked queries could return the wrong top-k from the block-max WAND path** (since
+  1.3.0).  When the current blocks of the cursors at or before the pivot could not beat
+  the threshold, the skip moved them past the pivot: 1.3.0-1.10.0 jumped to `pivot + 1`,
+  and 1.11.0 jumped to the earliest current block end but clamped that to `pivot + 1` "to
+  make progress".  When a cursor's current block ends before the pivot, a later block of
+  that term can score the pivot higher than the current bound, so the pivot was skipped
+  unscored.  The jump now stops at that block end; the cursor sits at or below it, so it
+  still moves.  Found and fixed by Jim Dawdy in the jimdawdy-hub/pg_fts fork (e4bba08,
+  never submitted upstream); his regression test `bmw_block_end` returns id 1 as the
+  top-1 of `aye | bee` (the exact answer is 5000) on 1.3.0, 1.10.0, 1.11.0, 1.13.0 and
+  1.15.1, and passes here (PG 17.10, 18.6).  The path is taken by a ranked query whose
+  WAND walk has two or three cursors (one per term per segment) and that takes none of
+  the best-first or driven paths: for example a two- or three-term OR on one segment, or
+  such a query with a phrase / prefix / fuzzy / regex filter.  On a 640k-row index, pure
+  2- and 3-term ORs are 0.3-2.4% slower (A/A up to 1.7%); filtered queries unmeasured.
+
+### Retracted
+
+- 1.13.0 said of its block-max WAND fixes: "No query found a wrong top-k on 1.12.1, whose
+  best-first paths already avoid both cases."  The docid-order block-max WAND path still
+  skipped a top-k document in the `safe_until` case (above): 1.3.0 through 1.15.1 return
+  a wrong top-1 for `bmw_block_end`.  1.3.0 described the skip that introduced it as
+  "removing a provably-unsound (though not field-reachable) over-skip".
+
 ### Changed
 
 - **The collect path skips a segment when an AND operand of plain-term readings is all

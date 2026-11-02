@@ -1,0 +1,14 @@
+== ranked_tombstones head PG17 GITREV=1b3ca35 ERRORs=0 f=0
+== ranked_tombstones head PG18 GITREV=1b3ca35 ERRORs=0 f=0
+== ranked_tombstones fix4 PG17 GITREV=WT:29397dc+final ERRORs=0 f=0
+== ranked_tombstones fix4 PG18 GITREV=WT:29397dc+final ERRORs=0 f=0
+== diff head vs fix4 (PG17):
+identical
+== diff PG17 vs PG18 (fix4):
+identical
+== PG17 v110 so=4eb9a6f4 GITREV=8bccf0c
+  diff_rc=1
+     5000           1 
+== PG18 v110 so=0e6750a8 GITREV=8bccf0c
+  diff_rc=1
+     5000           1 

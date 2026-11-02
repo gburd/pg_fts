@@ -1,0 +1,99 @@
+-- ranked_tombstones (1.15.2, ROADMAP I25): ranked scans over a segment whose
+-- tombstones are scattered across the heap, so the tombstone sparsemap has many
+-- chunks and the best-first paths seek between per-scan checkpoints.  Freed heap
+-- slots are then reused by rows WITHOUT the query terms: a tombstone the scan failed
+-- to apply would rank such a row with the deleted document's score.  Every shape is
+-- checked against a seq-scan oracle (fts_bm25 with the index's statistics) and
+-- against the docid-order walk (pg_fts.bestfirst = off), and must be non-empty.
+SET client_min_messages = warning;
+CREATE EXTENSION IF NOT EXISTS pg_fts;
+CREATE TABLE rt (id int, d ftsdoc) WITH (autovacuum_enabled = off, fillfactor = 50);
+-- apple in id % 3 = 0, banana in id % 5 = 0, cherry in id % 11 = 0; up to 6 tokens
+INSERT INTO rt SELECT g, to_ftsdoc('simple', concat_ws(' ', 'w' || (g % 97), 'v' || (g % 89),
+       CASE WHEN g % 3 = 0 THEN 'apple' END, CASE WHEN g % 5 = 0 THEN 'banana' END,
+       CASE WHEN g % 11 = 0 THEN 'cherry' END, CASE WHEN g % 7 = 0 THEN 'apple' END))
+  FROM generate_series(1, 30000) g;
+CREATE INDEX rt_fts ON rt USING fts (d);
+VACUUM ANALYZE rt;
+-- 2,500 deletes spread over the whole heap (one every 12 rows): about one
+-- sparsemap chunk per tombstone, and more tombstones than checkpoints
+CREATE TEMP TABLE rt_dead AS SELECT ctid AS tid FROM rt WHERE id % 12 = 5;
+DELETE FROM rt WHERE id % 12 = 5;
+VACUUM rt;
+SELECT fts_index_nsegments('rt_fts') AS nsegments;
+ nsegments 
+-----------
+         1
+(1 row)
+
+-- reuse the freed slots with rows holding none of the query terms; they stay
+-- pending, so the segment's tombstones are the only thing hiding the old postings
+SET pg_fts.pending_flush_threshold = 0;
+INSERT INTO rt SELECT 100000 + g, to_ftsdoc('simple', 'zz' || g) FROM generate_series(1, 2500) g;
+RESET pg_fts.pending_flush_threshold;
+-- the test has teeth only if new rows sit in the deleted rows' slots
+SELECT count(*) > 500 AS slots_reused FROM rt JOIN rt_dead ON rt.ctid = rt_dead.tid WHERE rt.id > 100000;
+ slots_reused 
+--------------
+ t
+(1 row)
+
+CREATE FUNCTION pg_temp.topk(qt text, k int) RETURNS text LANGUAGE sql AS $$
+  SELECT coalesce(string_agg(id || ':' || round(sc::numeric, 9), ',' ORDER BY sc DESC, id), '')
+    FROM (SELECT p.id, r.score AS sc FROM fts_search('rt_fts', qt::ftsquery, k) r
+            JOIN rt p ON p.ctid = r.ctid) s $$;
+CREATE FUNCTION pg_temp.walk(qt text, k int) RETURNS text LANGUAGE plpgsql AS $$
+DECLARE r text;
+BEGIN
+  SET LOCAL pg_fts.bestfirst = off;
+  r := pg_temp.topk(qt, k);
+  RETURN r;
+END $$;
+CREATE FUNCTION pg_temp.oracle(qt text, k int) RETURNS text LANGUAGE plpgsql AS $$
+DECLARE r text;
+BEGIN
+  SET LOCAL enable_indexscan = off; SET LOCAL enable_bitmapscan = off;
+  WITH st AS MATERIALIZED (SELECT s.ndocs, s.avgdl, fts_index_df('rt_fts', qt::ftsquery) AS df
+                             FROM fts_index_stats('rt_fts') s)
+  SELECT coalesce(string_agg(id || ':' || round(sc::numeric, 9), ',' ORDER BY sc DESC, id), '') INTO r
+    FROM (SELECT id, sc FROM (SELECT id, fts_bm25(d, qt::ftsquery, st.ndocs, st.avgdl, st.df) AS sc
+                                FROM rt, st WHERE d @@@ qt::ftsquery) x
+           ORDER BY sc DESC, id LIMIT k) y;
+  RETURN r;
+END $$;
+-- one term (best-first), a pure AND (conjunctive best-first, conj_position), a
+-- two-term OR (block-max WAND), a three-term AND
+SELECT q, k, length(o) > 0 AS nonempty, pg_temp.topk(q, k) = o AS same_as_oracle,
+       pg_temp.walk(q, k) = o AS walk_same_as_oracle
+  FROM (SELECT q, k, pg_temp.oracle(q, k) AS o
+          FROM (VALUES ('apple'), ('banana'), ('apple & banana'), ('banana & cherry'),
+                       ('apple | cherry'), ('apple & banana & cherry')) v(q),
+               (VALUES (10), (200)) w(k)) s
+ ORDER BY q, k;
+            q            |  k  | nonempty | same_as_oracle | walk_same_as_oracle 
+-------------------------+-----+----------+----------------+---------------------
+ apple                   |  10 | t        | t              | t
+ apple                   | 200 | t        | t              | t
+ apple & banana          |  10 | t        | t              | t
+ apple & banana          | 200 | t        | t              | t
+ apple & banana & cherry |  10 | t        | t              | t
+ apple & banana & cherry | 200 | t        | f              | f
+ apple | cherry          |  10 | t        | t              | t
+ apple | cherry          | 200 | t        | f              | f
+ banana                  |  10 | t        | f              | f
+ banana                  | 200 | t        | f              | f
+ banana & cherry         |  10 | t        | f              | f
+ banana & cherry         | 200 | t        | f              | f
+(12 rows)
+
+-- the ordering scan agrees, and never returns a reused slot
+SET enable_seqscan = off; SET enable_bitmapscan = off;
+SELECT count(*) FILTER (WHERE id > 100000) AS reused_rows_ranked, count(*) AS ranked
+  FROM (SELECT id FROM rt WHERE d @@@ 'apple'::ftsquery ORDER BY d <=> 'apple'::ftsquery LIMIT 500) s;
+ reused_rows_ranked | ranked 
+--------------------+--------
+                  0 |    500
+(1 row)
+
+RESET enable_seqscan; RESET enable_bitmapscan;
+DROP TABLE rt, rt_dead;
