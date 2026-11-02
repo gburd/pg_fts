@@ -5168,7 +5168,6 @@ fts_search_bmw(WandCursor *cursors, int nterms, int k, const DocidFilter *filter
 		if (nheap >= k)
 		{
 			double		blocksum = 0.0;
-			uint64		safe_until = pivot_docid;
 			int			nle = 0;		/* cursors with docid <= pivot */
 			int			lei = -1;		/* index of the (single) such cursor */
 
@@ -5179,9 +5178,6 @@ fts_search_bmw(WandCursor *cursors, int nterms, int k, const DocidFilter *filter
 				if (cursors[i].docid <= pivot_docid)
 				{
 					blocksum += wand_block_max_contrib(&cursors[i]);
-					if (cursors[i].blkcount > 0)
-						safe_until = Min(safe_until,
-									 cursors[i].docids[cursors[i].blkcount - 1]);
 					nle++;
 					lei = i;
 				}
@@ -5207,9 +5203,10 @@ fts_search_bmw(WandCursor *cursors, int nterms, int k, const DocidFilter *filter
 				 *
 				 * SAFE PATH -- two or more cursors sit at/before the pivot, OR a
 				 * cursor overlaps the block's docid range: advance every cursor
-				 * at-or-before safe_until just past that docid.  The current-block
-				 * bounds only cover postings through the earliest current block end;
-				 * a later block before the pivot may have a higher contribution.
+				 * at-or-before the pivot to the earliest current block end + 1 (or
+				 * the first later cursor), below.  The current-block bounds only
+				 * cover postings through the earliest current block end; a later
+				 * block before the pivot may have a higher contribution.
 				 */
 				bool		block_isolated = false;
 
@@ -5265,8 +5262,16 @@ fts_search_bmw(WandCursor *cursors, int nterms, int k, const DocidFilter *filter
 						else if (cursors[i].docid < skipto)
 							skipto = cursors[i].docid;
 					}
-					if (skipto <= pivot_docid)
-						skipto = pivot_docid + 1;	/* always make progress */
+					/*
+					 * No "always make progress" clamp to pivot + 1 (1.15.2,
+					 * from jimdawdy-hub/pg_fts e4bba08): when an at-or-before
+					 * cursor's current block ends before the pivot, skipto is
+					 * at or below it, and a later block of that term may score
+					 * the pivot higher than blocksum did -- jumping past the
+					 * pivot dropped it unscored (a wrong top-k, test
+					 * bmw_block_end).  Progress holds without it: that cursor
+					 * sits at or below its block end, so it moves to skipto.
+					 */
 					for (i = 0; i < nterms; i++)
 						if (cursors[i].docid != UINT64_MAX &&
 							cursors[i].docid <= pivot_docid)
