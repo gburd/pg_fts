@@ -25,6 +25,7 @@
  * Compiles vendor/sm.c directly, unprefixed, exactly as test/fuzz does for the
  * other codecs: single source of truth.
  */
+#define _POSIX_C_SOURCE 200809L	/* clock_gettime under -std=c99 */
 #define SPARSEMAP_PREFIX
 #include "vendor/sm.c"
 
@@ -32,6 +33,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 static uint64_t rng_state = 0x9E3779B97F4A7C15ull;
 static uint64_t
@@ -213,6 +215,97 @@ one_case(int iter)
 	}
 }
 
+/*
+ * property 8 (pg_fts 1.15.2): a cursor never changes an answer, and an ascending
+ * pass that lands in the gaps BETWEEN chunks stays O(lookups + chunks).  Live
+ * docids tested against sparse tombstones are exactly that pass; through 5.8.2
+ * every such lookup head-walked the chunk list (a cached chunk that starts
+ * after idx was ignored), 60-300x on a 23k-tombstone segment.  Teeth: the
+ * timed bound -- one member every 3000 indexes is one chunk each, and 20,000
+ * chunks with 100,000 gap lookups cost ~1e9 chunk steps on the old code (4.8 s
+ * under ASan on c6id.metal) against ~1e5 here.
+ */
+static int
+cmp_u64(const void *a, const void *b)
+{
+	uint64_t	x = *(const uint64_t *) a,
+				y = *(const uint64_t *) b;
+
+	return x < y ? -1 : x > y;
+}
+
+static double
+now_s(void)
+{
+	struct timespec t;
+
+	clock_gettime(CLOCK_MONOTONIC, &t);
+	return (double) t.tv_sec + (double) t.tv_nsec / 1e9;
+}
+
+static void
+cursor_cases(void)
+{
+	int			trial;
+	uint64_t	nmem = 20000,
+				stride = 3000,
+				i;
+	uint64_t   *ids = malloc(nmem * sizeof(uint64_t));
+	sm_t	   *m = sm_create(256);
+	double		t0;
+
+	for (trial = 0; trial < 200; trial++)
+	{
+		sm_t	   *r = sm_create(256);
+		uint64_t	span = 1000 + rng_next() % 3000000,
+					n = rng_next() % 3000,
+					q,
+					k;
+		uint64_t   *v = malloc((n + 1) * sizeof(uint64_t));
+		sm_cursor_t c = SM_CURSOR_INIT;
+
+		for (k = 0; k < n; k++)
+			v[k] = (trial % 3 == 0) ? rng_next() % span
+				: (trial % 3 == 1) ? (rng_next() % 64) * 4096 + rng_next() % 8
+				: (k / 300) * 20000 + k % 300;	/* runs: RLE chunks */
+		qsort(v, n, sizeof(uint64_t), cmp_u64);
+		if (n > 0 && !sm_add_many_grow(&r, v, n))
+			abort();
+		for (q = 0; q < span + 5000; q += 1 + rng_next() % 400)
+			assert(sm_contains(r, q, &c) == sm_contains(r, q, NULL));
+		c = (sm_cursor_t) SM_CURSOR_INIT;
+		for (k = 0; k < 3000; k++)	/* any order: the cursor self-validates */
+		{
+			q = (n > 0 && k % 3 == 0) ? v[rng_next() % n] + rng_next() % 3 - 1
+				: rng_next() % (span + 5000);
+			assert(sm_contains(r, q, &c) == sm_contains(r, q, NULL));
+		}
+		sm_free(r);
+		free(v);
+	}
+	for (i = 0; i < nmem; i++)
+		ids[i] = i * stride + 7;
+	if (!sm_add_many_grow(&m, ids, nmem))
+		abort();
+	t0 = now_s();
+	{
+		sm_cursor_t c = SM_CURSOR_INIT;
+		uint64_t	q,
+					hits = 0;
+
+		for (q = 0; q < nmem * stride; q += 600)
+			hits += sm_contains(m, q, &c);
+		assert(hits == 0);		/* q = 600j never equals 3000i + 7 */
+	}
+	if (now_s() - t0 > 0.5)		/* milliseconds fixed, seconds with the head-walk */
+	{
+		fprintf(stderr, "property 8: 100,000 ascending gap lookups took %.3f s\n", now_s() - t0);
+		abort();
+	}
+	sm_free(m);
+	free(ids);
+}
+
 int
 main(void)
 {
@@ -220,6 +313,7 @@ main(void)
 
 	for (iter = 0; iter < ITERS; iter++)
 		one_case(iter);
-	printf("fuzz_smblob: %d round-trips clean (small + chunk mode)\n", ITERS);
+	cursor_cases();
+	printf("fuzz_smblob: %d round-trips clean (small + chunk mode), cursor lookups exact and linear\n", ITERS);
 	return 0;
 }
