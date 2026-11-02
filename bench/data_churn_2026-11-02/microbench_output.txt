@@ -1,0 +1,21 @@
+Raw output of the sparsemap micro-checks, copied verbatim from the c6id.metal run (2026-11-02).
+smgap.c and smcheck.c are in this directory; "old" = vendor/sm.c 5.8.2 as of 29397dc, "fixed" = with the cursor fix.
+Built with gcc -O2 (smgap) and clang/gcc -O1 -fsanitize=address,undefined (smcheck); smgap pinned with taskset -c 20.
+
+== old
+smcheck OK: 4056662 lookups, cursor == no-cursor (version 5.8.2)
+version=5.8.2 members=1000 chunks~1000 span=2900000 gap_queries=4834 hits=0(expect 0) gap_pass=7.430 ms (1537.1 ns/query)  in-chunk member pass=0.069 ms (69.3 ns/query, hits 1000)
+version=5.8.2 members=5000 chunks~5000 span=14500000 gap_queries=24167 hits=0(expect 0) gap_pass=185.652 ms (7682.1 ns/query)  in-chunk member pass=0.337 ms (67.5 ns/query, hits 5000)
+version=5.8.2 members=20000 chunks~20000 span=58000000 gap_queries=96667 hits=0(expect 0) gap_pass=2959.710 ms (30617.6 ns/query)  in-chunk member pass=1.338 ms (66.9 ns/query, hits 20000)
+== fixed
+smcheck OK: 4056662 lookups, cursor == no-cursor (version 5.8.2)
+version=5.8.2 members=1000 chunks~1000 span=2900000 gap_queries=4834 hits=0(expect 0) gap_pass=0.193 ms (39.9 ns/query)  in-chunk member pass=0.069 ms (69.3 ns/query, hits 1000)
+version=5.8.2 members=5000 chunks~5000 span=14500000 gap_queries=24167 hits=0(expect 0) gap_pass=0.955 ms (39.5 ns/query)  in-chunk member pass=0.336 ms (67.3 ns/query, hits 5000)
+version=5.8.2 members=20000 chunks~20000 span=58000000 gap_queries=96667 hits=0(expect 0) gap_pass=3.757 ms (38.9 ns/query)  in-chunk member pass=1.343 ms (67.1 ns/query, hits 20000)
+
+== test/fuzz/fuzz_smblob.c (with property 8), clang -std=c99 -O1 ASan+UBSan
+new (fixed sm.c): fuzz_smblob: 20000 round-trips clean (small + chunk mode), cursor lookups exact and linear   rc=0
+old (5.8.2 sm.c): property 8: 100,000 ascending gap lookups took 4.786 s   rc=134 (abort)
+
+== ranked_tombstones negative control (run_mut.sh): wand_cur_own_tombstoned forced to false (MUTANT-no-tombstones)
+6 rows report f (results differ from the oracle); see ranked_tombstones_mutant.out.  1.15.1 and the fixed tree: 0 f.
