@@ -221,9 +221,10 @@ one_case(int iter)
  * docids tested against sparse tombstones are exactly that pass; through 5.8.2
  * every such lookup head-walked the chunk list (a cached chunk that starts
  * after idx was ignored), 60-300x on a 23k-tombstone segment.  Teeth: the
- * timed bound -- one member every 3000 indexes is one chunk each, and 20,000
- * chunks with 100,000 gap lookups cost ~1e9 chunk steps on the old code (4.8 s
- * under ASan on c6id.metal) against ~1e5 here.
+ * cost of a gap lookup relative to a lookup inside a chunk -- one member every
+ * 3000 indexes is one chunk each, and 20,000 chunks with 100,000 gap lookups
+ * cost ~1e9 chunk steps on the old code (4.8 s under ASan on c6id.metal)
+ * against ~1e5 here.
  */
 static int
 cmp_u64(const void *a, const void *b)
@@ -287,20 +288,53 @@ cursor_cases(void)
 		ids[i] = i * stride + 7;
 	if (!sm_add_many_grow(&m, ids, nmem))
 		abort();
-	t0 = now_s();
+	/*
+	 * Timed against the same number of lookups that land INSIDE chunks (the
+	 * members themselves), not against a wall-clock constant: under ASan on a
+	 * shared CI runner both scale together.  Gap lookups cost about what
+	 * member lookups do when the cursor resumes (ratio ~1 on c6id.metal), and
+	 * hundreds of times more when every one head-walks the chunk list (~460
+	 * on 5.8.2).  The best of 3 passes each, so one descheduling cannot fail
+	 * the run.
+	 */
 	{
-		sm_cursor_t c = SM_CURSOR_INIT;
-		uint64_t	q,
-					hits = 0;
+		double		gap = 1e9,
+					mem = 1e9;
+		int			rep;
 
-		for (q = 0; q < nmem * stride; q += 600)
-			hits += sm_contains(m, q, &c);
-		assert(hits == 0);		/* q = 600j never equals 3000i + 7 */
-	}
-	if (now_s() - t0 > 0.5)		/* milliseconds fixed, seconds with the head-walk */
-	{
-		fprintf(stderr, "property 8: 100,000 ascending gap lookups took %.3f s\n", now_s() - t0);
-		abort();
+		for (rep = 0; rep < 3; rep++)
+		{
+			sm_cursor_t c = SM_CURSOR_INIT;
+			uint64_t	q,
+						n = 0,
+						hits = 0;
+			double		dt;
+
+			t0 = now_s();
+			for (q = 0; q < nmem * stride; q += 600, n++)
+				hits += sm_contains(m, q, &c);
+			dt = (now_s() - t0) / (double) n;
+			if (hits != 0)		/* q = 600j never equals 3000i + 7 */
+				abort();
+			if (dt < gap)
+				gap = dt;
+			c = (sm_cursor_t) SM_CURSOR_INIT;
+			hits = 0;
+			t0 = now_s();
+			for (i = 0; i < nmem; i++)
+				hits += sm_contains(m, ids[i], &c);
+			dt = (now_s() - t0) / (double) nmem;
+			if (hits != nmem)
+				abort();
+			if (dt < mem)
+				mem = dt;
+		}
+		if (gap > 20.0 * mem)
+		{
+			fprintf(stderr, "property 8: an ascending gap lookup took %.0fx a member lookup (%.1f vs %.1f ns)\n",
+					gap / mem, gap * 1e9, mem * 1e9);
+			abort();
+		}
 	}
 	sm_free(m);
 	free(ids);
