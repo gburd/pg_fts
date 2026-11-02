@@ -457,7 +457,8 @@ struct SM_ALIGNED(8) sparsemap {
  *
  * A cursor caches the most-recently-located chunk so a SEQUENCE of
  * monotonically NON-DECREASING idx lookups on an UNMUTATED map resumes
- * the chunk walk from there instead of from chunk 0, turning an
+ * the chunk walk from there (or, for an idx in the gap before it, from
+ * its left neighbour: pg_fts 1.15.2) instead of from chunk 0, turning an
  * otherwise O(N^2) scan into O(N).  Only sm_contains(), sm_next_member(),
  * and sm_prev_member() accept one.
  *

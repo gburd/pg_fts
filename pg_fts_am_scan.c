@@ -224,6 +224,13 @@ tidset_sort_uniq(TidSet *s)
 	s->n = i + 1;
 }
 
+/* a tombstone with a cursor positioned on it (bm25_tomb_seek) */
+typedef struct BM25TombCkpt
+{
+	uint64		member;
+	sm_cursor_t cur;
+} BM25TombCkpt;
+
 /*
  * Tombstone (deleted-docid) sets, one per segment, loaded from each segment's
  * livedocs blob.  VACUUM (bm25_bulkdelete) records docids of vacuumed heap
@@ -239,6 +246,8 @@ typedef struct BM25Tombstones
 	uint8	  **blobs;			/* per-segment palloc'd blob, or NULL */
 	sm_t	   *maps;			/* per-segment opened sm_t (valid iff blobs[i]) */
 	bool	   *present;		/* whether segment i has a tombstone map */
+	BM25TombCkpt **ckpt;		/* per segment, built on demand (bm25_tomb_seek) */
+	int		   *nckpt;			/* -1 = not built */
 }			BM25Tombstones;
 
 static void
@@ -251,6 +260,8 @@ bm25_tombstones_load(Relation index, const BM25MetaPageData *meta, BM25Tombstone
 	t->blobs = NULL;
 	t->maps = NULL;
 	t->present = NULL;
+	t->ckpt = NULL;
+	t->nckpt = NULL;
 	for (s = 0; s < meta->nsegments; s++)
 		if (meta->segs[s].livedocs != InvalidBlockNumber &&
 			meta->segs[s].livedocslen > 0)
@@ -270,9 +281,13 @@ bm25_tombstones_load(Relation index, const BM25MetaPageData *meta, BM25Tombstone
 	t->maps = (sm_t *) palloc_aligned(meta->nsegments * sizeof(sm_t), 8, 0);
 	memset(t->maps, 0, meta->nsegments * sizeof(sm_t));
 	t->present = (bool *) palloc0(meta->nsegments * sizeof(bool));
+	t->ckpt = (BM25TombCkpt **) palloc0(meta->nsegments * sizeof(BM25TombCkpt *));
+	t->nckpt = (int *) palloc(meta->nsegments * sizeof(int));
 	for (s = 0; s < meta->nsegments; s++)
 	{
 		const BM25SegMeta *sg = &meta->segs[s];
+
+		t->nckpt[s] = -1;
 
 		if (sg->livedocs != InvalidBlockNumber && sg->livedocslen > 0)
 		{
@@ -301,15 +316,95 @@ bm25_tombstones_free(BM25Tombstones *t)
 	if (!t->hasany)
 		return;
 	for (s = 0; s < t->nseg; s++)
+	{
 		if (t->present[s])
 			pfree(t->blobs[s]);
+		if (t->ckpt[s])
+			pfree(t->ckpt[s]);
+	}
 	pfree(t->blobs);
 	pfree(t->maps);
 	pfree(t->present);
+	pfree(t->ckpt);
+	pfree(t->nckpt);
 	t->hasany = false;
 	t->blobs = NULL;
 	t->maps = NULL;
 	t->present = NULL;
+	t->ckpt = NULL;
+	t->nckpt = NULL;
+}
+
+/*
+ * A tombstone cursor for lookups from `docid` upward in segment s (CHANGELOG
+ * 1.15.2).  The best-first paths visit posting blocks out of docid order, and
+ * an sm cursor only resumes forward, so they reset it per block -- and the
+ * reset cursor head-walks the chunk list.  Deleted rows scattered over a large
+ * heap give about one chunk per tombstone (23k chunks after a 23k-row move), so
+ * every visited block paid a walk over thousands of chunks.  The first seek in
+ * a segment records up to BM25_TOMB_NCKPT tombstones spaced evenly by docid,
+ * each with a cursor on it (one sm_next_member jump each, which skips whole
+ * chunks); a seek then starts from the last checkpoint at or before docid.  A
+ * cursor left by lookups on the same unmodified map gives the exact answer for
+ * any index (sm resumes only from a chunk boundary at or before it, and these
+ * maps are read-only for the scan), so this changes only the cost.
+ */
+#define BM25_TOMB_NCKPT 1024
+
+static void
+bm25_tomb_seek(BM25Tombstones *t, uint32 s, uint64 docid, sm_cursor_t *out)
+{
+	sm_cursor_t ini = SM_CURSOR_INIT;
+	int			a,
+				b,
+				j;
+
+	*out = ini;
+	if (!t->hasany || s >= t->nseg || !t->present[s])
+		return;
+	if (t->nckpt[s] < 0)
+	{
+		sm_t	   *map = &t->maps[s];
+		sm_cursor_t c = SM_CURSOR_INIT;
+		uint64		v = sm_next_member(map, (uint64_t) -1, &c);
+		uint64		hi = sm_maximum(map);	/* a chunk walk: once */
+		uint64		step;
+		int			n = 0;
+		BM25TombCkpt *ck = (BM25TombCkpt *) palloc((BM25_TOMB_NCKPT + 1) * sizeof(BM25TombCkpt));	/* alloc-ok: fixed 1025 entries */
+
+		step = (v == SM_IDX_MAX || hi <= v) ? 1 : (hi - v) / BM25_TOMB_NCKPT + 1;
+		/* each pass asks for the first member >= v + step: at most
+		 * NCKPT + 1 checkpoints, strictly ascending */
+		while (v != SM_IDX_MAX && n <= BM25_TOMB_NCKPT)
+		{
+			ck[n].member = v;
+			ck[n].cur = c;
+			n++;
+			if (v > SM_IDX_MAX - step - 1)
+				break;
+			v = sm_next_member(map, v + step - 1, &c);
+		}
+		t->ckpt[s] = ck;
+		t->nckpt[s] = n;
+	}
+	/* the last checkpoint with member <= docid */
+	a = 0;
+	b = t->nckpt[s] - 1;
+	j = -1;
+	while (a <= b)
+	{
+		int			m = a + (b - a) / 2;
+
+		if (t->ckpt[s][m].member <= docid)
+		{
+			j = m;
+			a = m + 1;
+		}
+		else
+			b = m - 1;
+	}
+	if (j >= 0)
+		*out = t->ckpt[s][j].cur;
 }
 
 /*
@@ -5806,13 +5901,10 @@ fts_search_bestfirst_n(WandCursor *cs, int ncur, int k, ScoredTid **out)
 			 * generation re-check restarts the scan; return what we have */
 			break;
 		}
-		/* tombstone lookups resume forward only: reset per block (blocks are
+		/* tombstone lookups resume forward only: re-seek per block (blocks are
 		 * visited out of docid order) */
-		{
-			sm_cursor_t ini = SM_CURSOR_INIT;
-
-			c->tombcursor = ini;
-		}
+		if (c->tombs != NULL && c->tombs->hasany)
+			bm25_tomb_seek(c->tombs, c->segidx, c->docids[0], &c->tombcursor);
 		bm25_for_unpack(c->blkbuf + c->tfoff, c->blkcount, tfs);
 		for (i = 0; i < c->blkcount; i++)
 		{
@@ -5924,13 +6016,13 @@ topk_admit(ScoredTid *heap, int *nheap, int k, int *minpos, double *threshold,
 static void
 conj_position(WandCursor *c, const BestFirstBlock *hdr, int n, uint64 lo)
 {
-	sm_cursor_t ini = SM_CURSOR_INIT;
-
-	c->tombcursor = ini;		/* tombstone lookups resume forward only */
 	if (c->blkcount > 0 && c->docids[0] <= lo && lo <= c->docids[c->blkcount - 1])
 	{
 		c->cur = 0;				/* already decoded: rewind within the block */
 		c->docid = c->docids[0];
+		/* tombstone lookups resume forward only: re-seek at the block start */
+		if (c->tombs != NULL && c->tombs->hasany)
+			bm25_tomb_seek(c->tombs, c->segidx, c->docids[0], &c->tombcursor);
 		return;
 	}
 	{
@@ -5955,6 +6047,8 @@ conj_position(WandCursor *c, const BestFirstBlock *hdr, int n, uint64 lo)
 		c->nread = (int) hdr[j].nbefore;
 		wand_load_block(c);
 	}
+	if (c->tombs != NULL && c->tombs->hasany && c->blkcount > 0)
+		bm25_tomb_seek(c->tombs, c->segidx, c->docids[0], &c->tombcursor);
 }
 
 /*
@@ -6146,11 +6240,8 @@ fts_search_and_bestfirst(WandCursor *cursors, int ncur, int k, BoolGate *gate,
 		wand_load_block(c);
 		if (c->blkcount == 0)
 			break;				/* concurrent recycle: the generation re-check restarts */
-		{
-			sm_cursor_t ini = SM_CURSOR_INIT;
-
-			c->tombcursor = ini;
-		}
+		if (c->tombs != NULL && c->tombs->hasany)
+			bm25_tomb_seek(c->tombs, c->segidx, c->docids[0], &c->tombcursor);
 		for (gi = grpstart[g]; gi < grpstart[g + 1]; gi++)
 			if (grpidx[gi] != dc)
 				conj_position(&cursors[grpidx[gi]], hdr[grpidx[gi]], nhdr[grpidx[gi]],
@@ -8081,6 +8172,7 @@ fts_anomalous_docs(PG_FUNCTION_ARGS)
 					BM25Posting *post;
 					int			np,
 								j;
+					sm_cursor_t tc = SM_CURSOR_INIT;	/* postings ascend: one forward cursor */
 
 					memcpy(key, de->term, klen);
 					key[klen] = '\0';
@@ -8111,7 +8203,7 @@ fts_anomalous_docs(PG_FUNCTION_ARGS)
 
 						/* skip docs tombstoned in THIS segment */
 						if (tombs.hasany && tombs.present[s] &&
-							sm_contains(&tombs.maps[s], docid, NULL))
+							sm_contains(&tombs.maps[s], docid, &tc))
 							continue;
 
 						doc = (AnomDoc *) hash_search(docht, &docid, HASH_ENTER,
