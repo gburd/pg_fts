@@ -67,3 +67,30 @@ SELECT count(*) FILTER (WHERE id > 100000) AS reused_rows_ranked, count(*) AS ra
   FROM (SELECT id FROM rt WHERE d @@@ 'apple'::ftsquery ORDER BY d <=> 'apple'::ftsquery LIMIT 500) s;
 RESET enable_seqscan; RESET enable_bitmapscan;
 DROP TABLE rt, rt_dead;
+
+-- fts_vacuum on one packed segment that carries tombstones (ROADMAP I25): through
+-- 1.15.2 it returned false and kept them until a REINDEX; it now rewrites the
+-- segment without the deleted documents, and a second call has nothing to do
+CREATE TABLE rv (id int, d ftsdoc) WITH (autovacuum_enabled = off);
+INSERT INTO rv SELECT g, to_ftsdoc('simple', 'w' || (g % 50) || CASE WHEN g % 3 = 0 THEN ' apple' ELSE '' END)
+  FROM generate_series(1, 20000) g;
+CREATE INDEX rv_fts ON rv USING fts (d);
+VACUUM ANALYZE rv;
+SELECT fts_vacuum('rv_fts') AS packed_fresh;
+DELETE FROM rv WHERE id % 9 = 4;
+VACUUM rv;
+SELECT fts_index_nsegments('rv_fts') AS nsegments, fts_vacuum('rv_fts') AS expunged,
+       fts_vacuum('rv_fts') AS again;
+SET enable_seqscan = off; SET enable_bitmapscan = off;
+CREATE TEMP TABLE rv_top AS
+  SELECT id FROM rv WHERE d @@@ 'apple'::ftsquery ORDER BY d <=> 'apple'::ftsquery, id LIMIT 50;
+SET pg_fts.bestfirst = off;
+SELECT count(*) AS ranked, count(*) = 50 AND count(*) = (SELECT count(*) FROM (SELECT id FROM rv_top
+         INTERSECT SELECT id FROM (SELECT id FROM rv WHERE d @@@ 'apple'::ftsquery
+                                    ORDER BY d <=> 'apple'::ftsquery, id LIMIT 50) w) x) AS same_as_walk,
+       count(*) FILTER (WHERE id % 9 = 4) AS deleted_ranked
+  FROM rv_top;
+RESET pg_fts.bestfirst; RESET enable_seqscan; RESET enable_bitmapscan;
+SELECT count(*) AS apple_rows, count(*) = (SELECT count(*) FROM rv WHERE fts_match(d, 'apple'::ftsquery)) AS count_ok
+  FROM rv WHERE d @@@ 'apple'::ftsquery;
+DROP TABLE rv, rv_top;

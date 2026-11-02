@@ -6042,6 +6042,25 @@ bm25_index_is_compacted(Relation index)
 	return freebelow <= threshold;
 }
 
+/* Does any live segment carry tombstones? (bm25_vacuum_compact) */
+static bool
+bm25_index_has_tombstones(Relation index)
+{
+	BM25MetaPageData meta;
+	Buffer		mb = bm25_readbuf(index, BM25_METAPAGE_BLKNO);
+	uint32		i;
+
+	LockBuffer(mb, BUFFER_LOCK_SHARE);
+	bm25_meta_from_page(BufferGetPage(mb), &meta);
+	UnlockReleaseBuffer(mb);
+	for (i = 0; i < meta.nsegments && i < BM25_MAX_SEGMENTS; i++)
+		if (meta.segs[i].dictstart != InvalidBlockNumber &&
+			meta.segs[i].livedocs != InvalidBlockNumber &&
+			meta.segs[i].livedocslen > 0)
+			return true;
+	return false;
+}
+
 static bool
 bm25_vacuum_compact(Relation index)
 {
@@ -6049,6 +6068,7 @@ bm25_vacuum_compact(Relation index)
 	BlockNumber nblocks;
 	BlockNumber prevblocks;
 	bool		didwork = false;
+	bool		expunge;
 	int			pass;
 
 	/*
@@ -6093,9 +6113,33 @@ bm25_vacuum_compact(Relation index)
 	startblocks = RelationGetNumberOfBlocks(index);
 	prevblocks = startblocks;
 
+	/*
+	 * Tombstones on a compacted index (ROADMAP I25).  An index that is one
+	 * front-packed segment passed the convergence guard below untouched, so a
+	 * bulk DELETE + VACUUM left its tombstones in place until a REINDEX: every
+	 * ranked scan tested its postings against them, and fts_vacuum returned
+	 * false.  Under AccessExclusiveLock (fts_vacuum; not VACUUM's cleanup,
+	 * where rewriting a whole segment for a few deletes would be a cost on
+	 * every cycle) one low-first rewrite drops every tombstoned document, and
+	 * the passes after it pack and truncate as usual.
+	 */
+	expunge = CheckRelationLockedByMe(index, AccessExclusiveLock, true) &&
+		bm25_index_has_tombstones(index);
+
 	for (pass = 0; pass < BM25_VACUUM_MAX_PASSES; pass++)
 	{
 		CHECK_FOR_INTERRUPTS();		/* between passes: no lock/window held */
+
+		if (expunge)
+		{
+			if (bm25_compact_to_one(index, false))
+				didwork = true;
+			IndexFreeSpaceMapVacuum(index);
+			nblocks = bm25_truncate_free_tail(index);
+			prevblocks = nblocks;
+			expunge = false;
+			continue;
+		}
 
 		/*
 		 * Pre-pass convergence guard.  If the live data is already at the front
