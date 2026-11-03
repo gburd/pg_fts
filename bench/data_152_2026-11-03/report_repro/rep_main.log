@@ -1,0 +1,29 @@
+== main GITREV=fbfdb10 so=de7390d4 20:12
+SET
+CREATE EXTENSION
+DROP TABLE
+CREATE TABLE
+INSERT 0 1880000
+CREATE INDEX
+VACUUM
+CREATE FUNCTION
+CREATE PROCEDURE
+A fresh build, packed                              segs 1  remove 13.9 ms  vacuum 7.0 ms  remove/bestfirst=off 2.1 ms
+CALL
+B moves                                            segs 2  remove 16.7 ms  vacuum 25.0 ms  remove/bestfirst=off 3.8 ms
+C then fts_vacuum                                  segs 1  remove 14.1 ms  vacuum 19.1 ms  remove/bestfirst=off 2.0 ms
+VACUUM
+D then VACUUM                                      segs 1  remove 23.2 ms  vacuum 13.1 ms  remove/bestfirst=off 10.2 ms
+E then fts_vacuum (returned f)                     segs 1  remove 23.1 ms  vacuum 13.0 ms  remove/bestfirst=off 10.2 ms
+F then fts_merge (returned f)                      segs 1  remove 23.0 ms  vacuum 12.9 ms  remove/bestfirst=off 10.2 ms
+REINDEX
+G REINDEX                                          segs 1  remove 14.0 ms  vacuum 6.9 ms  remove/bestfirst=off 2.1 ms
+CALL
+VACUUM
+H moves, VACUUM, then fts_vacuum                   segs 1  remove 13.8 ms  vacuum 7.1 ms  remove/bestfirst=off 2.0 ms
+CALL
+VACUUM
+I moves, VACUUM, no pack                           segs 3  remove 23.0 ms  vacuum 13.0 ms  remove/bestfirst=off 3.2 ms
+  step I extra: count median-of-5 = 4.499 ms
+  step I extra: or4 median-of-5 = 161.531 ms
+REP_DONE main 20:22

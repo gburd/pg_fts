@@ -1,0 +1,29 @@
+== v1151 GITREV=551b13a so=215eddf2 19:49
+SET
+CREATE EXTENSION
+DROP TABLE
+CREATE TABLE
+INSERT 0 1880000
+CREATE INDEX
+VACUUM
+CREATE FUNCTION
+CREATE PROCEDURE
+A fresh build, packed                              segs 1  remove 13.9 ms  vacuum 7.0 ms  remove/bestfirst=off 2.1 ms
+CALL
+B moves                                            segs 2  remove 16.7 ms  vacuum 24.7 ms  remove/bestfirst=off 3.7 ms
+C then fts_vacuum                                  segs 1  remove 14.1 ms  vacuum 19.2 ms  remove/bestfirst=off 2.0 ms
+VACUUM
+D then VACUUM                                      segs 1  remove 7718.7 ms  vacuum 3308.3 ms  remove/bestfirst=off 7552.4 ms
+E then fts_vacuum (returned f)                     segs 1  remove 7667.3 ms  vacuum 3279.2 ms  remove/bestfirst=off 7521.8 ms
+F then fts_merge (returned f)                      segs 1  remove 7750.8 ms  vacuum 3314.0 ms  remove/bestfirst=off 7615.7 ms
+REINDEX
+G REINDEX                                          segs 1  remove 14.3 ms  vacuum 6.9 ms  remove/bestfirst=off 2.0 ms
+CALL
+VACUUM
+H moves, VACUUM, then fts_vacuum                   segs 1  remove 13.7 ms  vacuum 7.0 ms  remove/bestfirst=off 2.0 ms
+CALL
+VACUUM
+I moves, VACUUM, no pack                           segs 3  remove 7942.4 ms  vacuum 3443.8 ms  remove/bestfirst=off 19.5 ms
+  step I extra: count median-of-5 = 4.521 ms
+  step I extra: or4 median-of-5 = 111638.384 ms
+REP_DONE v1151 20:11

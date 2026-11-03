@@ -565,6 +565,11 @@ else changes for shorter documents.  1.15.0 split HTML markup at its internal ch
 boundaries in such documents (tag attribute words indexed, positions shifted); recompute
 values 1.15.0 computed from long markup after installing 1.15.1.
 
+1.15.2 needs nothing after the upgrade.  Ranked queries on an index whose single
+packed segment carries many scattered tombstones (a bulk DELETE, then VACUUM) are
+fast again without a REINDEX; a REINDEX still drops the tombstones, which
+`fts_vacuum` does not do for a single packed segment (CHANGELOG 1.15.2).
+
 Backward compatibility
 -----------------------
 
