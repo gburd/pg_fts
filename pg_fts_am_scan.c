@@ -248,7 +248,88 @@ typedef struct BM25Tombstones
 	bool	   *present;		/* whether segment i has a tombstone map */
 	BM25TombCkpt **ckpt;		/* per segment, built on demand (bm25_tomb_seek) */
 	int		   *nckpt;			/* -1 = not built */
+	Relation	index;			/* for the memo (bm25_tomb_seek) */
+	uint32		generation;		/* metapage generation the maps came from */
+	BlockNumber *blobblk;		/* per segment: the blob's first block and */
+	uint32	   *bloblen;		/* length, naming it in the memo */
 }			BM25Tombstones;
+
+/*
+ * Per-backend memo of tombstone work that depends only on the stored blob
+ * (CHANGELOG Unreleased, ROADMAP I25): whether it passed sm_validate, and its
+ * checkpoints (bm25_tomb_seek).  A segment's blob is immutable while the
+ * metapage generation stands -- bulkdelete writes a new blob and bumps the
+ * generation, a merge frees the segment and bumps it -- so (relfilenode,
+ * generation, segment, blob block, blob length) names one byte string.  Each
+ * scan still reads its own copy of the blob; the memo holds no pointer into a
+ * scan's memory, and a scan copies the checkpoints out, so replacing an entry
+ * can never free memory a concurrent scan in this backend is using.  Before
+ * this, every ranked scan validated each tombstone blob and rebuilt its
+ * checkpoints: most of a top-10 on a segment with 23k scattered tombstones.
+ */
+#define BM25_TOMB_MEMO_SLOTS 16
+
+typedef struct BM25TombMemo
+{
+	RelFileLocator loc;
+	uint32		generation;
+	uint32		seg;
+	BlockNumber blk;
+	uint32		len;
+	uint64		lastuse;
+	int			nckpt;			/* -1: checkpoints not built yet */
+	BM25TombCkpt *ckpt;			/* TopMemoryContext, nckpt entries */
+} BM25TombMemo;
+
+static BM25TombMemo bm25_tomb_memo[BM25_TOMB_MEMO_SLOTS];
+static uint64 bm25_tomb_memo_clock = 0;
+
+/* The memo slot for (index, generation, segment, blob), or NULL. */
+static BM25TombMemo *
+bm25_tomb_memo_find(Relation index, uint32 generation, uint32 seg,
+					BlockNumber blk, uint32 len)
+{
+	int			i;
+
+	for (i = 0; i < BM25_TOMB_MEMO_SLOTS; i++)
+	{
+		BM25TombMemo *m = &bm25_tomb_memo[i];
+
+		if (m->len != 0 && m->len == len && m->blk == blk && m->seg == seg &&
+			m->generation == generation &&
+			RelFileLocatorEquals(m->loc, index->rd_locator))
+		{
+			m->lastuse = ++bm25_tomb_memo_clock;
+			return m;
+		}
+	}
+	return NULL;
+}
+
+/* Record that this blob validated; returns its slot (the least recent one is
+ * reused). */
+static BM25TombMemo *
+bm25_tomb_memo_add(Relation index, uint32 generation, uint32 seg,
+				   BlockNumber blk, uint32 len)
+{
+	BM25TombMemo *m = &bm25_tomb_memo[0];
+	int			i;
+
+	for (i = 1; i < BM25_TOMB_MEMO_SLOTS; i++)
+		if (bm25_tomb_memo[i].lastuse < m->lastuse)
+			m = &bm25_tomb_memo[i];
+	if (m->ckpt)
+		pfree(m->ckpt);
+	m->ckpt = NULL;
+	m->nckpt = -1;
+	m->loc = index->rd_locator;
+	m->generation = generation;
+	m->seg = seg;
+	m->blk = blk;
+	m->len = len;
+	m->lastuse = ++bm25_tomb_memo_clock;
+	return m;
+}
 
 static void
 bm25_tombstones_load(Relation index, const BM25MetaPageData *meta, BM25Tombstones *t)
@@ -262,6 +343,10 @@ bm25_tombstones_load(Relation index, const BM25MetaPageData *meta, BM25Tombstone
 	t->present = NULL;
 	t->ckpt = NULL;
 	t->nckpt = NULL;
+	t->blobblk = NULL;
+	t->bloblen = NULL;
+	t->index = NULL;
+	t->generation = 0;
 	for (s = 0; s < meta->nsegments; s++)
 		if (meta->segs[s].livedocs != InvalidBlockNumber &&
 			meta->segs[s].livedocslen > 0)
@@ -283,20 +368,43 @@ bm25_tombstones_load(Relation index, const BM25MetaPageData *meta, BM25Tombstone
 	t->present = (bool *) palloc0(meta->nsegments * sizeof(bool));
 	t->ckpt = (BM25TombCkpt **) palloc0(meta->nsegments * sizeof(BM25TombCkpt *));
 	t->nckpt = (int *) palloc(meta->nsegments * sizeof(int));
+	t->blobblk = (BlockNumber *) palloc(meta->nsegments * sizeof(BlockNumber));
+	t->bloblen = (uint32 *) palloc0(meta->nsegments * sizeof(uint32));
 	for (s = 0; s < meta->nsegments; s++)
 	{
 		const BM25SegMeta *sg = &meta->segs[s];
 
 		t->nckpt[s] = -1;
+		t->blobblk[s] = sg->livedocs;
+		t->bloblen[s] = sg->livedocslen;
 
 		if (sg->livedocs != InvalidBlockNumber && sg->livedocslen > 0)
 		{
+			BM25TombMemo *m = bm25_tomb_memo_find(index, meta->generation, s,
+												  sg->livedocs, sg->livedocslen);
+
 			t->blobs[s] = bm25_read_blob(index, sg->livedocs, sg->livedocslen);
-			bm25_sm_open_checked(index, sg->livedocs, "tombstone",
-								 &t->maps[s], t->blobs[s], sg->livedocslen);
+			if (m != NULL)
+				sm_open(&t->maps[s], (uint8_t *) t->blobs[s], sg->livedocslen);	/* validated before */
+			else
+			{
+				bm25_sm_open_checked(index, sg->livedocs, "tombstone",
+									 &t->maps[s], t->blobs[s], sg->livedocslen);
+				m = bm25_tomb_memo_add(index, meta->generation, s,
+									   sg->livedocs, sg->livedocslen);
+			}
+			if (m->nckpt >= 0)
+			{
+				/* copied, not shared: see BM25TombMemo */
+				t->ckpt[s] = (BM25TombCkpt *) palloc((Size) Max(m->nckpt, 1) * sizeof(BM25TombCkpt));
+				memcpy(t->ckpt[s], m->ckpt, (Size) m->nckpt * sizeof(BM25TombCkpt));
+				t->nckpt[s] = m->nckpt;
+			}
 			t->present[s] = true;
 		}
 	}
+	t->generation = meta->generation;
+	t->index = index;
 }
 
 /*
@@ -327,6 +435,8 @@ bm25_tombstones_free(BM25Tombstones *t)
 	pfree(t->present);
 	pfree(t->ckpt);
 	pfree(t->nckpt);
+	pfree(t->blobblk);
+	pfree(t->bloblen);
 	t->hasany = false;
 	t->blobs = NULL;
 	t->maps = NULL;
@@ -386,6 +496,18 @@ bm25_tomb_seek(BM25Tombstones *t, uint32 s, uint64 docid, sm_cursor_t *out)
 		}
 		t->ckpt[s] = ck;
 		t->nckpt[s] = n;
+		{
+			BM25TombMemo *mm = t->index ? bm25_tomb_memo_find(t->index, t->generation, s,
+															  t->blobblk[s], t->bloblen[s]) : NULL;
+
+			if (mm != NULL && mm->nckpt < 0)
+			{
+				mm->ckpt = (BM25TombCkpt *) MemoryContextAlloc(TopMemoryContext,
+															   (Size) Max(n, 1) * sizeof(BM25TombCkpt));
+				memcpy(mm->ckpt, ck, (Size) n * sizeof(BM25TombCkpt));
+				mm->nckpt = n;
+			}
+		}
 	}
 	/* the last checkpoint with member <= docid */
 	a = 0;

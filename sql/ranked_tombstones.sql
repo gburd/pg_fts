@@ -66,6 +66,19 @@ SET enable_seqscan = off; SET enable_bitmapscan = off;
 SELECT count(*) FILTER (WHERE id > 100000) AS reused_rows_ranked, count(*) AS ranked
   FROM (SELECT id FROM rt WHERE d @@@ 'apple'::ftsquery ORDER BY d <=> 'apple'::ftsquery LIMIT 500) s;
 RESET enable_seqscan; RESET enable_bitmapscan;
+-- a second delete in the same session: VACUUM writes a new tombstone blob and bumps
+-- the generation, so this backend's memo of the first blob (validated, checkpoints)
+-- must not be used for it
+DELETE FROM rt WHERE id % 12 = 7 AND id <= 30000;
+VACUUM rt;
+SELECT q, k, length(o) > 0 AS nonempty, pg_temp.topk(q, k) = o AS same_as_oracle,
+       pg_temp.walk(q, k) = o AS walk_same_as_oracle
+  FROM (SELECT q, k, pg_temp.oracle(q, k) AS o
+          FROM (VALUES ('apple'), ('apple & banana'), ('apple | cherry')) v(q),
+               (VALUES (10), (200)) w(k)) s
+ ORDER BY q, k;
+SELECT count(*) FILTER (WHERE id % 12 IN (5, 7) AND id <= 30000) AS deleted_ranked, count(*) AS ranked
+  FROM (SELECT id FROM fts_search('rt_fts', 'apple'::ftsquery, 500) r JOIN rt p ON p.ctid = r.ctid) s;
 DROP TABLE rt, rt_dead;
 
 -- fts_vacuum on one packed segment that carries tombstones (ROADMAP I25): through
