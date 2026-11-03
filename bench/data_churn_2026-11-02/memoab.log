@@ -1,0 +1,44 @@
+state: nseg=1
+CORR expd [patch 10] e4205d10b688a792c88aa8bb5200261b
+CORR expd [vacuum 200] 42e09be844c7b3e14e6f1dbd84fc083f
+CORR expd [remove 200] b0cfa7167fc46daa2ac8cf31ec81e9ca
+CORR memo [patch 10] e4205d10b688a792c88aa8bb5200261b
+CORR memo [vacuum 200] 42e09be844c7b3e14e6f1dbd84fc083f
+CORR memo [remove 200] b0cfa7167fc46daa2ac8cf31ec81e9ca
+T round=1 so=expd patch10=3.503 vacuum200=14.317 remove200=63.642 first_patch10=6.504
+T round=1 so=memo patch10=2.018 vacuum200=12.943 remove200=62.209 first_patch10=6.370
+T round=1 so=expd2 patch10=3.492 vacuum200=14.455 remove200=63.686 first_patch10=6.479
+T round=1 so=expd2 patch10=3.496 vacuum200=14.411 remove200=63.696 first_patch10=6.378
+T round=1 so=memo patch10=2.033 vacuum200=13.013 remove200=62.162 first_patch10=6.415
+T round=1 so=expd patch10=3.475 vacuum200=14.376 remove200=63.740 first_patch10=6.503
+T round=2 so=expd2 patch10=3.470 vacuum200=14.252 remove200=63.654 first_patch10=6.297
+T round=2 so=memo patch10=2.018 vacuum200=12.988 remove200=62.214 first_patch10=6.355
+T round=2 so=expd patch10=3.472 vacuum200=14.413 remove200=63.740 first_patch10=6.449
+T round=2 so=expd patch10=3.492 vacuum200=14.407 remove200=63.757 first_patch10=6.350
+T round=2 so=memo patch10=2.042 vacuum200=12.908 remove200=62.201 first_patch10=6.401
+T round=2 so=expd2 patch10=3.482 vacuum200=14.396 remove200=63.703 first_patch10=6.369
+T round=3 so=expd patch10=3.506 vacuum200=14.425 remove200=63.738 first_patch10=6.409
+T round=3 so=memo patch10=2.040 vacuum200=12.967 remove200=62.267 first_patch10=6.798
+T round=3 so=expd2 patch10=3.509 vacuum200=14.344 remove200=63.714 first_patch10=6.691
+T round=3 so=expd2 patch10=3.487 vacuum200=14.402 remove200=63.704 first_patch10=6.333
+T round=3 so=memo patch10=2.018 vacuum200=12.868 remove200=62.291 first_patch10=6.482
+T round=3 so=expd patch10=3.502 vacuum200=14.428 remove200=63.649 first_patch10=6.486
+T round=4 so=expd2 patch10=3.493 vacuum200=14.458 remove200=63.691 first_patch10=6.324
+T round=4 so=memo patch10=2.014 vacuum200=12.963 remove200=62.279 first_patch10=6.391
+T round=4 so=expd patch10=3.488 vacuum200=14.377 remove200=63.965 first_patch10=6.341
+T round=4 so=expd patch10=3.504 vacuum200=14.377 remove200=64.623 first_patch10=6.527
+T round=4 so=memo patch10=2.045 vacuum200=12.931 remove200=62.295 first_patch10=6.521
+T round=4 so=expd2 patch10=3.478 vacuum200=14.434 remove200=63.787 first_patch10=6.470
+T round=5 so=expd patch10=3.469 vacuum200=14.459 remove200=63.642 first_patch10=6.536
+T round=5 so=memo patch10=2.017 vacuum200=12.938 remove200=62.184 first_patch10=6.541
+T round=5 so=expd2 patch10=3.496 vacuum200=14.369 remove200=63.655 first_patch10=6.303
+T round=5 so=expd2 patch10=3.484 vacuum200=14.240 remove200=63.651 first_patch10=6.352
+T round=5 so=memo patch10=2.016 vacuum200=13.059 remove200=62.533 first_patch10=6.391
+T round=5 so=expd patch10=3.487 vacuum200=14.347 remove200=63.737 first_patch10=6.381
+T round=6 so=expd2 patch10=3.490 vacuum200=14.406 remove200=63.640 first_patch10=6.457
+T round=6 so=memo patch10=2.043 vacuum200=12.944 remove200=62.309 first_patch10=6.350
+T round=6 so=expd patch10=3.504 vacuum200=14.418 remove200=63.700 first_patch10=6.397
+T round=6 so=expd patch10=3.489 vacuum200=14.466 remove200=63.606 first_patch10=6.319
+T round=6 so=memo patch10=2.022 vacuum200=13.038 remove200=62.151 first_patch10=6.402
+T round=6 so=expd2 patch10=3.494 vacuum200=14.376 remove200=63.724 first_patch10=6.378
+MEMOAB_DONE

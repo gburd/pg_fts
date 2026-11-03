@@ -1,0 +1,44 @@
+--- .agent/p7/trees/base/pg_fts_am_scan.c	2026-11-02 13:57:36.000000000 -0500
++++ .agent/p7/trees/p4/pg_fts_am_scan.c	2026-11-02 15:11:37.761514028 -0500
+@@ -7360,6 +7360,7 @@
+ 	Relation	heap;
+ 	IndexFetchTableData *fetch;
+ 	uint32		gen0;
++	TupleTableSlot *slot;
+ 
+ 	if (k < 1)
+ 		k = 1;
+@@ -7431,12 +7432,12 @@
+ 		 */
+ 		pfwin = get_tablespace_io_concurrency(heap->rd_rel->reltablespace);
+ 		pfnext = 0;
++		slot = table_slot_create(heap, NULL);	/* 7d347ff: one slot per loop */
+ 		for (i = 0; i < ncand && nvis < k; i++)
+ 		{
+ 			ItemPointerData tid = cand[i].tid;
+ 			bool		call_again = false;
+ 			bool		all_dead = false;
+-			TupleTableSlot *slot;
+ 
+ 			while (pfnext < ncand && pfnext <= i + pfwin)
+ 			{
+@@ -7444,8 +7445,7 @@
+ 							   ItemPointerGetBlockNumber(&cand[pfnext].tid));
+ 				pfnext++;
+ 			}
+-			slot = table_slot_create(heap, NULL);
+-
++			ExecClearTuple(slot);
+ 			if (table_index_fetch_tuple(fetch, &tid, snap, slot,
+ 										&call_again, &all_dead))
+ 			{
+@@ -7454,8 +7454,8 @@
+ 					results[nvis].score = 1.0 / (1.0 + cand[i].score);
+ 				nvis++;
+ 			}
+-			ExecDropSingleTupleTableSlot(slot);
+ 		}
++		ExecDropSingleTupleTableSlot(slot);
+ 		table_index_fetch_end(fetch);
+ 		table_close(heap, AccessShareLock);
+ 		if (cand)

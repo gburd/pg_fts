@@ -1,0 +1,15 @@
+so=memo GITREV=bba830f+memo md5=62d8e9c7
+
+rows=1900000 heap_blocks=210366 index=905 MB
+STAGE S0_fresh: nseg=1 ndocs=1900000 remove_rows=200 top200md5=59e00c2d remove200=53.960ms vacuum200=10.349ms patch10=0.342ms fts_search_remove200=53.842ms count_vacuum=[18954 Time: 1.439 ms ]
+  churn moved 23750 rows
+STAGE S1_after_churn: nseg=2 ndocs=1923750 remove_rows=200 top200md5=b0cfa716 remove200=232.210ms vacuum200=44.192ms patch10=4.160ms fts_search_remove200=232.100ms count_vacuum=[18954 Time: 14.749 ms ]
+STAGE S2_fts_vacuum_dead_heap_present: nseg=1 ndocs=1923750 remove_rows=200 top200md5=b0cfa716 remove200=226.489ms vacuum200=36.982ms patch10=0.342ms fts_search_remove200=226.204ms count_vacuum=[18954 Time: 11.637 ms ]
+STAGE S3_VACUUM_tombstones_PROD_STATE: nseg=1 ndocs=1900000 remove_rows=200 top200md5=b0cfa716 remove200=62.290ms vacuum200=12.975ms patch10=2.043ms fts_search_remove200=62.147ms count_vacuum=[18954 Time: 4.707 ms ]
+  fts_vacuum returned t in 86.867899402 s, index 905 MB
+STAGE S4_fts_vacuum_again_COPY_STATE: nseg=1 ndocs=1900000 remove_rows=200 top200md5=b0cfa716 remove200=53.682ms vacuum200=10.221ms patch10=0.338ms fts_search_remove200=53.496ms count_vacuum=[18954 Time: 1.472 ms ]
+  churn moved 23750 rows
+STAGE S5_second_cycle_PROD_STATE: nseg=1 ndocs=1900000 remove_rows=200 top200md5=9bd67845 remove200=63.286ms vacuum200=13.057ms patch10=2.069ms fts_search_remove200=63.150ms count_vacuum=[18954 Time: 4.702 ms ]
+  REINDEX in 183.560358229 s, index 905 MB
+STAGE S6_REINDEX: nseg=1 ndocs=1900000 remove_rows=200 top200md5=9bd67845 remove200=53.684ms vacuum200=10.141ms patch10=0.345ms fts_search_remove200=53.634ms count_vacuum=[18954 Time: 1.477 ms ]
+CHURN_DONE

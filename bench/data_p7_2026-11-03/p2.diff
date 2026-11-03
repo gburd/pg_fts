@@ -1,0 +1,56 @@
+--- .agent/p7/trees/base/pg_fts_am_scan.c	2026-11-02 13:57:36.000000000 -0500
++++ .agent/p7/trees/p2/pg_fts_am_scan.c	2026-11-02 15:08:16.333928512 -0500
+@@ -7163,17 +7163,20 @@
+ 		double		idf;
+ 		double		b = 0.75;
+ 
+-		/* global df across all segments -> IDF (segments share the corpus) */
+-		for (s = 0; s < meta.nsegments; s++)
+-		{
+-			uint32		df,
+-						max_tf;
+-			BlockNumber firstblk;
+-			uint32		firstoff;
++		/* global df across all segments -> IDF (segments share the corpus);
++		 * 7d347ff: remember each segment's entry for the cursor loop below */
++		uint32		cdf[BM25_MAX_SEGMENTS],
++					cmtf[BM25_MAX_SEGMENTS],
++					coff[BM25_MAX_SEGMENTS];
++		BlockNumber cblk[BM25_MAX_SEGMENTS];
++		bool		cfound[BM25_MAX_SEGMENTS];
+ 
+-			if (bm25_lookup_dict(index, &meta.segs[s], terms[t], lens[t],
+-								 &df, &max_tf, &firstblk, &firstoff, doclendir))
+-				gdf += df;
++		for (s = 0; s < meta.nsegments && s < BM25_MAX_SEGMENTS; s++)
++		{
++			cfound[s] = bm25_lookup_dict(index, &meta.segs[s], terms[t], lens[t],
++										 &cdf[s], &cmtf[s], &cblk[s], &coff[s], doclendir);
++			if (cfound[s])
++				gdf += cdf[s];
+ 		}
+ 		if (gdf == 0 && (pdf == NULL || pdf[t] == 0))
+ 			continue;			/* term absent in every segment */
+@@ -7181,16 +7184,15 @@
+ 		tidf[t] = idf;
+ 
+ 		/* one cursor per segment that contains the term */
+-		for (s = 0; s < meta.nsegments; s++)
++		for (s = 0; s < meta.nsegments && s < BM25_MAX_SEGMENTS; s++)
+ 		{
+-			uint32		df,
+-						max_tf;
+-			BlockNumber firstblk;
+-			uint32		firstoff;
++			uint32		df = cdf[s],
++						max_tf = cmtf[s];
++			BlockNumber firstblk = cblk[s];
++			uint32		firstoff = coff[s];
+ 			double		mtf;
+ 
+-			if (!bm25_lookup_dict(index, &meta.segs[s], terms[t], lens[t],
+-								  &df, &max_tf, &firstblk, &firstoff, doclendir))
++			if (!cfound[s])
+ 				continue;
+ 			mtf = (double) max_tf;
+ 			cursors[nactive].index = index;

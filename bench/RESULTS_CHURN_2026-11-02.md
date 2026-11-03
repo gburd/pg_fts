@@ -186,3 +186,51 @@ filtered queries, which also reach this path, were not timed).  The A/A
 spread is up to 1.7% in the other direction.  The extra cost is plausible, since the jump
 now stops short of the pivot and costs another loop iteration.  It is small next to a
 wrong top-k.
+
+## 5. After 1.15.2: `fts_vacuum` expunge and the per-backend memo (2026-11-03)
+
+**The 1.15.2 known issue:** `fts_vacuum` returned false on a single packed segment and kept its tombstones.  Two changes followed on main, measured on the same host and corpus as above:
+- **bba830f:** `fts_vacuum` rewrites a single packed segment that carries tombstones.
+- **eca5e75:** a per-backend memo of blob validation and checkpoints.
+
+**Churn harness** (`churn2.sh`; `churn_expd.log` is bba830f, `churn_memo.log` is bba830f plus the memo), in ms:
+
+| stage | remove200 / vacuum200 / patch10, bba830f | + memo |
+|---|---|---|
+| S0 fresh | 54.1 / 10.3 / 0.34 | 54.0 / 10.3 / 0.34 |
+| S3 VACUUM (tombstones) | 63.8 / 14.5 / 3.54 | 62.3 / 13.0 / 2.04 |
+| `fts_vacuum` | returned t, 88.6 s | returned t, 86.9 s |
+| S4 after it | **53.6 / 10.2 / 0.34** | **53.7 / 10.2 / 0.34** |
+| S6 REINDEX (183.7 s) | 53.9 / 10.2 / 0.34 | 53.7 / 10.1 / 0.35 |
+
+`fts_vacuum` now restores fresh-build speed in about half the time of a REINDEX.  The top-200 ids equal the other builds' at every stage.
+
+**The memo, measured on its own** (`memoab.sh`, `memoab.log`):
+- **Setup:** the S3 state, with the `.so` swapped among bba830f, bba830f built a second time (A/A) and bba830f plus the memo.
+- **Timing:** 6 ABBA rounds, 12 samples per build.  Each sample is one psql session of 14 statements, the median of the last 11.
+- **Correctness:** ids are identical across builds for all three queries.
+
+| query | bba830f | A/A | + memo |
+|---|---|---|---|
+| patch10 | 3.490 [3.469-3.506] | +0.01% | **2.020** [2.014-2.045], -42% |
+| vacuum200 | 14.41 [14.32-14.47] | -0.08% | **12.95** [12.87-13.06], -10% |
+| remove200 | 63.74 [63.61-64.62] | -0.07% | **62.24** [62.15-62.53], -2.4% |
+| first query in a session (patch10) | 6.43 | -0.86% | 6.40 (the memo is per backend) |
+
+**The report's repro with both changes** (`report_repro_expunge_memo.log`, `repro_exp.sql`; the report's script with `fts_vacuum` and REINDEX timed):
+
+| step | remove / vacuum / remove bestfirst=off (ms) |
+|---|---|
+| D | 21.7 / 11.6 / 9.6 |
+| E: `fts_vacuum` returned t, 735 -> 728 MB, 69.1 s | **13.9 / 6.8 / 2.0** |
+| G: REINDEX, 136.1 s | 14.1 / 6.9 / 2.3 |
+| I: moves, VACUUM, no pack (3 segments) | 21.5 / 11.6 / 2.6 |
+
+**At step I:**
+
+| query | time |
+|---|---|
+| 4-term OR top-200 | 155 ms |
+| `count(*)` of 'vacuum' | 3.9 ms |
+
+**What is left:** a backend's first ranked query on a tombstoned segment still validates the blob, and every scan still reads the blob and tests each posting against it.  Between a bulk DELETE + VACUUM and the next `fts_vacuum` or merge, a top-200 costs about 1.15-1.7x a fresh build.

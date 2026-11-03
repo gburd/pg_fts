@@ -4,7 +4,46 @@ All notable changes to pg_fts are documented here.
 
 ## Unreleased
 
+### Fixed
+
+- **`fts_vacuum` now drops the tombstones of an index that is one packed segment**
+  (ROADMAP I25; the 1.15.2 known issue, and the 2026-11-02 report's steps E and F).  It
+  treated "one front-packed segment" as fully compacted, so after a bulk DELETE + VACUUM
+  it returned false, rewrote nothing, and the tombstones stayed until a REINDEX.  Under
+  `fts_vacuum`'s AccessExclusiveLock, a segment that carries tombstones now gets one
+  rewrite, which drops every tombstoned document, and `fts_vacuum` returns true.
+  VACUUM's own cleanup does not do this: it would rewrite a whole segment for a few
+  deletes on every cycle.  `fts_merge` is unchanged.  Measured on c6id.metal, PG 18.6:
+  - the report's repro (1.88M rows, 23,313 moves; this run also had the memo below):
+    `fts_vacuum` returned t in 69 s, against 136 s for REINDEX; the index went from 735
+    to 728 MB; top-200 21.7 -> 13.9 ms (fresh 13.9), `bestfirst = off` 9.6 -> 2.0 ms
+    (2.1);
+  - the churn harness (1.9M rows, 23,750 moves): `fts_vacuum` 88.6 s, against 183.7 s
+    for REINDEX; top-200 63.8 -> 53.6 ms (fresh 54.1), top-10 3.54 -> 0.34 ms (0.34).
+
+  `ranked_tombstones` checks that it returns t on such an index and f on a second call
+  (f on 1.15.2), and that the ranked results match the docid-order walk with no deleted
+  row ranked.
+
 ### Changed
+
+- **Tombstoned segments: a per-backend memo of blob validation and seek checkpoints**
+  (ROADMAP I25).  After 1.15.2, most of a ranked top-10 on a segment with 23k scattered
+  tombstones was per-scan setup: validating the tombstone blob and building its
+  checkpoints.  Both depend only on the stored blob, which does not change while the
+  metapage generation stands, so a backend now does that work once per (index,
+  generation, segment).  Each scan still reads its own copy of the blob.  Measured on
+  c6id.metal, PG 18.6, 1.9M rows, 23,750 scattered tombstones on one segment, 12
+  interleaved samples per build against an A/A pair (`bench/RESULTS_CHURN_2026-11-02.md`
+  section 5):
+
+  | query | 1.15.2 | with the memo | A/A |
+  |---|---|---|---|
+  | top-10, term in 0.5% of rows | 3.490 ms | 2.020 ms (-42%) | +0.01% |
+  | top-200, 1% term | 14.41 ms | 12.95 ms (-10%) | -0.08% |
+  | top-200, 6% term | 63.7 ms | 62.2 ms (-2.4%) | -0.07% |
+
+  The results are identical.  The first query in a backend pays the setup as before.
 
 - **The collect path skips a segment when an AND operand of plain-term readings is all
   absent there** (ROADMAP I19b, Codeberg #6).  1.15.0 skipped a segment only for a single

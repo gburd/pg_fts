@@ -1,0 +1,26 @@
+--- .agent/p7/trees/base/pg_fts_am_scan.c	2026-11-02 13:57:36.000000000 -0500
++++ .agent/p7/trees/p3/pg_fts_am_scan.c	2026-11-02 15:13:24.474323393 -0500
+@@ -4242,11 +4242,8 @@
+ 	int			tflen;
+ 	int			i;
+ 
+-	if (c->blkbuf)
+-	{
+-		pfree(c->blkbuf);
+-		c->blkbuf = NULL;
+-	}
++	/* 7d347ff: blkbuf is kept across blocks (BM25_BLOCK_BUF bytes, enough for
++	 * any block that fits a page) and freed with the cursor */
+ 	if (c->posbuf)
+ 	{
+ 		pfree(c->posbuf);
+@@ -4325,7 +4322,8 @@
+ 	}
+ 
+ 	/* copy the block's FOR payload so tf/dl bytes stay valid after we unlock */
+-	c->blkbuf = (unsigned char *) palloc(bh->bytelen);
++	if (c->blkbuf == NULL)
++		c->blkbuf = (unsigned char *) palloc(BLCKSZ);	/* bytelen fits the page (checked above) */
+ 	memcpy(c->blkbuf, stream, bh->bytelen);
+ 	/* lazy phrase gate: keep this block's positions column (decoded only if a
+ 	 * doc of this block reaches the gate).  posbytelen == 0 means the block

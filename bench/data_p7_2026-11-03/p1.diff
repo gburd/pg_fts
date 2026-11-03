@@ -1,0 +1,15 @@
+--- .agent/p7/trees/base/pg_fts_am_scan.c	2026-11-02 13:57:36.000000000 -0500
++++ .agent/p7/trees/p1/pg_fts_am_scan.c	2026-11-02 15:08:16.333054741 -0500
+@@ -217,7 +217,11 @@
+ 	}
+ 	if (s->n <= 1)
+ 		return;
+-	sort_tids_inline(s->tids, s->n);
++	for (i = 1; i < s->n; i++)	/* 7d347ff: skip the sort on presorted input */
++		if (ItemPointerCompare(&s->tids[i - 1], &s->tids[i]) > 0)
++			break;
++	if (i < s->n)
++		sort_tids_inline(s->tids, s->n);
+ 	for (i = 0, j = 1; j < s->n; j++)
+ 		if (!ItemPointerEquals(&s->tids[i], &s->tids[j]))
+ 			s->tids[++i] = s->tids[j];

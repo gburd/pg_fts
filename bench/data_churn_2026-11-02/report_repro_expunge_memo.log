@@ -1,0 +1,35 @@
+== memo GITREV=bba830f+memo so=ac103637 00:27
+SET
+CREATE EXTENSION
+DROP TABLE
+CREATE TABLE
+INSERT 0 1880000
+CREATE INDEX
+VACUUM
+CREATE FUNCTION
+CREATE PROCEDURE
+A fresh build, packed                              segs 1  remove 13.9 ms  vacuum 7.0 ms  remove/bestfirst=off 2.1 ms
+CALL
+B moves                                            segs 2  remove 16.6 ms  vacuum 24.6 ms  remove/bestfirst=off 3.7 ms
+C then fts_vacuum                                  segs 1  remove 14.1 ms  vacuum 19.2 ms  remove/bestfirst=off 2.0 ms
+VACUUM
+D then VACUUM                                      segs 1  remove 21.7 ms  vacuum 11.6 ms  remove/bestfirst=off 9.6 ms
+Timing is on.
+Time: 69115.700 ms (01:09.116)
+Timing is off.
+E then fts_vacuum (returned t, 735 -> 728 MB)      segs 1  remove 13.9 ms  vacuum 6.8 ms  remove/bestfirst=off 2.0 ms
+F then fts_merge (returned f)                      segs 1  remove 13.6 ms  vacuum 6.7 ms  remove/bestfirst=off 1.9 ms
+Timing is on.
+REINDEX
+Time: 136081.106 ms (02:16.081)
+Timing is off.
+G REINDEX (728 MB)                                 segs 1  remove 14.1 ms  vacuum 6.9 ms  remove/bestfirst=off 2.3 ms
+CALL
+VACUUM
+H moves, VACUUM, then fts_vacuum                   segs 1  remove 13.7 ms  vacuum 6.9 ms  remove/bestfirst=off 2.1 ms
+CALL
+VACUUM
+I moves, VACUUM, no pack                           segs 3  remove 21.5 ms  vacuum 11.6 ms  remove/bestfirst=off 2.6 ms
+  step I extra: count median-of-5 = 3.901 ms
+  step I extra: or4 median-of-5 = 155.405 ms
+REP_DONE memo 00:38
