@@ -15,7 +15,7 @@ historical bug planted back in, which had to fail.
 | harness | shipped code | mutants caught |
 |---|---|---|
 | traversal: `fts_search_bmw` 2 terms x 3 docs k=1, k=2; x 4 docs k=1 | VERIFIED (89 s, 67 s, 286 s) | 1.3.0-1.15.1 pivot clamp at 3 and 4 docs |
-| traversal: `fts_search_maxscore` 4 terms x 3 docs k=1 | not verified: no verdict after 70 min (`CBMC_SLOW=1`) | 1.10.0 suffix sum (1,192 s) |
+| traversal: `fts_search_maxscore` 4 terms x 3 docs k=1 | not verified: no verdict after 2 h (13 GB; stopped; `CBMC_SLOW=1`) | 1.10.0 suffix sum (1,192 s) |
 | query shortcuts (Q1-Q5, <= 7-item queries) | VERIFIED | all three |
 | on-page guards (6 entry points) | VERIFIED after the fixes below | 1.7.0 pd_lower, 0.3.4 clamp, 1.15.2 dictionary guard / columns / sidecar |
 | FOR codec, doclen byte | VERIFIED (n = 1, 2, 3, 8; widths 65/128/255) | short buffer, exact quantisation |
@@ -122,3 +122,10 @@ No measurable cost in either run: every difference is within 1.6% and next to th
 spread (up to 1.3%), and the signs change between the two runs (3-term OR -1.11% then
 +1.45%, single term +1.83% then -1.53%).  NOISY at the 1% level (a virtualised 16-vCPU host; a
 c6id.metal was unavailable, InsufficientInstanceCapacity in us-east-2a and 2b).
+
+## Logs
+
+`data_cbmc_2026-11-03/`: `cbmc_run_logs.tgz` (the serial `run.sh` log and every
+per-proof verdict), `gate_logs.tgz` + `gate153.sh` (the PG 17/18 gate on the final
+tree and on the version before the review fix), `cbab.sh` with both A/B logs, and the
+replays (`e2e_w.sh`, `detect_equiv.c`, `smcur_cex.c`, `stale_api.c`).

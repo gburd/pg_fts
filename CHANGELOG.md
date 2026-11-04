@@ -62,8 +62,8 @@ All notable changes to pg_fts are documented here.
   real code over every input within a bound, each with a planted historical bug that
   must be caught.  See `test/cbmc/README.md` for what each proves and its bound:
   `fts_search_bmw` (copied verbatim) returns the brute-force top-k (`fts_search_maxscore`
-  is harnessed, and its 1.10.0 bug is caught, but the shipped code had not verified after
-  70 minutes); BM25 block bounds are >= every score they cover in IEEE doubles (an
+  is harnessed, and its 1.10.0 bug is caught, but the shipped code had no verdict after 2
+  hours); BM25 block bounds are >= every score they cover in IEEE doubles (an
   exhaustive native sweep; the symbolic proof is opt-in);
   the on-page guards keep every later read in bounds; the query-shape shortcuts (I19a/b,
   1.14.3) never drop a match; the FOR codec and doclen byte round-trip; the sparsemap

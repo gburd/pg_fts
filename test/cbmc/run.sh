@@ -169,7 +169,7 @@ trav() {	# trav <PASS|FAIL> <label> <function> <NT> <ND> <main unwind> <defines.
 trav PASS "bmw 2 terms 3 docs k=1"     harness_bmw      2 3 10 -DK=1
 trav PASS "bmw 2 terms 3 docs k=2"     harness_bmw      2 3 10 -DK=2
 # MaxScore with 4 terms is the slowest proof (its mutant fails in ~20 min;
-# the shipped code had not verified after 70 min): CBMC_SLOW=1 to run it.
+# the shipped code had no verdict after 2 h, 13 GB): CBMC_SLOW=1 to run it.
 [ "${CBMC_SLOW:-0}" = 1 ] && trav PASS "maxscore 4 terms 3 docs k=1" harness_maxscore 4 3 8 -DK=1
 trav FAIL "bmw TEETH (1.3.0..1.15.1 clamp)" harness_bmw      2 3 10 -DK=1 -DTEETH_PIVOT_CLAMP
 trav FAIL "maxscore TEETH (1.10.0 suffix)"  harness_maxscore 4 3 8 -DK=1 -DTEETH_SUFFIX
