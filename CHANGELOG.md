@@ -6,6 +6,89 @@ All notable changes to pg_fts are documented here.
 
 ### Fixed
 
+- **A corrupt FOR width byte in a posting block made a ranked query read past the
+  block** (every release; found by the new CBMC proofs, `test/cbmc`).  The loader under
+  every ranked traversal (`wand_load_block`) checked that a block's declared lengths fit
+  the page, then decoded columns whose sizes come from their own width bytes, never
+  compared with the block's length.  `count(*)` (`bm25_decode_term`) had checked this since
+  0.3.5.  Reproduced on PG 17.10 by setting the docid width byte of a full block from 8 to
+  9 or 64 with the server down (`t/003_corruption.pl`): width 9 decoded garbage docids from
+  the block's own bytes, so the ranked answer disagreed with `count(*)` (an assert-enabled
+  ASan build aborted on an invalid TID instead); width 64 read 879 bytes past the copy
+  and failed with "could not read blocks" (12 and 20 failed the same way).  The block now ends the cursor's chain, as the
+  page-fit check already did, and both paths agree.  The same class, fixed the same way:
+  - the doclen sidecar readers (`bm25_doclen_build_slots`,
+    `bm25_doclen_cursor_load_page`, since 1.5.0) checked that a block fits the page but
+    not that its gap column fits its declared `gapbytes`;
+  - `bm25_decode_term`'s own column check read the tf column's width byte one byte past
+    the block when the docid column filled it exactly;
+  - five dictionary walks (the posting-chain head lookup when a segment is freed, the
+    tombstone rebuild in VACUUM, both `fts_anomalous_docs` walks, the trigram-ordinal
+    walk) did not call `bm25_dict_entry_fits`, and the trigram walk read `pd_lower` without
+    `bm25_page_data_end`.
+
+  One shared check (`bm25_for_cols_fit` in `pg_fts_for.h`) now sizes every column from
+  its width byte before any decode, and reads each width byte only after the bytes before
+  it are proved to fit.  On every layout the writer produces (all counts 1-128 and all
+  column widths, 35.7M layouts) it accepts the block and detects the inline doclen column
+  exactly as the old check did.  The ranked loader now also detects that column per
+  block, as `bm25_decode_term` always did: a two-column block in a segment with no doclen
+  sidecar (merged by 1.5.0-1.5.2, CHANGELOG 1.5.3) used to read a "doclen" past the
+  block; it now scores each posting with the block's minimum length, the length its
+  block bound assumes, so pruning stays sound.  1.5.3's advice to REINDEX such segments
+  stands.
+  Also: the trigram directory walks size each entry and the trigram query walk validates
+  `pd_lower`; the fuzzy dead-prefix lookahead checks the next dictionary entry fits before
+  comparing it.
+- **Page guards no longer form a pointer past the page from an on-disk integer.**
+  `stream + bytelen + posbytelen > pend`, `t + termlen <= end` and
+  `p + sizeof(header) <= end` after a MAXALIGN step are undefined behaviour once the
+  integer is large, even when the comparison would reject it (AGENTS.md rule 16).  They
+  now compare lengths (`bm25_fits`, `bm25_dict_entry_fits`).  Found by CBMC's
+  pointer-overflow check; no misbehaviour was observed.
+- **The block-max WAND bound could be one ulp below the score it bounds** (every
+  release).  `wand_block_max_contrib` computed `idf * mtf * (k1 + 1)` where the score is
+  `(idf * (k1 + 1)) * tf`; floating-point multiplication is not associative, so for a
+  block's own (max tf, min length) posting the bound was one ulp low in about 0.02% of
+  random (corpus, block) shapes (462 of 3M), found while writing
+  `test/cbmc/bound_harness.c`.  A skip
+  needs the threshold to sit exactly on that bound, and no such tie was found in 20,000
+  random corpora, so no wrong top-k has been observed; the bound now uses the score's
+  operation order, and the term-wide bound too.  The best-first bound already did.
+
+### Added
+
+- **CBMC proofs** (`test/cbmc`, `bash test/cbmc/run.sh`): bounded model checking of the
+  real code over every input within a bound, each with a planted historical bug that
+  must be caught.  See `test/cbmc/README.md` for what each proves and its bound:
+  `fts_search_bmw` (copied verbatim) returns the brute-force top-k (`fts_search_maxscore`
+  is harnessed, and its 1.10.0 bug is caught, but the shipped code had not verified after
+  70 minutes); BM25 block bounds are >= every score they cover in IEEE doubles (an
+  exhaustive native sweep; the symbolic proof is opt-in);
+  the on-page guards keep every later read in bounds; the query-shape shortcuts (I19a/b,
+  1.14.3) never drop a match; the FOR codec and doclen byte round-trip; the sparsemap
+  read cursor never changes an answer; the shared-doclen slot protocol has no use after
+  free, double unpin or leak.  `check_verbatim.py` fails the run when a copied function
+  drifts from the source.
+- `t/003_corruption.pl`: the corrupt-width-byte case above (fails on 1.15.2), and a
+  two-column segment without a sidecar (the 1.5.0-1.5.2 merge layout): ranked finds
+  every match.
+
+### Changed
+
+- **sparsemap 5.8.2 -> 5.8.4** (`vendor/sm.c`, `vendor/sm.h`), a drop-in source swap
+  (no API, ABI or wire-format change; serialized maps are byte-identical).  The vendored
+  copy already carried the 5.8.3 `sm_validate` / `sm_open` bounds fixes and the 5.8.4
+  cursor gap resume (ROADMAP I25); what is new here: `sm_add_range` no longer reads 8
+  bytes past its scratch buffer (5.8.4), `sm_union` / `sm_intersection` emit
+  chunk-aligned RLE and no longer re-emit a sparse chunk's tail (5.8.3), and small-set
+  maps and the SIMD kernels are alignment-safe on a misaligned buffer (5.8.3).  pg_fts
+  calls neither set operation nor `sm_add_range`.  Its bulk insert (`sm_add_many_grow`)
+  reaches the coalescing code the 5.8.4 read fix is in, but builds into a buffer with
+  slack, and the over-read needed an exactly full one, so no pg_fts effect is known.  One
+  unused helper the old copy carried is gone.  The `__pg_bm25_` symbol prefix is
+  unchanged.
+
 - **`fts_vacuum` now drops the tombstones of an index that is one packed segment**
   (ROADMAP I25; the 1.15.2 known issue, and the 2026-11-02 report's steps E and F).  It
   treated "one front-packed segment" as fully compacted, so after a bulk DELETE + VACUUM
@@ -26,19 +109,6 @@ All notable changes to pg_fts are documented here.
   row ranked.
 
 ### Changed
-
-- **sparsemap 5.8.2 -> 5.8.4** (`vendor/sm.c`, `vendor/sm.h`), a drop-in source swap
-  (no API, ABI or wire-format change; serialized maps are byte-identical).  The vendored
-  copy already carried the 5.8.3 `sm_validate` / `sm_open` bounds fixes and the 5.8.4
-  cursor gap resume (ROADMAP I25); what is new here: `sm_add_range` no longer reads 8
-  bytes past its scratch buffer (5.8.4), `sm_union` / `sm_intersection` emit
-  chunk-aligned RLE and no longer re-emit a sparse chunk's tail (5.8.3), and small-set
-  maps and the SIMD kernels are alignment-safe on a misaligned buffer (5.8.3).  pg_fts
-  calls neither set operation nor `sm_add_range`.  Its bulk insert (`sm_add_many_grow`)
-  reaches the coalescing code the 5.8.4 read fix is in, but builds into a buffer with
-  slack, and the over-read needed an exactly full one, so no pg_fts effect is known.  One
-  unused helper the old copy carried is gone.  The `__pg_bm25_` symbol prefix is
-  unchanged.
 
 - **Tombstoned segments: a per-backend memo of blob validation and seek checkpoints**
   (ROADMAP I25).  After 1.15.2, most of a ranked top-10 on a segment with 23k scattered

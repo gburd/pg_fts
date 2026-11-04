@@ -146,6 +146,52 @@ bm25_page_data_end(Page page)
 	return (char *) page + lower;
 }
 
+/*
+ * Do `n` bytes starting at `p` fit before `end`?  For a header read during a
+ * page walk, where `p` is the previous record's end, MAXALIGN'd: on the last
+ * record that can step up to MAXIMUM_ALIGNOF - 1 bytes past `end`, so `p` may
+ * already be past it.  Compared as integers: `p + n` past the page is itself
+ * undefined behaviour (AGENTS.md rule 16; test/cbmc ondisk_harness).
+ */
+static inline bool
+bm25_fits(const void *p, Size n, const void *end)
+{
+	return (const char *) p <= (const char *) end &&
+		(Size) ((const char *) end - (const char *) p) >= n;
+}
+
+/*
+ * Does a dictionary entry starting at `de` fit within a page ending at `end`?
+ *
+ * Dictionary pages are read under only BUFFER_LOCK_SHARE.  A concurrent
+ * merge/vacuum can free a segment's pages while a concurrent insert recycles
+ * and overwrites them (pg_fts recycles freed pages with no deletion-xid gate),
+ * so a scan that snapshotted the segment directory before that change can read
+ * a recycled page mid-walk.  If de->termlen is then garbage, the entry stride
+ * and the term-compare run past the page (out-of-bounds read -> SIGSEGV) and a
+ * decoded df can be a multi-gigabyte "invalid memory alloc request size".  Every
+ * reader dict walk must confirm the entry header AND its term bytes fit before
+ * trusting de->termlen; on a miss it stops the page walk (a bounded wrong /
+ * incomplete result), and the scan's generation re-check then detects the stale
+ * read and restarts.  Same contract as the block-decode guards.
+ *
+ * Compared as integers: forming `t + termlen` from an on-disk termlen is
+ * itself undefined behaviour once it passes the page (AGENTS.md rule 16;
+ * test/cbmc ondisk_harness).  Every dictionary walk in pg_fts_am.c and the
+ * files it #includes calls this (CHANGELOG Unreleased: four walks did not).
+ */
+static inline bool
+bm25_dict_entry_fits(const BM25DictEntry *de, const char *end)
+{
+	Size		room;
+
+	if ((const char *) de > end)
+		return false;
+	room = (Size) (end - (const char *) de);
+	return room >= offsetof(BM25DictEntry, term) &&
+		room - offsetof(BM25DictEntry, term) >= de->termlen;
+}
+
 PG_FUNCTION_INFO_V1(fts_handler);
 
 /*
@@ -978,7 +1024,7 @@ bm25_decode_term(Relation index, BlockNumber firstblk, uint32 firstoff,
 		next = BM25PageGetOpaque(page)->nextblk;
 		bm25_chain_prefetch(index, blk, next);
 		p = (char *) page + off;
-		while (p + sizeof(BM25BlockHdr) <= pend && n < (int) df)
+		while (bm25_fits(p, sizeof(BM25BlockHdr), pend) && n < (int) df)
 		{
 			BM25BlockHdr *bh = (BM25BlockHdr *) p;
 			const unsigned char *stream = (const unsigned char *) (bh + 1);
@@ -1011,7 +1057,7 @@ bm25_decode_term(Relation index, BlockNumber firstblk, uint32 firstoff,
 			 */
 			if (bh->count == 0 || bh->count > (uint32) BM25_BLOCK_SIZE)
 				cnt = BM25_BLOCK_SIZE;
-			if (stream + (Size) bh->bytelen + (Size) bh->posbytelen > (const unsigned char *) pend)
+			if ((uint64) bh->bytelen + bh->posbytelen > (uint64) ((const unsigned char *) pend - stream))
 			{
 				ereport(WARNING,
 						(errcode(ERRCODE_DATA_CORRUPTED),
@@ -1031,24 +1077,27 @@ bm25_decode_term(Relation index, BlockNumber firstblk, uint32 firstoff,
 			 * reject the block if it overruns bytelen, before decoding any of it.
 			 */
 			{
-				int			gl = bm25_for_bytelen(stream, cnt);
-				int			tl = (gl <= (int) bh->bytelen)
-					? bm25_for_bytelen(stream + gl, cnt) : 0;
-				int			dl;
+				uint64		used2;
 
 				/*
 				 * Column count is SELF-DESCRIBING from bytelen: a v3 block packs
-				 * three FOR columns (docid|tf|doclen) so bytes remain after gl+tl;
-				 * a v4 block packs two (docid|tf, doclen is in the segment sidecar)
-				 * so gl+tl == bytelen exactly.  Detecting it here -- rather than
-				 * trusting the caller's has_doclen_col -- is robust across every
-				 * decode path (build/merge/scan/count) and mixed v3+v4 segments.
+				 * three FOR columns (docid|tf|doclen) so bytes remain after the
+				 * first two; a v4 block packs two (docid|tf, doclen is in the
+				 * segment sidecar) so they fill bytelen exactly.  Detecting it
+				 * here -- rather than trusting the caller's has_doclen_col -- is
+				 * robust across every decode path (build/merge/scan/count) and
+				 * mixed v3+v4 segments.  bm25_for_cols_fit reads each column's
+				 * width byte only once the bytes before it are inside bytelen:
+				 * the open-coded check it replaces read the tf width byte one
+				 * past the block when the docid column filled bytelen (test/cbmc
+				 * ondisk_harness, CHANGELOG Unreleased).
 				 */
-				has_doclen_col = (gl + tl < (int) bh->bytelen);
-				dl = (has_doclen_col && gl + tl <= (int) bh->bytelen)
-					? bm25_for_bytelen(stream + gl + tl, cnt) : 0;
-
-				if ((Size) gl + tl + dl > (Size) bh->bytelen)
+				if (!bm25_for_cols_fit(stream, bh->bytelen, cnt, 2, &used2))
+					has_doclen_col = false;
+				else
+					has_doclen_col = (used2 < (uint64) bh->bytelen);
+				if (!bm25_for_cols_fit(stream, bh->bytelen, cnt,
+									   has_doclen_col ? 3 : 2, NULL))
 				{
 					ereport(WARNING,
 							(errcode(ERRCODE_DATA_CORRUPTED),
@@ -1791,6 +1840,28 @@ typedef struct BM25DoclenBlockHdr
 	uint32		gapbytes;		/* FOR-packed docid-gap column length */
 } BM25DoclenBlockHdr;
 
+/*
+ * Does a doclen-sidecar block (count already in [1, BM25_BLOCK_SIZE]) fit
+ * before `end`, and does its docid-gap column fit its declared gapbytes?  The
+ * readers unpack the gap column with bm25_for_unpack, whose length comes from
+ * the column's own width byte, not from gapbytes: a corrupt width read past the
+ * block (test/cbmc ondisk_harness, CHANGELOG Unreleased).  Lengths are
+ * compared as integers, never as pointers formed from them (AGENTS.md rule 16).
+ */
+static inline bool
+bm25_doclen_block_fits(const BM25DoclenBlockHdr *bh, const char *end)
+{
+	const unsigned char *gapcol = (const unsigned char *) (bh + 1);
+	Size		room;
+
+	if ((const char *) gapcol > end)
+		return false;
+	room = (Size) (end - (const char *) gapcol);
+	if ((uint64) bh->gapbytes + bh->count > room)
+		return false;
+	return bm25_for_cols_fit(gapcol, bh->gapbytes, (int) bh->count, 1, NULL);
+}
+
 static void
 doclen_collector_init(DoclenCollector *c, MemoryContext ctx, long nhint)
 {
@@ -2308,7 +2379,7 @@ bm25_doclens_load(Relation index, BlockNumber doclenstart, BM25Doclens *d)
 		 * synchronous read at a time (1.11.0) */
 		bm25_chain_prefetch(index, blk, next);
 
-		while (ptr + sizeof(BM25DoclenBlockHdr) <= end)
+		while (bm25_fits(ptr, sizeof(BM25DoclenBlockHdr), end))
 		{
 			BM25DoclenBlockHdr *bh = (BM25DoclenBlockHdr *) ptr;
 			uint64		first_docid;
@@ -2316,14 +2387,12 @@ bm25_doclens_load(Relation index, BlockNumber doclenstart, BM25Doclens *d)
 			uint8	   *bytes;
 			uint64		acc;
 			int			j;
-			char	   *blkend;
 
 			/* bounds-guard a possibly-recycled/corrupt page (same contract as the
 			 * dict/posting readers): a bad count/gapbytes must not run past end. */
 			if (bh->count == 0 || bh->count > BM25_BLOCK_SIZE)
 				break;
-			blkend = (char *) (bh + 1) + bh->gapbytes + bh->count;
-			if (blkend > end)
+			if (!bm25_doclen_block_fits(bh, end))
 				break;
 			first_docid = ((uint64) bh->first_docid_hi << 32) | bh->first_docid_lo;
 			bm25_for_unpack((unsigned char *) (bh + 1), (int) bh->count, gaps);
@@ -2630,7 +2699,7 @@ bm25_doclendir_scan_seg(Relation index, BlockNumber start,
 		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
 		/* the page's first docid = its first block's first_docid */
-		if (ptr + sizeof(BM25DoclenBlockHdr) <= end)
+		if (bm25_fits(ptr, sizeof(BM25DoclenBlockHdr), end))
 		{
 			BM25DoclenBlockHdr *bh = (BM25DoclenBlockHdr *) ptr;
 
@@ -3093,7 +3162,7 @@ bm25_dictdir_add(Relation index, const BM25MetaPageData *meta, BM25DoclenDirCach
 			}
 			ptr = (char *) PageGetContents(page);
 			end = bm25_page_data_end(page);
-			if (!(ptr + offsetof(BM25DictIndexEntry, term) <= end))
+			if (!bm25_fits(ptr, offsetof(BM25DictIndexEntry, term), end))
 			{
 				/* an empty index page ends bm25_dict_seek's walk: end the
 				 * directory there too, so both search the same entries */
@@ -3101,12 +3170,12 @@ bm25_dictdir_add(Relation index, const BM25MetaPageData *meta, BM25DoclenDirCach
 				break;
 			}
 			/* the same entry walk and bounds as bm25_dict_seek */
-			while (ptr + offsetof(BM25DictIndexEntry, term) <= end)
+			while (bm25_fits(ptr, offsetof(BM25DictIndexEntry, term), end))
 			{
 				BM25DictIndexEntry *ie = (BM25DictIndexEntry *) ptr;
 				Size		esz = MAXALIGN(offsetof(BM25DictIndexEntry, term) + ie->termlen);
 
-				if (ie->termlen > BLCKSZ || ptr + esz > end + MAXIMUM_ALIGNOF)
+				if (ie->termlen > BLCKSZ || !bm25_fits(ptr, esz, end))
 				{
 					ok = false;
 					break;
@@ -3434,7 +3503,7 @@ bm25_doclen_cursor_load_page(BM25DoclenCursor *c, BlockNumber blkno, uint64 doci
 
 	/* pass 1: headers only -- find the last block whose first_docid <= docid */
 	ptr = (char *) page + MAXALIGN(SizeOfPageHeaderData);
-	while (ptr + sizeof(BM25DoclenBlockHdr) <= end)
+	while (bm25_fits(ptr, sizeof(BM25DoclenBlockHdr), end))
 	{
 		BM25DoclenBlockHdr *bh = (BM25DoclenBlockHdr *) ptr;
 		uint64		first;
@@ -3442,9 +3511,9 @@ bm25_doclen_cursor_load_page(BM25DoclenCursor *c, BlockNumber blkno, uint64 doci
 
 		if (bh->count == 0 || bh->count > BM25_BLOCK_SIZE)
 			break;
-		blkend = (char *) (bh + 1) + bh->gapbytes + bh->count;
-		if (blkend > end)
+		if (!bm25_doclen_block_fits(bh, end))
 			break;
+		blkend = (char *) (bh + 1) + bh->gapbytes + bh->count;
 		first = ((uint64) bh->first_docid_hi << 32) | bh->first_docid_lo;
 		if (first <= docid)
 			cand = ptr;			/* still a candidate; a later block may be closer */
@@ -4210,10 +4279,10 @@ merge_source_load_page(MergeSource *src)
 
 			/* a truncated trailing entry, or one whose termlen runs past the page
 			 * end, means the page is not a well-formed dict page: stop here. */
-			if (ptr + offsetof(BM25DictEntry, term) > end)
+			if (!bm25_dict_entry_fits(de, end))
 				break;
 			step = MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
-			if (step == 0 || ptr + step > end)
+			if ((Size) (end - ptr) < step)
 				break;
 			n++;
 			used += de->termlen;
@@ -4251,10 +4320,10 @@ merge_source_load_page(MergeSource *src)
 			MergeDictTerm *mt;
 			Size		step;
 
-			if (ptr + offsetof(BM25DictEntry, term) > end)
+			if (!bm25_dict_entry_fits(de, end))
 				break;
 			step = MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
-			if (step == 0 || ptr + step > end)
+			if ((Size) (end - ptr) < step)
 				break;
 			if (used + de->termlen > src->bytescap)
 				break;			/* cannot happen given the sizing above; belt-and-braces */
@@ -4974,8 +5043,11 @@ bm25_free_segment(Relation index, const BM25SegMeta *seg)
 		while (ptr < end)
 		{
 			BM25DictEntry *de = (BM25DictEntry *) ptr;
-			Size		esize = MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
+			Size		esize;
 
+			if (!bm25_dict_entry_fits(de, end))
+				break;			/* recycled/corrupt page: stop (see bm25_dict_entry_fits) */
+			esize = MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
 			/* all terms share ONE posting chain; the first term names its head */
 			if (postchain == InvalidBlockNumber)
 				postchain = de->firstposting;
@@ -5003,7 +5075,7 @@ bm25_free_segment(Relation index, const BM25SegMeta *seg)
 		ptr = (char *) PageGetContents(page);
 		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
-		while (ptr < end)
+		while (bm25_fits(ptr, sizeof(BM25TrgmEntry), end))
 		{
 			BM25TrgmEntry *te = (BM25TrgmEntry *) ptr;
 
@@ -7396,8 +7468,8 @@ bm25_flush_pending(Relation index)
 			/* Stop if the item header or its doclen-sized body runs past the page
 			 * (a torn/recycled page with a garbage doclen would otherwise advance
 			 * ptr off the page and read out of bounds). */
-			if ((char *) pi + sizeof(BM25PendingItem) > end ||
-				(char *) pi + MAXALIGN(sizeof(BM25PendingItem) + (Size) pi->doclen) > end)
+			if (!bm25_fits(pi, sizeof(BM25PendingItem), end) ||
+				!bm25_fits(pi, MAXALIGN(sizeof(BM25PendingItem) + (Size) pi->doclen), end))
 				break;
 			pdoc = (FtsDoc) ((char *) pi + sizeof(BM25PendingItem));
 
@@ -7616,11 +7688,14 @@ bm25_segment_docids(Relation index, const BM25SegMeta *seg)
 		while (ptr < end)
 		{
 			BM25DictEntry *de = (BM25DictEntry *) ptr;
-			Size		esize = MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
+			Size		esize;
 			BM25Posting *post;
 			int			np,
 						k;
 
+			if (!bm25_dict_entry_fits(de, end))
+				break;			/* recycled/corrupt page: stop (see bm25_dict_entry_fits) */
+			esize = MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
 			np = bm25_decode_term(index, de->firstposting, de->firstoffset,
 								  de->df, &post, NULL, false, NULL, true,
 								  seg->doclenstart == InvalidBlockNumber);

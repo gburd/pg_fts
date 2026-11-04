@@ -277,6 +277,7 @@
             pkgs.perlPackages.IPCRun # TAP tests (t/*.pl)
             pkgs.libxml2 # xmllint, for doc validation (nix run .#docs)
             pkgs.clang-tools # clang-format / clangd for editing the C
+            pkgs.cbmc # bash test/cbmc/run.sh (large host: see test/cbmc/README.md)
           ];
           shellHook = ''
             echo "pg_fts dev shell — PostgreSQL ${pgVersions.pg17.version} on PATH"

@@ -233,6 +233,20 @@ jobs:
       - name: Run fuzz harness
         run: bash test/fuzz/run.sh
 
+  # The CBMC proofs (test/cbmc) need 20-60 GB and about two hours, so they run
+  # on demand (bash test/cbmc/run.sh on a large host).  What runs here on every
+  # push is the cheap half: every function a proof copies verbatim must still
+  # match the source, so a change to one of them fails until the proof is
+  # updated with it -- a stale proof can never pass silently.
+  cbmc-verbatim:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Proof copies match the source
+        run: python3 test/cbmc/check_verbatim.py
+      - name: The sparsemap mutant still applies
+        run: python3 test/cbmc/mutate_sm.py /tmp/sm_mut.c
+
   # --- Property-based tests (hegel-c) -----------------------------------------
   # cmocka + hegel-c (FetchContent) property tests for the pure-C codec +
   # validator.  hegel-c spawns the `hegel` protocol server (from hegel-core,

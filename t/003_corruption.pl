@@ -357,5 +357,116 @@ is($node->safe_psql('postgres',
 	"$q SELECT count(*) FROM docs WHERE to_ftsdoc('simple', body) \@\@\@ 'common'::ftsquery"),
 	2000, 'REINDEX restores the correct 2000 after metapage corruption');
 
+# ---------------------------------------------------------------------------
+# A posting block whose FOR width byte is corrupt while its count and lengths
+# are intact (CHANGELOG Unreleased, found by test/cbmc ondisk_harness).  The
+# ranked loader (wand_load_block) checked only that the block fits the page and
+# then decoded columns sized by their width bytes.  Width 9 on a full block at
+# width 8 still fits the docid column inside bytelen, so the old loader decoded
+# garbage docids from the block's own bytes (deterministically) and the ranked
+# answer disagreed with count(*), or failed: an assertion failure in an
+# assert-enabled build, "could not read blocks" otherwise.  Width 64 reads past
+# the block.  Now the block ends the cursor's chain -- a bounded miss, as
+# count(*)'s decoder already made it -- and both paths agree.
+# ---------------------------------------------------------------------------
+$node->safe_psql(
+	'postgres', q{
+	CREATE TABLE wb (id int, d ftsdoc);
+	INSERT INTO wb SELECT g, to_ftsdoc('simple', 'alpha beta' || (g % 7))
+		FROM generate_series(1, 5000) g;
+	CREATE INDEX wb_fts ON wb USING fts (d);
+	CHECKPOINT;
+});
+my $wq = "$q SELECT count(*) FROM (SELECT id FROM wb WHERE d \@\@\@ 'alpha'::ftsquery"
+  . " ORDER BY d <=> 'alpha'::ftsquery LIMIT 6000) s";
+my $wc = "$q SELECT count(*) FROM wb WHERE d \@\@\@ 'alpha'::ftsquery";
+is($node->safe_psql('postgres', $wq), 5000, 'width-byte: ranked finds all 5000 before corruption');
+my $relpath4 = $node->safe_psql('postgres', "SELECT pg_relation_filepath('wb_fts')");
+my $abs4 = $node->data_dir . '/' . $relpath4;
+foreach my $width (9, 64)
+{
+	$node->stop;
+	my $wb_hit = 0;
+	{
+		open(my $fh, '+<:raw', $abs4) or die "open $abs4: $!";
+		my $size = -s $fh;
+		for (my $base = 0; $base + BLCKSZ <= $size && !$wb_hit; $base += BLCKSZ)
+		{
+			my $buf;
+			sysseek($fh, $base + OPAQUE_FLAGS_OFF, 0) or die;
+			sysread($fh, $buf, 2) == 2 or die;
+			next unless unpack('v', $buf) & BM25_POSTING;
+			sysseek($fh, $base + CONTENT_START, 0) or die;
+			sysread($fh, $buf, 29) == 29 or die;
+			my ($cnt, $mtf, $mdl, $hi, $lo, $bytelen, $posb, $w) = unpack('V7C', $buf);
+			# alpha's first block: full, docid column at width 8
+			next unless $cnt == 128 && $w == 8 && $bytelen < 1025;
+			# the docid column's width byte follows the 28-byte block header
+			sysseek($fh, $base + CONTENT_START + 28, 0) or die;
+			syswrite($fh, pack('C', $width)) == 1 or die;
+			$wb_hit = 1;
+		}
+		close $fh;
+	}
+	ok($wb_hit, "width-byte $width: corrupted the docid width byte of alpha's first block");
+	$node->start;
+	my ($wrc, $wout, $werr) = $node->psql('postgres', $wq);
+	is($wrc, 0, "width-byte $width: the ranked query returns without an error");
+	my ($crc, $cout) = $node->psql('postgres', $wc);
+	is($crc, 0, "width-byte $width: count(*) returns without an error");
+	is($wout, $cout, "width-byte $width: ranked and count(*) agree (both a bounded miss)");
+	is($node->safe_psql('postgres', 'SELECT 1'), 1, "width-byte $width: the server is still up");
+	$node->safe_psql('postgres', 'REINDEX INDEX wb_fts');
+	is($node->safe_psql('postgres', $wq), 5000, "width-byte $width: REINDEX restores all 5000");
+	$relpath4 = $node->safe_psql('postgres', "SELECT pg_relation_filepath('wb_fts')");
+	$abs4 = $node->data_dir . '/' . $relpath4;
+}
+
+# ---------------------------------------------------------------------------
+# A segment with two-column postings and no doclen sidecar: what 1.5.0-1.5.2's
+# merge wrote (CHANGELOG 1.5.3).  The ranked loader took the column count from
+# the segment (no sidecar => three columns) and read a "doclen" past the copied
+# block.  Recreate the layout by clearing segs[0].doclenstart in the metapage
+# of an index whose postings are two-column; the ranked query must return every
+# match, without an error, as count(*) (which detects the columns per block)
+# always did.
+# ---------------------------------------------------------------------------
+$node->safe_psql(
+	'postgres', q{
+	CREATE TABLE v2c (id int, d ftsdoc);
+	INSERT INTO v2c SELECT g, to_ftsdoc('simple', 'kappa lambda' || (g % 5))
+		FROM generate_series(1, 3000) g;
+	CREATE INDEX v2c_fts ON v2c USING fts (d);
+	CHECKPOINT;
+});
+my $vq = "$q SELECT count(*) FROM (SELECT id FROM v2c WHERE d \@\@\@ 'kappa'::ftsquery"
+  . " ORDER BY d <=> 'kappa'::ftsquery LIMIT 4000) s";
+is($node->safe_psql('postgres', $vq), 3000, 'two-column v3: ranked finds all 3000 with a sidecar');
+my $relpath5 = $node->safe_psql('postgres', "SELECT pg_relation_filepath('v2c_fts')");
+my $abs5 = $node->data_dir . '/' . $relpath5;
+$node->stop;
+{
+	# BM25MetaPageData: contents at 24; segs[] at 40; BM25SegMeta is 56 bytes
+	# with doclenstart at 48 (so segs[0].doclenstart is page byte 112)
+	open(my $fh, '+<:raw', $abs5) or die "open $abs5: $!";
+	my $buf;
+	sysseek($fh, META_NSEGMENTS_OFF, 0) or die;
+	sysread($fh, $buf, 4) == 4 or die;
+	is(unpack('V', $buf), 1, 'two-column v3: one segment');
+	sysseek($fh, 112, 0) or die;
+	sysread($fh, $buf, 4) == 4 or die;
+	isnt(unpack('V', $buf), 0xFFFFFFFF, 'two-column v3: the segment has a sidecar before');
+	sysseek($fh, 112, 0) or die;
+	syswrite($fh, pack('V', 0xFFFFFFFF)) == 4 or die;
+	close $fh;
+}
+$node->start;
+my ($vrc2, $vout2, $verr2) = $node->psql('postgres', $vq);
+is($vrc2, 0, 'two-column v3: the ranked query returns without an error');
+is($vout2, 3000, 'two-column v3: ranked still finds all 3000');
+is($node->safe_psql('postgres', "$q SELECT count(*) FROM v2c WHERE d \@\@\@ 'kappa'::ftsquery"),
+	3000, 'two-column v3: count(*) agrees');
+$node->safe_psql('postgres', 'REINDEX INDEX v2c_fts');
+
 $node->stop;
 done_testing();

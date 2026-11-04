@@ -80,29 +80,6 @@ bm25_scan_readbuf(Relation index, BlockNumber blk)
 #define FTS_QUERY_MAX_PHRASE_TERMS 32
 #define BM25_PHRASE_POSBUF 16384
 
-/*
- * Does a dictionary entry starting at `de` fit within a page ending at `end`?
- *
- * Dictionary pages are read under only BUFFER_LOCK_SHARE.  A concurrent
- * merge/vacuum can free a segment's pages while a concurrent insert recycles
- * and overwrites them (pg_fts recycles freed pages with no deletion-xid gate),
- * so a scan that snapshotted the segment directory before that change can read
- * a recycled page mid-walk.  If de->termlen is then garbage, the entry stride
- * and the term-compare run past the page (out-of-bounds read -> SIGSEGV) and a
- * decoded df can be a multi-gigabyte "invalid memory alloc request size".  Every
- * reader dict walk must confirm the entry header AND its term bytes fit before
- * trusting de->termlen; on a miss it stops the page walk (a bounded wrong /
- * incomplete result), and the scan's generation re-check then detects the stale
- * read and restarts.  Same contract as the block-decode guards.
- */
-static inline bool
-bm25_dict_entry_fits(const BM25DictEntry *de, const char *end)
-{
-	const char *t = (const char *) de + offsetof(BM25DictEntry, term);
-
-	return t <= end && t + de->termlen <= end;
-}
-
 /* A scored heap tuple (score, or distance in an ordering scan). */
 typedef struct ScoredTid
 {
@@ -681,13 +658,13 @@ bm25_dict_seek(Relation index, const BM25SegMeta *seg,
 		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
 		bm25_chain_prefetch(index, iblk, next);
-		while (ptr + offsetof(BM25DictIndexEntry, term) <= end &&
+		while (bm25_fits(ptr, offsetof(BM25DictIndexEntry, term), end) &&
 			   n < (int) lengthof(offs))
 		{
 			BM25DictIndexEntry *ie = (BM25DictIndexEntry *) ptr;
 			Size		esz = MAXALIGN(offsetof(BM25DictIndexEntry, term) + ie->termlen);
 
-			if (ie->termlen > BLCKSZ || ptr + esz > end + MAXIMUM_ALIGNOF)
+			if (ie->termlen > BLCKSZ || !bm25_fits(ptr, esz, end))
 				break;			/* recycled/corrupt page: stop (bounded, as before) */
 			offs[n++] = (uint16) (ptr - (char *) page);
 			ptr += esz;
@@ -1738,7 +1715,7 @@ bm25_fuzzy_terms(Relation index, const BM25SegMeta *seg,
 				{
 					char	   *nptr = ptr + esize;
 
-					if (nptr < end)
+					if (nptr < end && bm25_dict_entry_fits((BM25DictEntry *) nptr, end))
 					{
 						BM25DictEntry *nde = (BM25DictEntry *) nptr;
 						int			cmplen = Min((int) nde->termlen, kl);
@@ -3456,8 +3433,8 @@ bm25_collect_pending_ex(Relation index, const BM25MetaPageData *meta,
 			 * scan's generation re-check then detects the stale read and
 			 * restarts.
 			 */
-			if ((char *) pi + sizeof(BM25PendingItem) > end ||
-				(char *) pi + MAXALIGN(sizeof(BM25PendingItem) + (Size) pi->doclen) > end)
+			if (!bm25_fits(pi, sizeof(BM25PendingItem), end) ||
+				!bm25_fits(pi, MAXALIGN(sizeof(BM25PendingItem) + (Size) pi->doclen), end))
 				break;
 			pdoc = (FtsDoc) ((char *) pi + sizeof(BM25PendingItem));
 
@@ -4272,6 +4249,9 @@ typedef struct WandCursor
 	uint64		docids[BM25_BLOCK_SIZE];	/* decoded docids of current block */
 	uint32		tfoff;			/* offset of tf column within blkbuf */
 	uint32		dloff;			/* offset of doclen column within blkbuf (v3 only) */
+	bool		blk_no_dl;		/* v3 cursor, but the current block has no doclen
+								 * column (merged by 1.5.0-1.5.2): |D| is the
+								 * block's min length (wand_inline_dl) */
 	bool		has_doclen_col;	/* v3 segment: doclen inline in the block (read at
 								 * dloff).  v4 segment: false -- doclen comes from
 								 * the doclen sidecar cursor. */
@@ -4363,6 +4343,7 @@ wand_load_block(WandCursor *c)
 	int			glen;
 	int			tflen;
 	int			i;
+	uint64		used2 = 0;
 
 	if (c->blkbuf)
 	{
@@ -4391,7 +4372,7 @@ wand_load_block(WandCursor *c)
 	p = (char *) page + c->curoff;
 
 	/* skip any empty tail; advance across pages until a real block or EOF */
-	while (!(p + sizeof(BM25BlockHdr) <= pend) ||
+	while (!(bm25_fits(p, sizeof(BM25BlockHdr), pend)) ||
 		   ((BM25BlockHdr *) p)->count == 0)
 	{
 		BlockNumber next = BM25PageGetOpaque(page)->nextblk;
@@ -4436,7 +4417,10 @@ wand_load_block(WandCursor *c)
 	 * scan's generation re-check catches the stale read and restarts).  Same
 	 * bounded-wrong-result-not-a-crash contract as the other decode guards.
 	 */
-	if (stream + (Size) bh->bytelen + (Size) bh->posbytelen > (const unsigned char *) pend)
+	if ((uint64) bh->bytelen + bh->posbytelen > (uint64) ((const unsigned char *) pend - stream) ||
+		!bm25_for_cols_fit(stream, bh->bytelen, cnt, 2, &used2) ||
+		(c->has_doclen_col && used2 < (uint64) bh->bytelen &&
+		 !bm25_for_cols_fit(stream, bh->bytelen, cnt, 3, NULL)))
 	{
 		UnlockReleaseBuffer(buf);
 		c->curblk = InvalidBlockNumber;
@@ -4465,6 +4449,17 @@ wand_load_block(WandCursor *c)
 	tflen = bm25_for_bytelen(c->blkbuf + glen, cnt);
 	c->tfoff = (uint32) glen;
 	c->dloff = (uint32) (glen + tflen);	/* v3: doclen column follows tf; unused for v4 */
+	/*
+	 * A cursor on a v3 segment (no sidecar) reads |D| from a third column.  A
+	 * block with only two -- a segment merged by 1.5.0-1.5.2, written without
+	 * the doclen column but with no sidecar either (CHANGELOG 1.5.3) -- has
+	 * none: reading it ran past the copied block.  bm25_decode_term detects
+	 * the column count per block; here a two-column block on a v3 cursor
+	 * scores every posting with the block's min length (wand_inline_dl).
+	 * Those scores are approximate; 1.5.3's advice to REINDEX such segments
+	 * stands.
+	 */
+	c->blk_no_dl = c->has_doclen_col && used2 == (uint64) bh->bytelen;
 
 	base = ((uint64) bh->first_docid_hi << 32) | bh->first_docid_lo;
 	for (i = 0; i < cnt; i++)
@@ -4484,7 +4479,7 @@ wand_load_block(WandCursor *c)
 	{
 		char	   *nextp = (char *) MAXALIGN((char *) (bh + 1) + bh->bytelen + bh->posbytelen);
 
-		if (nextp + sizeof(BM25BlockHdr) <= pend &&
+		if (bm25_fits(nextp, sizeof(BM25BlockHdr), pend) &&
 			c->nread + cnt < (int) c->df)
 			c->curoff = (uint32) (nextp - (char *) page);
 		else
@@ -4541,18 +4536,25 @@ wand_prime(WandCursor *c)
  * the bound too small (a quantized-down doc could out-score the bound and be
  * wrongly skipped -- WAND unsoundness that misses true top-k docs on multi-term
  * AND).  So for a sidecar (v4) cursor we bound with the quantized-floor of the
- * block min |D|, matching the smallest effective |D| scoring can produce. */
+ * block min |D|, matching the smallest effective |D| scoring can produce.
+ *
+ * The expression is wand_contrib_cur's, operation for operation, at (max tf,
+ * min |D|): the order a double expression is evaluated in changes its last
+ * bit, and this used idf * mtf * (k1 + 1) where the score uses
+ * (idf * (k1 + 1)) * tf, which put the bound one ulp BELOW the score of the
+ * block's own (max tf, min |D|) posting in ~0.02% of blocks (found by
+ * test/cbmc bound_harness; CHANGELOG Unreleased).  bestfirst_collect's bound
+ * already used the score's order. */
 static inline double
 wand_block_max_contrib(WandCursor *c)
 {
-	double		k1 = 1.2;
 	double		mtf = (double) c->blk_max_tf;
 	uint32		mindl_raw = c->blk_min_dl;
 	double		mindl = (double) (c->has_doclen_col
 									 ? mindl_raw			/* v3: exact inline doclen */
 									 : fts_byte_to_doclen(fts_doclen_to_byte(mindl_raw)));
 
-	return c->idf * mtf * (k1 + 1.0) / (mtf + c->k1_1mb + c->k1b_inv_avgdl * mindl);
+	return c->idf_k1p1 * mtf / (mtf + c->k1_1mb + c->k1b_inv_avgdl * mindl);
 }
 
 /* True if the cursor's CURRENT docid is tombstoned in the cursor's OWN
@@ -4608,6 +4610,16 @@ wand_next(WandCursor *c)
 	wand_skip_own_tombstoned(c);
 }
 
+/* |D| of posting i of a v3 cursor's current block, from its inline column.
+ * A block without one (wand_load_block's blk_no_dl) uses the header's min
+ * length: the length its block bound assumes (wand_block_max_contrib,
+ * bestfirst_collect), so every posting still scores at or below the bound. */
+static inline uint64
+wand_inline_dl(const WandCursor *c, int i)
+{
+	return c->blk_no_dl ? c->blk_min_dl : bm25_for_get(c->blkbuf + c->dloff, i);
+}
+
 /* Exact BM25 contribution of the current posting.  tf and |D| are extracted
  * from the block's still-packed FOR columns ON DEMAND (bm25_for_get) -- only
  * for postings actually scored, so pruned blocks never decode tf/dl. */
@@ -4616,7 +4628,7 @@ wand_contrib_cur(WandCursor *c)
 {
 	double		tf = (double) bm25_for_get(c->blkbuf + c->tfoff, c->cur);
 	double		dl = c->has_doclen_col
-		? (double) bm25_for_get(c->blkbuf + c->dloff, c->cur)	/* v3: inline */
+		? (double) wand_inline_dl(c, c->cur)	/* v3: inline */
 		: (double) bm25_doclen_cursor_lookup(&c->doclenc, c->docid);	/* v4: sidecar */
 	double		norm = tf + c->k1_1mb + c->k1b_inv_avgdl * dl;
 
@@ -4666,13 +4678,18 @@ wand_skip_blocks(WandCursor *c, uint64 target)
 		pend = bm25_page_data_end(page);
 		nextblk = BM25PageGetOpaque(page)->nextblk;
 		p = (char *) page + c->curoff;
-		while (p + sizeof(BM25BlockHdr) <= pend && c->nread < (int) c->df)
+		while (bm25_fits(p, sizeof(BM25BlockHdr), pend) && c->nread < (int) c->df)
 		{
 			BM25BlockHdr *bh = (BM25BlockHdr *) p;
 			char	   *nextp;
 
-			if (bh->count == 0)
+			if (bh->count == 0 ||
+				(uint64) bh->bytelen + bh->posbytelen >
+				(uint64) (pend - (char *) (bh + 1)))
 			{
+				/* empty tail, or a block running past the page (torn or
+				 * recycled): stop, and let wand_load_block's guard end the
+				 * chain.  Checked before nextp exists (AGENTS.md rule 16). */
 				stopped = true;
 				break;
 			}
@@ -4698,7 +4715,7 @@ wand_skip_blocks(WandCursor *c, uint64 target)
 			 * the final block in this term's posting list.  Its first_docid cannot
 			 * prove this block is below target. */
 			if (c->nread + (int) bh->count < (int) c->df &&
-				nextp + sizeof(BM25BlockHdr) <= pend)
+				bm25_fits(nextp, sizeof(BM25BlockHdr), pend))
 			{
 				BM25BlockHdr *nb = (BM25BlockHdr *) nextp;
 				uint64		nbfirst = ((uint64) nb->first_docid_hi << 32) | nb->first_docid_lo;
@@ -5755,7 +5772,7 @@ fts_search_dense1(WandCursor *c, int k, ScoredTid **out)
 			}
 			tf = (double) tfs[i];
 			dl = c->has_doclen_col
-				? (double) bm25_for_get(c->blkbuf + c->dloff, i)
+				? (double) wand_inline_dl(c, i)
 				: (double) bm25_doclen_cursor_lookup(&c->doclenc, docid);
 			score = c->idf_k1p1 * tf / (tf + c->k1_1mb + c->k1b_inv_avgdl * dl);
 			if (nheap == k && score < threshold)
@@ -5900,7 +5917,7 @@ bestfirst_collect(WandCursor *c, BestFirstBlock **out)
 		 * this loop against 10 ms for the dense path's windowed read-ahead) */
 		bm25_chain_prefetch(c->index, blk, next);
 		p = (char *) page + off;
-		while (p + sizeof(BM25BlockHdr) <= pend && nread < (int) c->df)
+		while (bm25_fits(p, sizeof(BM25BlockHdr), pend) && nread < (int) c->df)
 		{
 			BM25BlockHdr *bh = (BM25BlockHdr *) p;
 			const char *stream = (const char *) (bh + 1);
@@ -5910,7 +5927,7 @@ bestfirst_collect(WandCursor *c, BestFirstBlock **out)
 			if (bh->count == 0)
 				break;			/* empty tail of the page */
 			if (bh->count > (uint32) BM25_BLOCK_SIZE ||
-				stream + (Size) bh->bytelen + (Size) bh->posbytelen > pend ||
+				(uint64) bh->bytelen + bh->posbytelen > (uint64) (pend - stream) ||
 				n >= nblocks)
 			{
 				UnlockReleaseBuffer(buf);
@@ -6052,7 +6069,7 @@ fts_search_bestfirst_n(WandCursor *cs, int ncur, int k, ScoredTid **out)
 			}
 			tf = (double) tfs[i];
 			dl = c->has_doclen_col
-				? (double) bm25_for_get(c->blkbuf + c->dloff, i)
+				? (double) wand_inline_dl(c, i)
 				: (double) bm25_doclen_cursor_lookup(&c->doclenc, docid);
 			score = c->idf_k1p1 * tf / (tf + c->k1_1mb + c->k1b_inv_avgdl * dl);
 			if (nheap == k && score < threshold)
@@ -7336,8 +7353,9 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 			cursors[nactive].k1b_inv_avgdl = k1 * b / avgdl;
 			cursors[nactive].k1_1mb = k1 * (1.0 - b);
 			cursors[nactive].idf_k1p1 = idf * (k1 + 1.0);
+			/* the score's expression (wand_contrib_cur) at (max tf, |D| = 0) */
 			cursors[nactive].max_contrib =
-				idf * mtf * (k1 + 1.0) / (mtf + k1 * (1.0 - b));
+				cursors[nactive].idf_k1p1 * mtf / (mtf + cursors[nactive].k1_1mb);
 			cursors[nactive].tombs = &tombs;
 			cursors[nactive].segidx = s;
 			cursors[nactive].has_doclen_col =
@@ -8227,14 +8245,16 @@ fts_anomalous_docs(PG_FUNCTION_ARGS)
 				while (ptr < end)
 				{
 					BM25DictEntry *de = (BM25DictEntry *) ptr;
-					Size		esize = MAXALIGN(offsetof(BM25DictEntry, term) +
-												 de->termlen);
+					Size		esize;
 					char		key[BM25_ANOM_TERMKEYLEN];
-					int			klen = Min((int) de->termlen,
-										   BM25_ANOM_TERMKEYLEN - 1);
+					int			klen;
 					AnomTermDf *te;
 					bool		found;
 
+					if (!bm25_dict_entry_fits(de, end))
+						break;	/* recycled/corrupt page: stop (see bm25_dict_entry_fits) */
+					esize = MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
+					klen = Min((int) de->termlen, BM25_ANOM_TERMKEYLEN - 1);
 					memcpy(key, de->term, klen);
 					key[klen] = '\0';
 					te = (AnomTermDf *) hash_search(dfht, key, HASH_ENTER,
@@ -8288,11 +8308,9 @@ fts_anomalous_docs(PG_FUNCTION_ARGS)
 				while (ptr < end)
 				{
 					BM25DictEntry *de = (BM25DictEntry *) ptr;
-					Size		esize = MAXALIGN(offsetof(BM25DictEntry, term) +
-												 de->termlen);
+					Size		esize;
 					char		key[BM25_ANOM_TERMKEYLEN];
-					int			klen = Min((int) de->termlen,
-										   BM25_ANOM_TERMKEYLEN - 1);
+					int			klen;
 					AnomTermDf *te;
 					uint64		gdf;
 					double		idf;
@@ -8301,6 +8319,10 @@ fts_anomalous_docs(PG_FUNCTION_ARGS)
 								j;
 					sm_cursor_t tc = SM_CURSOR_INIT;	/* postings ascend: one forward cursor */
 
+					if (!bm25_dict_entry_fits(de, end))
+						break;	/* recycled/corrupt page: stop (see bm25_dict_entry_fits) */
+					esize = MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
+					klen = Min((int) de->termlen, BM25_ANOM_TERMKEYLEN - 1);
 					memcpy(key, de->term, klen);
 					key[klen] = '\0';
 					te = (AnomTermDf *) hash_search(dfht, key, HASH_FIND, NULL);

@@ -396,9 +396,9 @@ bm25_trgm_candidates(Relation index, BlockNumber trgmstart,
 			LockBuffer(buf, BUFFER_LOCK_SHARE);
 			page = BufferGetPage(buf);
 			ptr = (char *) PageGetContents(page);
-			end = (char *) page + ((PageHeader) page)->pd_lower;
+			end = bm25_page_data_end(page);
 			next = BM25PageGetOpaque(page)->nextblk;
-			while (ptr < end)
+			while (bm25_fits(ptr, sizeof(BM25TrgmEntry), end))
 			{
 				BM25TrgmEntry *te = (BM25TrgmEntry *) ptr;
 
@@ -481,12 +481,16 @@ bm25_trgm_candidates(Relation index, BlockNumber trgmstart,
 		LockBuffer(buf, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buf);
 		ptr = (char *) PageGetContents(page);
-		end = (char *) page + ((PageHeader) page)->pd_lower;
+		end = bm25_page_data_end(page);
 		next = BM25PageGetOpaque(page)->nextblk;
 		while (ptr < end && oi < nords)
 		{
 			BM25DictEntry *de = (BM25DictEntry *) ptr;
-			Size		esize = MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
+			Size		esize;
+
+			if (!bm25_dict_entry_fits(de, end))
+				break;			/* recycled/corrupt page: stop (see bm25_dict_entry_fits) */
+			esize = MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
 
 			if (ordinal == (uint32) ords[oi])
 			{

@@ -235,6 +235,41 @@ bm25_for_bytelen(const unsigned char *buf, int n)
 	return (width == 0) ? 1 : 1 + (n * width + 7) / 8;
 }
 
+/*
+ * Do `ncols` consecutive FOR columns of n values each fit in the first `len`
+ * bytes of buf?  Each column's size comes from its own width byte, which is
+ * on-disk data: a reader that has checked only a block's declared length must
+ * call this before bm25_for_unpack / bm25_for_get, or a corrupt width byte
+ * reads past the block (found by test/cbmc ondisk_harness, CHANGELOG
+ * Unreleased).  A width above 64 is never written, so it is rejected.  Every
+ * width byte is read only after the bytes before it are proved to fit.  Sets
+ * *used (if given) to the bytes the columns occupy.
+ */
+static inline int
+bm25_for_cols_fit(const unsigned char *buf, uint64 len, int n, int ncols,
+				  uint64 *used)
+{
+	uint64		off = 0;
+	int			c;
+
+	for (c = 0; c < ncols; c++)
+	{
+		unsigned int w;
+
+		if (off >= len)
+			return 0;			/* no room for this column's width byte */
+		w = buf[off];
+		if (w > 64)
+			return 0;
+		off += (w == 0) ? 1 : 1 + ((uint64) n * w + 7) / 8;
+		if (off > len)
+			return 0;
+	}
+	if (used)
+		*used = off;
+	return 1;
+}
+
 /* Random-access one value at index i from a FOR column (buf[0] = width).
  * O(width), no full-column unpack -- lets the WAND hot path decode a posting's
  * tf/doclen only when it is actually scored, skipping pruned blocks entirely. */
