@@ -27,6 +27,19 @@ All notable changes to pg_fts are documented here.
 
 ### Changed
 
+- **sparsemap 5.8.2 -> 5.8.4** (`vendor/sm.c`, `vendor/sm.h`), a drop-in source swap
+  (no API, ABI or wire-format change; serialized maps are byte-identical).  The vendored
+  copy already carried the 5.8.3 `sm_validate` / `sm_open` bounds fixes and the 5.8.4
+  cursor gap resume (ROADMAP I25); what is new here: `sm_add_range` no longer reads 8
+  bytes past its scratch buffer (5.8.4), `sm_union` / `sm_intersection` emit
+  chunk-aligned RLE and no longer re-emit a sparse chunk's tail (5.8.3), and small-set
+  maps and the SIMD kernels are alignment-safe on a misaligned buffer (5.8.3).  pg_fts
+  calls neither set operation nor `sm_add_range`.  Its bulk insert (`sm_add_many_grow`)
+  reaches the coalescing code the 5.8.4 read fix is in, but builds into a buffer with
+  slack, and the over-read needed an exactly full one, so no pg_fts effect is known.  One
+  unused helper the old copy carried is gone.  The `__pg_bm25_` symbol prefix is
+  unchanged.
+
 - **Tombstoned segments: a per-backend memo of blob validation and seek checkpoints**
   (ROADMAP I25).  After 1.15.2, most of a ranked top-10 on a segment with 23k scattered
   tombstones was per-scan setup: validating the tombstone blob and building its

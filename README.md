@@ -539,8 +539,8 @@ Query execution
 Vendored dependencies
 ---------------------
 
-  * sparsemap v5.3.0 (contrib/pg_fts/vendor/), a compressed-bitmap library used
-    for the trigram posting sets and per-segment livedocs tombstones.  All its
+  * sparsemap 5.8.4 (vendor/), a compressed-bitmap library used for the trigram
+    posting sets and per-segment livedocs tombstones.  All its
     public symbols are namespaced to __pg_bm25_* (via SPARSEMAP_PREFIX in
     vendor/sm.c and the pg_fts_sm.h wrapper), so a second copy loaded by another
     extension in the same backend cannot cause dynamic-linker symbol collisions.
