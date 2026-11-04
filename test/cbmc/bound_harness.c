@@ -49,7 +49,7 @@
  *	the quantised one on a v4 segment (the 1.9.x WAND unsoundness that missed
  *	true top-k on multi-term AND): B1 must fail.  -DTEETH_BMW_ORDER restores
  *	the 0.1.0..1.15.2 BMW expression, idf * mtf * (k1 + 1): B2 must fail --
- *	this harness found that one ulp (CHANGELOG Unreleased).
+ *	this harness found that one ulp (CHANGELOG 1.16.0).
  *
  * IDENTIFICATION
  *	  test/cbmc/bound_harness.c

@@ -178,7 +178,7 @@ bm25_fits(const void *p, Size n, const void *end)
  * Compared as integers: forming `t + termlen` from an on-disk termlen is
  * itself undefined behaviour once it passes the page (AGENTS.md rule 16;
  * test/cbmc ondisk_harness).  Every dictionary walk in pg_fts_am.c and the
- * files it #includes calls this (CHANGELOG Unreleased: four walks did not).
+ * files it #includes calls this (CHANGELOG 1.16.0: four walks did not).
  */
 static inline bool
 bm25_dict_entry_fits(const BM25DictEntry *de, const char *end)
@@ -1090,7 +1090,7 @@ bm25_decode_term(Relation index, BlockNumber firstblk, uint32 firstoff,
 				 * width byte only once the bytes before it are inside bytelen:
 				 * the open-coded check it replaces read the tf width byte one
 				 * past the block when the docid column filled bytelen (test/cbmc
-				 * ondisk_harness, CHANGELOG Unreleased).
+				 * ondisk_harness, CHANGELOG 1.16.0).
 				 */
 				if (!bm25_for_cols_fit(stream, bh->bytelen, cnt, 2, &used2))
 					has_doclen_col = false;
@@ -1845,7 +1845,7 @@ typedef struct BM25DoclenBlockHdr
  * before `end`, and does its docid-gap column fit its declared gapbytes?  The
  * readers unpack the gap column with bm25_for_unpack, whose length comes from
  * the column's own width byte, not from gapbytes: a corrupt width read past the
- * block (test/cbmc ondisk_harness, CHANGELOG Unreleased).  Lengths are
+ * block (test/cbmc ondisk_harness, CHANGELOG 1.16.0).  Lengths are
  * compared as integers, never as pointers formed from them (AGENTS.md rule 16).
  */
 static inline bool

@@ -359,7 +359,7 @@ is($node->safe_psql('postgres',
 
 # ---------------------------------------------------------------------------
 # A posting block whose FOR width byte is corrupt while its count and lengths
-# are intact (CHANGELOG Unreleased, found by test/cbmc ondisk_harness).  The
+# are intact (CHANGELOG 1.16.0, found by test/cbmc ondisk_harness).  The
 # ranked loader (wand_load_block) checked only that the block fits the page and
 # then decoded columns sized by their width bytes.  Width 9 on a full block at
 # width 8 still fits the docid column inside bytelen, so the old loader decoded

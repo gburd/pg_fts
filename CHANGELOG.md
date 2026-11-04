@@ -2,7 +2,16 @@
 
 All notable changes to pg_fts are documented here.
 
-## Unreleased
+## 1.16.0 - 2026-11-04
+
+A minor release: correctness fixes on the on-page decode path, found by the first
+formal proofs of pg_fts's code (CBMC, `test/cbmc`), and the two changes held back from
+1.15.2 because they change execution (the collect-path skip for an operand of
+plain-term readings, Codeberg #6) and maintenance (`fts_vacuum` now rewrites a single
+packed segment that carries tombstones).  Also a per-backend memo that takes most of
+the per-scan cost out of ranked queries on tombstoned segments, and sparsemap 5.8.4.
+No SQL object changes, no on-disk format change, no REINDEX (`ALTER EXTENSION pg_fts
+UPDATE TO '1.16.0'`).
 
 ### Fixed
 
@@ -40,12 +49,33 @@ All notable changes to pg_fts are documented here.
   Also: the trigram directory walks size each entry and the trigram query walk validates
   `pd_lower`; the fuzzy dead-prefix lookahead checks the next dictionary entry fits before
   comparing it.
+
+- **`fts_vacuum` now drops the tombstones of an index that is one packed segment**
+  (ROADMAP I25; the 1.15.2 known issue, and the 2026-11-02 report's steps E and F).  It
+  treated "one front-packed segment" as fully compacted, so after a bulk DELETE + VACUUM
+  it returned false, rewrote nothing, and the tombstones stayed until a REINDEX.  Under
+  `fts_vacuum`'s AccessExclusiveLock, a segment that carries tombstones now gets one
+  rewrite, which drops every tombstoned document, and `fts_vacuum` returns true.
+  VACUUM's own cleanup does not do this: it would rewrite a whole segment for a few
+  deletes on every cycle.  `fts_merge` is unchanged.  Measured on c6id.metal, PG 18.6:
+  - the report's repro (1.88M rows, 23,313 moves; this run also had the memo below):
+    `fts_vacuum` returned t in 69 s, against 136 s for REINDEX; the index went from 735
+    to 728 MB; top-200 21.7 -> 13.9 ms (fresh 13.9), `bestfirst = off` 9.6 -> 2.0 ms
+    (2.1);
+  - the churn harness (1.9M rows, 23,750 moves): `fts_vacuum` 88.6 s, against 183.7 s
+    for REINDEX; top-200 63.8 -> 53.6 ms (fresh 54.1), top-10 3.54 -> 0.34 ms (0.34).
+
+  `ranked_tombstones` checks that it returns t on such an index and f on a second call
+  (f on 1.15.2), and that the ranked results match the docid-order walk with no deleted
+  row ranked.
+
 - **Page guards no longer form a pointer past the page from an on-disk integer.**
   `stream + bytelen + posbytelen > pend`, `t + termlen <= end` and
   `p + sizeof(header) <= end` after a MAXALIGN step are undefined behaviour once the
   integer is large, even when the comparison would reject it (AGENTS.md rule 16).  They
   now compare lengths (`bm25_fits`, `bm25_dict_entry_fits`).  Found by CBMC's
   pointer-overflow check; no misbehaviour was observed.
+
 - **The block-max WAND bound could be one ulp below the score it bounds** (every
   release).  `wand_block_max_contrib` computed `idf * mtf * (k1 + 1)` where the score is
   `(idf * (k1 + 1)) * tf`; floating-point multiplication is not associative, so for a
@@ -70,6 +100,7 @@ All notable changes to pg_fts are documented here.
   read cursor never changes an answer; the shared-doclen slot protocol has no use after
   free, double unpin or leak.  `check_verbatim.py` fails the run when a copied function
   drifts from the source.
+
 - `t/003_corruption.pl`: the corrupt-width-byte case above (fails on 1.15.2), and a
   two-column segment without a sidecar (the 1.5.0-1.5.2 merge layout): ranked finds
   every match.
@@ -88,27 +119,6 @@ All notable changes to pg_fts are documented here.
   slack, and the over-read needed an exactly full one, so no pg_fts effect is known.  One
   unused helper the old copy carried is gone.  The `__pg_bm25_` symbol prefix is
   unchanged.
-
-- **`fts_vacuum` now drops the tombstones of an index that is one packed segment**
-  (ROADMAP I25; the 1.15.2 known issue, and the 2026-11-02 report's steps E and F).  It
-  treated "one front-packed segment" as fully compacted, so after a bulk DELETE + VACUUM
-  it returned false, rewrote nothing, and the tombstones stayed until a REINDEX.  Under
-  `fts_vacuum`'s AccessExclusiveLock, a segment that carries tombstones now gets one
-  rewrite, which drops every tombstoned document, and `fts_vacuum` returns true.
-  VACUUM's own cleanup does not do this: it would rewrite a whole segment for a few
-  deletes on every cycle.  `fts_merge` is unchanged.  Measured on c6id.metal, PG 18.6:
-  - the report's repro (1.88M rows, 23,313 moves; this run also had the memo below):
-    `fts_vacuum` returned t in 69 s, against 136 s for REINDEX; the index went from 735
-    to 728 MB; top-200 21.7 -> 13.9 ms (fresh 13.9), `bestfirst = off` 9.6 -> 2.0 ms
-    (2.1);
-  - the churn harness (1.9M rows, 23,750 moves): `fts_vacuum` 88.6 s, against 183.7 s
-    for REINDEX; top-200 63.8 -> 53.6 ms (fresh 54.1), top-10 3.54 -> 0.34 ms (0.34).
-
-  `ranked_tombstones` checks that it returns t on such an index and f on a second call
-  (f on 1.15.2), and that the ranked results match the docid-order walk with no deleted
-  row ranked.
-
-### Changed
 
 - **Tombstoned segments: a per-backend memo of blob validation and seek checkpoints**
   (ROADMAP I25).  After 1.15.2, most of a ranked top-10 on a segment with 23k scattered

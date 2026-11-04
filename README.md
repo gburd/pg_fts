@@ -567,8 +567,14 @@ values 1.15.0 computed from long markup after installing 1.15.1.
 
 1.15.2 needs nothing after the upgrade.  Ranked queries on an index whose single
 packed segment carries many scattered tombstones (a bulk DELETE, then VACUUM) are
-fast again without a REINDEX; a REINDEX still drops the tombstones, which
-`fts_vacuum` does not do for a single packed segment (CHANGELOG 1.15.2).
+fast again without a REINDEX (CHANGELOG 1.15.2).
+
+1.16.0 needs nothing after the upgrade.  `fts_vacuum` now drops the tombstones of a
+single packed segment too (it returns true and rewrites the segment under its
+AccessExclusiveLock), so a REINDEX is no longer the only way to reclaim them.  An
+index with segments merged by 1.5.0-1.5.2 that was never reindexed (1.5.3 asked for
+it) now ranks them without reading past a block, but their length normalisation is
+still approximate: REINDEX them (CHANGELOG 1.16.0).
 
 Backward compatibility
 -----------------------

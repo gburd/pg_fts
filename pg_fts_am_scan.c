@@ -233,7 +233,7 @@ typedef struct BM25Tombstones
 
 /*
  * Per-backend memo of tombstone work that depends only on the stored blob
- * (CHANGELOG Unreleased, ROADMAP I25): whether it passed sm_validate, and its
+ * (CHANGELOG 1.16.0, ROADMAP I25): whether it passed sm_validate, and its
  * checkpoints (bm25_tomb_seek).  A segment's blob is immutable while the
  * metapage generation stands -- bulkdelete writes a new blob and bumps the
  * generation, a merge frees the segment and bumps it -- so (relfilenode,
@@ -1337,7 +1337,7 @@ query_and_operands(FtsQuery q, int *ops, int *start, bool *pos)
 
 /*
  * Does an operand of the root AND chain that every match must hold have no
- * posting in this segment (ROADMAP I19b, CHANGELOG 1.15.0 and Unreleased)?
+ * posting in this segment (ROADMAP I19b, CHANGELOG 1.15.0 and 1.16.0)?
  * Then the segment contributes nothing, and bm25_eval_query skips
  * building the other operands' sets -- `zzzq & (apple | ban:*)` built both OR
  * operands in full before meeting the empty `zzzq`.  Only plain terms are
@@ -4543,7 +4543,7 @@ wand_prime(WandCursor *c)
  * bit, and this used idf * mtf * (k1 + 1) where the score uses
  * (idf * (k1 + 1)) * tf, which put the bound one ulp BELOW the score of the
  * block's own (max tf, min |D|) posting in ~0.02% of blocks (found by
- * test/cbmc bound_harness; CHANGELOG Unreleased).  bestfirst_collect's bound
+ * test/cbmc bound_harness; CHANGELOG 1.16.0).  bestfirst_collect's bound
  * already used the score's order. */
 static inline double
 wand_block_max_contrib(WandCursor *c)

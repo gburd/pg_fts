@@ -59,7 +59,7 @@ that run to FAIL.  Most of the mutants are bugs pg_fts actually shipped.
 ## Findings
 
 The proofs found these in shipped code; each is fixed in the same change and listed in
-the CHANGELOG under Unreleased:
+the CHANGELOG under 1.16.0:
 
 - `wand_load_block`, the loader under every ranked traversal, decoded FOR columns whose
   sizes come from on-page width bytes without checking them against the block's length.

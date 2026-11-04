@@ -241,7 +241,7 @@ bm25_for_bytelen(const unsigned char *buf, int n)
  * on-disk data: a reader that has checked only a block's declared length must
  * call this before bm25_for_unpack / bm25_for_get, or a corrupt width byte
  * reads past the block (found by test/cbmc ondisk_harness, CHANGELOG
- * Unreleased).  A width above 64 is never written, so it is rejected.  Every
+ * 1.16.0).  A width above 64 is never written, so it is rejected.  Every
  * width byte is read only after the bytes before it are proved to fit.  Sets
  * *used (if given) to the bytes the columns occupy.
  */

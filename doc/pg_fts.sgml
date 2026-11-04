@@ -324,7 +324,10 @@ SELECT id FROM docs
       contents (for example after a bulk build or heavy update churn), without
       a <command>REINDEX</command>.  Returns whether any work was done.  A
       single call reclaims most of the space; a second call converges to the
-      fully compacted size.  Runs automatically during <command>VACUUM</command>
+      fully compacted size.  An index that is already one compacted segment is
+      still rewritten when that segment carries deletes (tombstones), which drops
+      them and restores the speed of ranked queries (1.16.0); before, only a
+      <command>REINDEX</command> did that.  Runs automatically during <command>VACUUM</command>
       when the index is substantially bloated.  Takes
       <literal>AccessExclusiveLock</literal> on the index (like
       <command>REINDEX</command>), requires ownership of the index, and errors
