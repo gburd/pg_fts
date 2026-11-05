@@ -1,0 +1,21 @@
+cbmc 6.6.0 (cbmc-6.6.0)
+ok    smcursor_layouts.h matches what vendor/sm.c writes
+ok    sm_ascending layout=0              PASS as expected (96s)
+ok    sm_any_cursor layout=0             PASS as expected (19s)
+ok    sm_stale_hint layout=0             PASS as expected (15s)
+ok    sm_stale_offset layout=0           PASS as expected (31s)
+ok    sm_ascending layout=1              PASS as expected (83s)
+ok    sm_any_cursor layout=1             PASS as expected (17s)
+ok    sm_stale_hint layout=1             PASS as expected (16s)
+ok    sm_stale_offset layout=1           PASS as expected (31s)
+ok    sm_ascending layout=2              PASS as expected (75s)
+ok    sm_any_cursor layout=2             PASS as expected (16s)
+ok    sm_stale_hint layout=2             PASS as expected (15s)
+ok    sm_stale_offset layout=2           PASS as expected (28s)
+ok    sm_ascending layout=3              PASS as expected (3s)
+ok    sm_any_cursor layout=3             PASS as expected (4s)
+ok    sm_stale_hint layout=3             PASS as expected (2s)
+ok    sm_stale_offset layout=3           PASS as expected (28s)
+ok    sm_stale_offset TEETH (no start-word check) FAIL as expected (54s)
+        caught: [__sm_get_chunk_offset.overflow.1] line 2346 arithmetic overflow on signed - in p - base: FAILURE
+        caught: [__sm_get_chunk_offset.overflow.2] line 2351 arithmetic overflow on signed - in p - base: FAILURE
