@@ -187,18 +187,19 @@ if want smcursor_harness.c; then
 	fi
 fi
 for L in 0 1 2 3; do
-	expect PASS "sm_ascending layout=$L"  smcursor_harness.c harness_ascending  -DLAYOUT=$L $SMU
-	expect PASS "sm_any_cursor layout=$L" smcursor_harness.c harness_any_cursor -DLAYOUT=$L $SMU
+	expect PASS "sm_ascending layout=$L"   smcursor_harness.c harness_ascending    -DLAYOUT=$L $SMU
+	expect PASS "sm_any_cursor layout=$L"  smcursor_harness.c harness_any_cursor   -DLAYOUT=$L $SMU
+	expect PASS "sm_stale_hint layout=$L"  smcursor_harness.c harness_stale_hint   -DLAYOUT=$L $SMU
+	expect PASS "sm_stale_offset layout=$L" smcursor_harness.c harness_stale_offset -DLAYOUT=$L $SMU
 done
+# A stale offset only fools the cursor when the word there is not checked:
+# mutate_sm.py drops the start-word check, and C4 must then fail.  (C3x, any
+# prev_offset, failed on 5.8.4 -- ROADMAP I29 -- and verifies from 5.8.5.)
 if want smcursor_harness.c; then
 	mut=$(mktemp -d)/sm_mut.c
 	python3 mutate_sm.py "$mut" || FAIL=1
-	expect FAIL "sm_any_cursor TEETH (no neighbour check)" smcursor_harness.c harness_any_cursor -DLAYOUT=0 -DSM_SOURCE="\"$mut\"" $SMU
+	expect FAIL "sm_stale_offset TEETH (no start-word check)" smcursor_harness.c harness_stale_offset -DLAYOUT=1 -DSM_SOURCE="\"$mut\"" $SMU
 fi
-# A finding in sparsemap, not a pg_fts gate: a stale prev_offset hint (not a
-# chunk start) fools the gap resume.  Expected to FAIL until sparsemap
-# validates the hint; then flip this to PASS.
-expect FAIL "sm FINDING: stale prev_offset hint (sparsemap)" smcursor_harness.c harness_stale_hint -DLAYOUT=1 $SMU
 
 # 7. shared doclen slot protocol (model of pg_fts_shdoclen.c's transitions):
 #    every interleaving of two scans and a retiring merge.  Concurrent, but no

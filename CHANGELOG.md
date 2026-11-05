@@ -2,6 +2,45 @@
 
 All notable changes to pg_fts are documented here.
 
+## Unreleased
+
+### Changed
+
+- **sparsemap 5.8.4 -> 5.8.5** (`vendor/sm.c`, `vendor/sm.h`): the sparsemap
+  maintainers' fix for the read-cursor defect pg_fts reported (ROADMAP I29), a drop-in
+  source swap (no API, ABI or wire-format change; `sm_cursor_t` is still 24 bytes).  In
+  5.8.4 a lookup in the gap before the cursor's cached chunk resumed at the cursor's
+  `prev_offset` hint, which nothing verified was a chunk start; a hint on a payload word
+  started the walk mid-chunk and answered wrong.  5.8.5 never starts a walk at the hint:
+  a gap lookup caches the left neighbour the walk itself verified, so the next ascending
+  lookup resumes there.  `sm_next_member` now checks its cursor's start word too (it
+  resumed unchecked since at least 5.7.0).  pg_fts could reach neither: its maps are
+  read-only while a cursor is live, and its bulk delete resets its cursor after the last
+  insert.  Verified here (`bench/RESULTS_SM585_2026-11-05.md`):
+  - the reproducer and pg_fts's random reachability harnesses report no wrong answer on
+    5.8.5 (the reproducer fails on 5.8.4);
+  - `sm_next_member` through mispositioned cursors: 1,614,722 wrong of 2,307,793 on
+    5.8.4, 1,170 on 5.8.5, every one a cursor whose offset holds a word equal to its
+    recorded start (the case sm.h now documents as undetectable without an ABI change);
+  - CBMC (`test/cbmc/smcursor_harness.c`, all four layouts): C1-C3, C3x (any
+    `prev_offset`, which failed on 5.8.4) and a new stale-offset property C4 verify; C4
+    fails on a copy without the start-word check;
+  - ranked queries at the scattered-tombstone state (1.9M rows, 23.7k tombstones on one
+    packed segment, PG 18.6, c6id.4xlarge, median of 11 per sample, 12 interleaved samples
+    per build, an A/A pair): identical results.  The top-10 is 1.2% slower (1.719 ->
+    1.739 ms; 5.8.5 slower in all 6 rounds, A/A +0.06%).  The cause is not known: in
+    isolation 5.8.5's ascending gap lookups are faster than 5.8.4's (28.9 vs 31.2 ns) and
+    member lookups are equal (54.4 vs 54.5 ns), so it is not more cursor steps; code
+    layout in the new `.so` is a plausible cause and is unmeasured.  The top-200 queries
+    and the first query of a session are unchanged (A/A 0.1-0.7%).
+
+  | ranked query | 5.8.4 ms | 5.8.5 ms | diff | A/A |
+  |---|---|---|---|---|
+  | `patch`, top-10 | 1.719 | 1.739 | +1.16% | +0.06% |
+  | `vacuum`, top-200 | 10.578 | 10.634 | +0.54% | +0.14% |
+  | `remove`, top-200 | 51.736 | 51.725 | -0.02% | +0.11% |
+  | `patch`, top-10, first query of a session | 5.849 | 5.835 | -0.23% | -0.68% |
+
 ## 1.16.0 - 2026-11-04
 
 A minor release: correctness fixes on the on-page decode path, found by the first

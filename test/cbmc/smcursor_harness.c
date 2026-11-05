@@ -4,9 +4,9 @@
  *		CBMC proof that a sparsemap read cursor never changes an answer:
  *		sm_contains(map, idx, &cursor) == sm_contains(map, idx, NULL) for
  *		any map, any index and ANY prior cursor state the scan can leave --
- *		including the left-neighbour resume pg_fts contributed to sparsemap
- *		5.8.4 (vendor/sm.c __sm_get_chunk_offset; ROADMAP I25), which the
- *		tombstone test on every ranked path depends on.
+ *		including the gap-lookup resume the tombstone test on every ranked
+ *		path depends on (pg_fts ROADMAP I25; sparsemap 5.8.4, redesigned in
+ *		5.8.5 after ROADMAP I29).
  *
  *	The code under proof is vendor/sm.c itself, #included unprefixed as
  *	test/fuzz/fuzz_smblob.c does.  Maps are concrete layouts built by the
@@ -24,13 +24,14 @@
  *	  C3  any cursor state the API can leave on the same unmodified map (a
  *	      lookup's cursor with its left-neighbour hint set to any chunk of
  *	      the map, or none) agrees on every index.
- *	  C3x (a finding, expected to FAIL; see harness_stale_hint) a hint that
- *	      is not a chunk start can give a wrong answer.
+ *	  C3x any prev_offset value, chunk start or not, agrees (failed on
+ *	      5.8.4: ROADMAP I29; fixed in sparsemap 5.8.5).
+ *	  C4  a stale cursor -- a real chunk's start_idx at any 8-byte offset --
+ *	      agrees (the start-word check; harness_stale_offset).
  *
- *	TEETH: -DTEETH_NO_NEIGHBOUR_CHECK removes the "it really is the
- *	neighbour" condition from the gap resume (resume from prev_offset
- *	whenever idx precedes the cached chunk): C2/C3 must fail.  The mutant is
- *	applied to a copy of vendor/sm.c by run.sh, never to the vendored file.
+ *	TEETH: mutate_sm.py writes a copy of vendor/sm.c without the cursor's
+ *	start-word check (resume at cur->offset whatever is stored there): C4
+ *	must fail.  The vendored file is never modified.
  *
  * IDENTIFICATION
  *	  test/cbmc/smcursor_harness.c
@@ -203,21 +204,12 @@ harness_any_cursor(void)		/* C3 */
 }
 
 /*
- * C3x, a FINDING, not a gate (run.sh expects it to fail): with a hint that is
- * NOT a chunk start, the 5.8.4 gap resume can start its walk mid-chunk and
- * return a wrong answer (layout 1: hint 16, lookup 32773 -> false, truly
- * true; replayed natively).  The neighbour check ("ends exactly where the
- * cached chunk begins") does not establish that the hint is a chunk.  The
- * public API does leave such hints -- in 8% of random add/remove-without-
- * resetting trials the cached chunk still validated while its hint was no
- * longer a chunk start -- but 12 million lookups after them gave no wrong
- * answer, so reaching one needs bytes the random trials did not produce.
- * The cursor contract (sm.h) makes a cursor kept across a mutation
- * undefined behaviour; __sm_get_chunk_offset's comment says it self-
- * validates against that case, which this shows is partial.  pg_fts never
- * keeps a cursor across a mutation of its map (tombstone maps are read-only
- * during a scan; bm25_bulkdelete resets its cursor after the last
- * sm_add_many_grow), so this does not reach pg_fts.
+ * C3x: ANY prev_offset value, chunk start or not.  5.8.4's gap resume trusted
+ * a hint that only "ended exactly where the cached chunk begins", and with a
+ * hint that was not a chunk start it walked from mid-chunk and answered
+ * wrong (layout 1: hint 16, lookup 32773 -> false, truly true; ROADMAP I29).
+ * sparsemap 5.8.5 never starts a walk at the hint, so this now verifies; it
+ * was a finding (expected to FAIL) until then.
  */
 void
 harness_stale_hint(void)
@@ -231,6 +223,33 @@ harness_stale_hint(void)
 	cur.prev_offset = (size_t) nondet_u64();
 	__CPROVER_assert(sm_contains(m, x, &cur) == sm_contains(m, x, NULL), "C3x: any prev_offset value");
 }
+/*
+ * C4, the teeth for 5.8.5's design (from the sparsemap maintainers): a stale
+ * cursor whose start_idx is the real start of some chunk of the map but
+ * whose offset is any 8-byte position (the layout moved under it).  The
+ * start-word check in __sm_get_chunk_offset (the word at offset must be
+ * start_idx) is what keeps such a cursor from walking mid-chunk, so this
+ * verifies on vendor/sm.c and must FAIL on mutate_sm.py's copy, which drops
+ * that check.  (A payload word that EQUALS the recorded start can still fool
+ * a stale cursor -- sm.h documents that; the layouts here have no such word.)
+ */
+void
+harness_stale_offset(void)
+{
+	sm_t	   *m = layout_map();
+	sm_cursor_t cur = SM_CURSOR_INIT;
+	uint64_t	x = nondet_index();
+	size_t		off = (size_t) nondet_u64(),
+				real = nondet_chunk_offset(m);
+
+	__CPROVER_assume(real != SIZE_MAX);
+	__CPROVER_assume(off % 8 == 0 && off + 8 <= sm_get_size(m) - SM_SIZEOF_OVERHEAD);
+	cur.offset = off;
+	cur.start_idx = __sm_load_idx(__sm_get_chunk_data(m, real));
+	cur.prev_offset = (size_t) nondet_u64();
+	__CPROVER_assert(sm_contains(m, x, &cur) == sm_contains(m, x, NULL), "C4: stale offset, real start_idx");
+}
+
 #endif
 
 #ifdef GEN_LAYOUT

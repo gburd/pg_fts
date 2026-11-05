@@ -1,0 +1,46 @@
+SMAB_DONE
+state: nseg=1
+so md5: v160 1f57618b v160b bd28c7b4 sm585 e3e1cfe5; sm in sm585 src: SM_VERSION_STRING "5.8.5", in v160 src: SM_VERSION_STRING "5.8.4"
+CORR v160 [patch 10] e4205d10b688a792c88aa8bb5200261b
+CORR v160 [vacuum 200] 42e09be844c7b3e14e6f1dbd84fc083f
+CORR v160 [remove 200] b0cfa7167fc46daa2ac8cf31ec81e9ca
+CORR sm585 [patch 10] e4205d10b688a792c88aa8bb5200261b
+CORR sm585 [vacuum 200] 42e09be844c7b3e14e6f1dbd84fc083f
+CORR sm585 [remove 200] b0cfa7167fc46daa2ac8cf31ec81e9ca
+T round=1 so=v160 patch10=1.728 vacuum200=10.567 remove200=51.842 first_patch10=5.766
+T round=1 so=sm585 patch10=1.749 vacuum200=10.635 remove200=51.931 first_patch10=5.874
+T round=1 so=v160b patch10=1.737 vacuum200=10.601 remove200=51.746 first_patch10=5.882
+T round=1 so=v160b patch10=1.732 vacuum200=10.602 remove200=51.825 first_patch10=5.913
+T round=1 so=sm585 patch10=1.737 vacuum200=10.589 remove200=51.673 first_patch10=5.850
+T round=1 so=v160 patch10=1.734 vacuum200=10.577 remove200=51.804 first_patch10=5.888
+T round=2 so=v160b patch10=1.731 vacuum200=10.574 remove200=51.677 first_patch10=5.838
+T round=2 so=sm585 patch10=1.737 vacuum200=10.637 remove200=51.728 first_patch10=5.792
+T round=2 so=v160 patch10=1.714 vacuum200=10.549 remove200=51.737 first_patch10=5.759
+T round=2 so=v160 patch10=1.726 vacuum200=10.589 remove200=51.736 first_patch10=5.857
+T round=2 so=sm585 patch10=1.740 vacuum200=10.666 remove200=51.723 first_patch10=5.823
+T round=2 so=v160b patch10=1.702 vacuum200=10.603 remove200=51.667 first_patch10=5.705
+T round=3 so=v160 patch10=1.708 vacuum200=10.608 remove200=51.695 first_patch10=5.873
+T round=3 so=sm585 patch10=1.730 vacuum200=10.672 remove200=51.962 first_patch10=5.870
+T round=3 so=v160b patch10=1.720 vacuum200=10.608 remove200=51.696 first_patch10=5.801
+T round=3 so=v160b patch10=1.716 vacuum200=10.580 remove200=51.786 first_patch10=5.778
+T round=3 so=sm585 patch10=1.739 vacuum200=10.643 remove200=51.656 first_patch10=5.841
+T round=3 so=v160 patch10=1.706 vacuum200=10.543 remove200=51.608 first_patch10=5.806
+T round=4 so=v160b patch10=1.709 vacuum200=10.585 remove200=51.835 first_patch10=5.896
+T round=4 so=sm585 patch10=1.739 vacuum200=10.560 remove200=51.616 first_patch10=6.029
+T round=4 so=v160 patch10=1.714 vacuum200=10.577 remove200=51.695 first_patch10=5.891
+T round=4 so=v160 patch10=1.716 vacuum200=10.574 remove200=51.697 first_patch10=5.896
+T round=4 so=sm585 patch10=1.742 vacuum200=10.634 remove200=51.621 first_patch10=5.879
+T round=4 so=v160b patch10=1.720 vacuum200=10.588 remove200=51.688 first_patch10=5.759
+T round=5 so=v160 patch10=1.722 vacuum200=10.597 remove200=51.684 first_patch10=5.841
+T round=5 so=sm585 patch10=1.733 vacuum200=10.605 remove200=51.625 first_patch10=5.830
+T round=5 so=v160b patch10=1.689 vacuum200=10.561 remove200=51.797 first_patch10=5.818
+T round=5 so=v160b patch10=1.711 vacuum200=10.572 remove200=51.808 first_patch10=5.779
+T round=5 so=sm585 patch10=1.766 vacuum200=10.612 remove200=51.921 first_patch10=5.811
+T round=5 so=v160 patch10=1.715 vacuum200=10.578 remove200=51.791 first_patch10=5.794
+T round=6 so=v160b patch10=1.723 vacuum200=10.646 remove200=51.883 first_patch10=5.776
+T round=6 so=sm585 patch10=1.749 vacuum200=10.629 remove200=51.798 first_patch10=5.793
+T round=6 so=v160 patch10=1.740 vacuum200=10.608 remove200=51.786 first_patch10=5.862
+T round=6 so=v160 patch10=1.744 vacuum200=10.589 remove200=51.808 first_patch10=5.734
+T round=6 so=sm585 patch10=1.739 vacuum200=10.638 remove200=51.794 first_patch10=5.777
+T round=6 so=v160b patch10=1.736 vacuum200=10.597 remove200=51.853 first_patch10=5.881
+SMAB_DONE

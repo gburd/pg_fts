@@ -53,7 +53,7 @@ that run to FAIL.  Most of the mutants are bugs pg_fts actually shipped.
 | `ondisk_harness.c` | `fts_doc_check`, `bm25_page_data_end`, `bm25_dict_entry_fits`, `bm25_doclen_block_fits` (verbatim or included), the block guards of `bm25_decode_term` and `wand_load_block` | if a guard accepts, every read the caller then does is inside the buffer, and no pointer is formed past it from an on-disk integer | any 96-byte page, any FtsDoc image up to 96 bytes with <= 2 terms | the pre-1.7.1 pd_lower read; the 0.3.4 one-sided count clamp; the 1.15.2 dictionary guard, column checks and doclen-sidecar guard (found here) |
 | `query_harness.c` | `query_and_operands`, `bm25_required_term_absent`, `bool_gate_may_admit`, `bool_gate_driver`, `eval_not_parity`, `bool_gate_admits` (verbatim) | a skipped segment, a refused walk and a driver choice never drop a matching document; NOT parity is right | every well-formed AND/OR/NOT query of <= 7 items, every document and segment term set | NOT let through the I19b shape test (the review's mutant); no odd-NOT clearing; a NOT operand as the driver |
 | `codec_harness.c` | `pg_fts_for.h` (included) | FOR pack/unpack/get round-trip and byte counts; reads stay in the column for any width byte the readers accept; the doclen byte rounds down, is monotone and is exact below 8 | n = 1, 2, 3, 8 values of any width 0-64; corrupt widths 65, 128, 255; all 2^32 lengths | a decode buffer one byte short; "quantisation is exact" |
-| `smcursor_harness.c` | `vendor/sm.c` (included) | a read cursor never changes an answer: `sm_contains(m, i, &c) == sm_contains(m, i, NULL)` for ascending, arbitrary and any-cursor-state lookups (any hint that is a chunk of the map), including the 5.8.4 gap resume | 4 map layouts serialized by the library (scattered one-per-chunk, adjacent, RLE run then gap then sparse, single chunk), opened as pg_fts opens a stored blob; every index from a chunk before the map to past its end | the gap resume without its neighbour check (`mutate_sm.py`); and a FINDING, expected to fail: a hint that is not a chunk start (ROADMAP I29) |
+| `smcursor_harness.c` | `vendor/sm.c` (included) | a read cursor never changes an answer: `sm_contains(m, i, &c) == sm_contains(m, i, NULL)` for ascending, arbitrary and any-cursor-state lookups: any `prev_offset` at all (C3x: it found ROADMAP I29 in 5.8.4, fixed in sparsemap 5.8.5), and a stale offset holding a real chunk's start index (C4) | 4 map layouts serialized by the library (scattered one-per-chunk, adjacent, RLE run then gap then sparse, single chunk), opened as pg_fts opens a stored blob; every index from a chunk before the map to past its end | the cursor's start-word check removed (`mutate_sm.py`): C4 fails |
 | `shdoclen_harness.c` | model of `pg_fts_shdoclen.c`'s slot transitions | no use after free, no double unpin, no leak at quiescence, refcount exact | one slot; two scans and a retiring, evicting merge; every interleaving | retire ignoring readers; unref also unpinning |
 
 ## Findings
@@ -73,6 +73,9 @@ the CHANGELOG under 1.16.0:
   fix mis-read 1.5.0-1.5.2 merged segments; all fixed, `t/003` covers the last.)
 - The block-max WAND bound was one ulp below the score of its own (max tf, min length)
   posting in about 0.02% of shapes (operation order).
+- In vendored sparsemap 5.8.4, the read cursor could resume from an unverified hint
+  and answer wrong (C3x; ROADMAP I29).  Reported upstream with a reproducer; fixed in
+  sparsemap 5.8.5, vendored after 1.16.0.
 
 ## Not covered
 
