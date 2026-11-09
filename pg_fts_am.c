@@ -4854,8 +4854,12 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 	 * build had left wrong; see bm25_build_callback) */
 	bs->ndocs = (double) hash_get_num_entries(mergedc.ht);
 	hash_destroy(mergedc.ht);
-	for (i = 0; i < nsel; i++)
-		bs->sumdoclen += nolen[i] * (chosen[i].sumdoclen / Max(chosen[i].ndocs, 1.0));
+	/* an inline output keeps their 0 too, which a later delete counts at the
+	 * segment average (bm25_segment_dead_doclen), so count them so here; a
+	 * sidecar output stores byte 0, length 0, and its total must match it */
+	if (!bs->want_sidecar)
+		for (i = 0; i < nsel; i++)
+			bs->sumdoclen += nolen[i] * (chosen[i].sumdoclen / Max(chosen[i].ndocs, 1.0));
 	dict_spill_rewind(&spill);
 	seg->dictstart = bm25_write_dictionary_iter(index, dict_spill_next, &spill,
 												&seg->dictindexstart);
@@ -8022,6 +8026,7 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 		uint32		ndead = 0;
 		uint32		ndead_before;	/* carried forward from the last VACUUM */
 		uint64		nseen = 0;		/* documents with a posting in this segment */
+		uint64		ncarried = 0;	/* of them, tombstoned by an earlier VACUUM */
 		double		deadlen = 0;	/* summed length of the newly tombstoned docs */
 		BlockNumber oldlivedocs;
 		uint32		oldlen;
@@ -8127,7 +8132,10 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 				num_index_tuples++;
 				nseen++;
 				if (sm_contains(dead, v, &ccur))
+				{
+					ncarried++;
 					continue;		/* already tombstoned (carried forward) */
+				}
 				bm25_docid_to_tid(v, &tid);
 				if (callback(&tid, callback_state))
 				{
@@ -8213,8 +8221,7 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 					 */
 					if (nnew > 0)
 						deadlen *= Max((double) nnew - uleft, 0.0) / nnew;
-					m->sumdoclen = Max(m->sumdoclen - deadlen, 0.0);
-					seglive[s] = (double) nseen - ndead;
+					seglive[s] = (double) (nseen - ncarried - nnew);
 					for (i = 0; i < m->nsegments; i++)
 						nd += seglive[i] >= 0 ? seglive[i]
 							: Max(m->segs[i].ndocs - m->segs[i].ndeleted, 0.0);
@@ -8222,6 +8229,10 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 					 * inserted since this VACUUM's flush (not counted at insert),
 					 * which the next VACUUM corrects */
 					m->ndocs = nd + m->npending;
+					/* every counted document has a term, so a length >= 1: a total
+					 * below N means the subtraction above met a pre-1.17.0 count it
+					 * could not match document by document */
+					m->sumdoclen = Max(m->sumdoclen - deadlen, m->ndocs);
 					m->generation++;	/* livedocs blob pages freed: invalidate scan snapshots */
 				}
 				GenericXLogFinish(st);
