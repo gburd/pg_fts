@@ -18,9 +18,9 @@ jobs:
 
       - name: Install PostgreSQL ${{ matrix.pg }} + server headers
         # 19 lives in the pgdg -testing repo.  It gates (1.17.0): through 1.16.0
-        # every step here was continue-on-error for 19, apt could not resolve
-        # libpq-dev 19 without -t, and nothing was built -- the leg was green
-        # while pg_fts did not compile against 19.
+        # every step here was continue-on-error for 19 and apt could not resolve
+        # libpq-dev 19 without -t, so the leg was green while it built nothing
+        # and pg_fts did not compile against 19.
         run: |
           # The runner's preinstalled Microsoft apt repo intermittently serves a
           # broken InRelease and fails `apt-get update`; remove just that repo

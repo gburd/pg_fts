@@ -24,10 +24,10 @@ answered from the index with no heap recheck.
 
 ## Requirements
 
-- PostgreSQL **17 and 18** are fully supported and gated in CI (build +
-  regression + isolation + TAP on both).  PostgreSQL **19/`master`-devel**
-  builds and is exercised best-effort in CI (it is unreleased; packaging can
-  lag).  Version differences are handled with compile-time guards.
+- PostgreSQL **17, 18 and 19** are supported and gated in CI (build +
+  regression + isolation + TAP on each; 19 from the pgdg-testing packages,
+  19rc1, until it is released).  Version differences are handled with
+  compile-time guards.
 - A C toolchain and the PostgreSQL server headers (`postgresql-server-dev-*`
   or a source install exposing `pg_config`).
 
@@ -575,6 +575,13 @@ AccessExclusiveLock), so a REINDEX is no longer the only way to reclaim them.  A
 index with segments merged by 1.5.0-1.5.2 that was never reindexed (1.5.3 asked for
 it) now ranks them without reading past a block, but their length normalisation is
 still approximate: REINDEX them (CHANGELOG 1.16.0).
+
+1.17.0 changes scores after deletes: the document count and average length now drop
+deleted rows when VACUUM tombstones them, so a ranked query scores as it would after a
+REINDEX of the same rows.  An index that deleted rows under an earlier release keeps
+the old average until one `fts_vacuum` (or `fts_merge`) leaves it with no tombstones,
+or a REINDEX (CHANGELOG 1.17.0).  `fts_index_segments(index)` shows each segment's
+tombstones.  1.17.0 builds against PostgreSQL 19.
 
 Backward compatibility
 -----------------------

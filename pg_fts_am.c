@@ -1896,9 +1896,12 @@ doclen_collector_add(DoclenCollector *c, uint64 docid, uint32 doclen)
 static double
 bm25_doclen_share(double total, double alo, double aw, double slo, double sw)
 {
-	if (total < alo || total > alo + aw)
+	double		tol = 1.0 + 1e-9 * (alo + aw);	/* summation rounding, not a foreign total */
+
+	if (total < alo - tol || total > alo + aw + tol)
 		total = alo + aw / 2;	/* not this sidecar's total: a pre-1.17.0 merge */
-	return aw > 0 ? slo + (total - alo) * (sw / aw) : slo;
+	total = Min(Max(total, alo), alo + aw);
+	return aw > 0 ? Min(slo + (total - alo) * (sw / aw), slo + sw) : slo;
 }
 
 static int
@@ -4584,12 +4587,14 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 	MergeSource *srcv;
 	BM25PostWriter pw;
 	DoclenCollector mergedc;		/* v4: docid->byte for the merged output segment */
+	double	   *nolen;			/* per v3 source: survivors with no inline length */
 	DictSpill	spill;			/* per-output-term dict metadata, spilled to disk */
 	uint32		nout = 0;
 	uint32		i;
 	MemoryContext old = MemoryContextSwitchTo(bs->ctx);
 
 	srcv = (MergeSource *) palloc0(nsel * sizeof(MergeSource));
+	nolen = (double *) palloc0(nsel * sizeof(double));
 	for (i = 0; i < nsel; i++)
 		merge_source_open(index, &chosen[i], &srcv[i], bs->ctx);
 
@@ -4639,6 +4644,11 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 			lw += w;
 			doclen_collector_add(&mergedc, dv, fts_byte_to_doclen(s->doclens.bytes[k]));
 		}
+		/* an inline (v3) output stores these documents' lengths as the bytes'
+		 * lower ends (doclen_sidecar turned off since); the segment total
+		 * stays the estimate, so the corpus does not drop by the quantisation,
+		 * and a later delete of these documents subtracts their lower ends
+		 * (under-subtracting by at most 1/8 of each length) */
 		bs->sumdoclen += bm25_doclen_share(chosen[i].sumdoclen, alo, aw, llo, lw);
 	}
 
@@ -4774,7 +4784,10 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 					 * this the merged sidecar misses these documents and their
 					 * postings are mis-read (garbage doclen). */
 					if (doclen_collector_add(&mergedc, bm25_tid_to_docid(&post[k].tid), doclen))
+					{
 						bs->sumdoclen += doclen;	/* first posting of a survivor */
+						nolen[i] += doclen == 0;	/* see bm25_segment_dead_doclen */
+					}
 				}
 				/* every posting gathered here is for smterm: resolve its
 				 * BuildTerm once, then append */
@@ -4841,6 +4854,8 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 	 * build had left wrong; see bm25_build_callback) */
 	bs->ndocs = (double) hash_get_num_entries(mergedc.ht);
 	hash_destroy(mergedc.ht);
+	for (i = 0; i < nsel; i++)
+		bs->sumdoclen += nolen[i] * (chosen[i].sumdoclen / Max(chosen[i].ndocs, 1.0));
 	dict_spill_rewind(&spill);
 	seg->dictstart = bm25_write_dictionary_iter(index, dict_spill_next, &spill,
 												&seg->dictindexstart);
@@ -7852,6 +7867,7 @@ bm25_segment_dead_doclen(Relation index, const BM25SegMeta *seg,
 		uint8	   *map = NULL; /* dead docids as a dense bitmap: a prefilter */
 		bool	   *seen;		/* per dead[] entry: its length is summed */
 		int			left = ndead;
+		int			nolen = 0;	/* postings with no inline length (see below) */
 		double		sum = 0;
 		BlockNumber blk = seg->dictstart;
 		int			k;
@@ -7915,6 +7931,7 @@ bm25_segment_dead_doclen(Relation index, const BM25SegMeta *seg,
 						continue;
 					seen[a] = true;
 					sum += post[p].doclen;
+					nolen += post[p].doclen == 0;
 					left--;
 				}
 				pfree(post);
@@ -7926,7 +7943,10 @@ bm25_segment_dead_doclen(Relation index, const BM25SegMeta *seg,
 		if (map)
 			pfree(map);
 		pfree(seen);
-		return sum;
+		/* a document with a posting has a length >= 1: 0 is a block written
+		 * without the inline column (a 1.5.0-1.5.2 merge, CHANGELOG 1.5.3), so
+		 * count it at the segment's average */
+		return sum + nolen * (seg->sumdoclen / Max(seg->ndocs, 1.0));
 	}
 }
 
@@ -7949,6 +7969,7 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	uint32		s;
 	int64		num_index_tuples = 0;
 	int64		tuples_removed = 0;
+	double		seglive[BM25_MAX_SEGMENTS];	/* walked segments' live documents */
 
 	/* sm_create() uses libc malloc (no palloc allocator installed), so an
 	 * ereport(ERROR) between create and sm_free would leak past transaction
@@ -7988,6 +8009,8 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 		UnlockReleaseBuffer(mb);
 	}
 
+	for (s = 0; s < BM25_MAX_SEGMENTS; s++)
+		seglive[s] = -1;		/* not walked yet */
 	for (s = 0; s < meta.nsegments; s++)
 	{
 		BM25SegMeta *sg = &meta.segs[s];
@@ -7997,6 +8020,8 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 		sm_cursor_t ccur;		/* reset immediately before the walk below */
 		uint64		v;
 		uint32		ndead = 0;
+		uint32		ndead_before;	/* carried forward from the last VACUUM */
+		uint64		nseen = 0;		/* documents with a posting in this segment */
 		double		deadlen = 0;	/* summed length of the newly tombstoned docs */
 		BlockNumber oldlivedocs;
 		uint32		oldlen;
@@ -8059,6 +8084,8 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 			pfree(buf);
 		}
 
+		ndead_before = ndead;
+
 		/* ask the callback about each live (not-yet-tombstoned) docid.  Collect
 		 * the newly-dead docids and bulk-add them to `dead` once at the end:
 		 * each docid in `seen` is visited exactly once, so the in-loop
@@ -8098,6 +8125,7 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 				}
 
 				num_index_tuples++;
+				nseen++;
 				if (sm_contains(dead, v, &ccur))
 					continue;		/* already tombstoned (carried forward) */
 				bm25_docid_to_tid(v, &tid);
@@ -8162,13 +8190,38 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 				m = BM25PageGetMeta(mp);
 				if (s < m->nsegments)
 				{
+					/* documents the segment's count left out: rows a build before
+					 * 1.17.0 met recently dead (bm25_build_callback) */
+					double		uncounted = Max((double) nseen - m->segs[s].ndocs, 0.0);
+					double		uleft = Max(uncounted - ndead_before, 0.0);
+					uint32		nnew = ndead - ndead_before;
+					uint32		i;
+					double		nd = 0;
+
 					m->segs[s].livedocs = newblk;
 					m->segs[s].livedocslen = newlen;
 					m->segs[s].ndeleted = ndead;
-					/* the corpus length total leaves with the documents, in the same
-					 * record as their tombstones (CHANGELOG 1.17.0: it kept them
-					 * until a REINDEX); N is recomputed below */
+
+					/*
+					 * N and the length total leave with the documents, in the same
+					 * record as their tombstones, so a cancelled VACUUM leaves them
+					 * consistent (CHANGELOG 1.17.0: the total kept them until a
+					 * REINDEX).  Rows left out of the total are already dead when
+					 * the build sees them, so the first VACUUM after it tombstones
+					 * them: the first `uncounted` deaths subtract nothing.  N counts
+					 * the segment's live documents exactly, from its universe.
+					 */
+					if (nnew > 0)
+						deadlen *= Max((double) nnew - uleft, 0.0) / nnew;
 					m->sumdoclen = Max(m->sumdoclen - deadlen, 0.0);
+					seglive[s] = (double) nseen - ndead;
+					for (i = 0; i < m->nsegments; i++)
+						nd += seglive[i] >= 0 ? seglive[i]
+							: Max(m->segs[i].ndocs - m->segs[i].ndeleted, 0.0);
+					/* + pending: their count includes any document with no terms
+					 * inserted since this VACUUM's flush (not counted at insert),
+					 * which the next VACUUM corrects */
+					m->ndocs = nd + m->npending;
 					m->generation++;	/* livedocs blob pages freed: invalidate scan snapshots */
 				}
 				GenericXLogFinish(st);
@@ -8181,29 +8234,6 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 			bm25_free_chain(index, oldlivedocs);
 	}
 
-	/* refresh corpus N so IDF/avgdl reflect the deletions */
-	if (tuples_removed > 0)
-	{
-		Buffer		mb = bm25_readbuf(index, BM25_METAPAGE_BLKNO);
-		GenericXLogState *st;
-		Page		mp;
-		BM25MetaPageData *m;
-		uint32		i;
-		double		nd = 0;
-
-		LockBuffer(mb, BUFFER_LOCK_EXCLUSIVE);
-		st = GenericXLogStart(index);
-		mp = GenericXLogRegisterBuffer(st, mb, 0);
-		bm25_meta_upcast_page(mp);	/* v3 -> v4 before reading segs[] and writing */
-		m = BM25PageGetMeta(mp);
-		/* clamped: a segment built before 1.17.0 can hold fewer counted
-		 * documents than tombstones (see bm25_build_callback) */
-		for (i = 0; i < m->nsegments; i++)
-			nd += Max(m->segs[i].ndocs - m->segs[i].ndeleted, 0.0);
-		m->ndocs = nd + m->npending;
-		GenericXLogFinish(st);
-		UnlockReleaseBuffer(mb);
-	}
 	}
 	PG_FINALLY();
 	{
@@ -8258,7 +8288,6 @@ bm25_reanchor_corpus(Relation index)
 
 		if (sg->ndeleted != 0)
 			return;
-		nd += sg->ndocs;
 		if (sg->doclenstart != InvalidBlockNumber)
 		{
 			BM25Doclens d;
@@ -8272,11 +8301,15 @@ bm25_reanchor_corpus(Relation index)
 				alo += fts_byte_to_doclen(d.bytes[k]);
 				aw += fts_byte_doclen_width(d.bytes[k]);
 			}
+			nd += d.n;			/* one entry per document with a posting */
 			bm25_doclens_free(&d);
 			sl += bm25_doclen_share(sg->sumdoclen, alo, aw, alo, aw);
 		}
 		else
+		{
+			nd += sg->ndocs;
 			sl += sg->sumdoclen;
+		}
 	}
 
 	mb = bm25_readbuf(index, BM25_METAPAGE_BLKNO);

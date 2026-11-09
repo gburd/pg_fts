@@ -2,10 +2,100 @@
 
 All notable changes to pg_fts are documented here.
 
-## Unreleased
+## 1.17.0 - 2026-11-09
+
+A minor release: BM25's corpus statistics follow deletions (the document count and the
+average length every ranked score is normalised by), PostgreSQL 19 support, a new
+`fts_index_segments()` function that shows each segment's tombstones, and sparsemap
+5.8.5.  Scores change after deletes: they now equal what a REINDEX of the same rows gives.
+No on-disk format change, no REINDEX (`ALTER EXTENSION pg_fts UPDATE TO '1.17.0'`); an
+index that deleted rows under an earlier release is repaired by one `fts_vacuum` or
+`fts_merge` that leaves it with no tombstones (or by a REINDEX).
+
+### Fixed
+
+- **avgdl kept the lengths of deleted documents until a REINDEX** (every release; report
+  of 2026-11-04).  VACUUM's bulk delete lowered the document count as it tombstoned rows
+  but left their lengths in the corpus total, a merge carried each input's whole total
+  into the merged segment, and the 1.16.0 `fts_vacuum` rewrite kept it too.  Every ranked
+  query normalised lengths against an average that included rows that were gone.  The
+  report's reproduction (200,000 rows, even ids 10 words and odd ids 100, delete the odd
+  ones, VACUUM), on PG 17, with `doclen_sidecar` on and off alike:
+
+  | step | ndocs | avgdl 1.16.0 | avgdl 1.17.0 | true |
+  |---|---:|---:|---:|---:|
+  | built | 200,000 | 55.000 | 55.000 | 55.000 |
+  | long rows deleted, VACUUM | 100,000 | 110.000 | 10.000 | 10.000 |
+  | then `fts_vacuum` | 100,000 | 110.000 | 10.000 | 10.000 |
+  | then `fts_merge` | 100,000 | 110.000 | 10.000 | 10.000 |
+  | REINDEX | 100,000 | 10.000 | 10.000 | 10.000 |
+
+  - The bulk delete subtracts each newly tombstoned document's length in the same
+    metapage record that writes its tombstone, and recomputes N there too, so a
+    cancelled VACUUM leaves the two consistent.  An inline-length segment
+    (`doclen_sidecar = off`) has each exact length: a posting walk that stops once it
+    has seen every dead document.  A sidecar segment keeps one byte per document, a
+    length to 4 significant bits, which bounds each length to an interval (the bounds
+    were checked for every length up to 2^29); the dead documents' share of the
+    segment's exact total is taken from those intervals, exact when all or none of the
+    segment's inexact documents die (the report's case).
+  - A merge writes its surviving documents' count and length total, not its inputs'.
+  - `fts_vacuum` and `fts_merge` recompute the corpus totals from the segments when no
+    segment carries tombstones and nothing is pending.  That repairs an index that
+    deleted rows under an earlier release: the report's state (avgdl 137.5 for a true
+    10.0, built and churned on 1.16.0) reads 10.000 after one `fts_vacuum` on 1.17.0.
+  - N is now counted, for each segment the bulk delete walks, from the segment's docid
+    universe minus its tombstones: exact whatever the segment's history.
+
+  Measured after deleting half of 40,000 rows of two length mixes (PG 17, five ranked
+  queries, top 20, compared with a REINDEX of the same rows): 1.16.0 shared 87 of the
+  100 result ids and had the same order for 1 of the 5 queries, with scores up to 82%
+  off; 1.17.0 has the same ids in the same order for all 5, with scores within 0.7%
+  (`doclen_sidecar = on`, the estimate) and identical (`off`).  On a randomised churn
+  (20,000 rows of lengths 1-400, four rounds of 20% deletes and 3,000 inserts, then
+  VACUUMs, a merge, 30% more deletes and `fts_vacuum`; three seeds) N matched the table
+  at every step, avgdl matched exactly with `doclen_sidecar = off` and to within 0.15%
+  with `on` (`sql/corpus_stats.sql` holds a smaller version; it fails on 1.16.0).
+
+- **A build that met recently deleted rows left N negative after the next VACUUM**
+  (1.3.0 to 1.16.0).  A row deleted while another snapshot can still see it is indexed
+  by CREATE INDEX (that snapshot may reach it through the index), and 1.3.0 left it out
+  of the document count.  The VACUUM that later removed it tombstoned it and subtracted
+  it again: with a snapshot held across `DELETE` of 900 of 1,000 rows and `CREATE
+  INDEX`, the next VACUUM left `fts_index_stats().ndocs` at -800 for 100 live rows
+  (`specs/bm25_recently_dead.spec`; it fails on 1.16.0).  Every indexed document is now
+  counted until the VACUUM that tombstones it, like any deleted row.  An index built
+  this way by an earlier release is counted from its docid universe at the next VACUUM,
+  and the rows that build left out subtract no length (they are the first to be
+  tombstoned).
+- **Deleting a document with no terms never lowered N** (every release).  An empty
+  document (`''`, or only stop words) was counted but has no posting, so no VACUUM could
+  tombstone it: 100 empty rows deleted left `ndocs` 1,002 for 901 rows with a term.
+  N now counts documents with at least one term, as Lucene's `docCount` does, so a
+  table with many empty rows scores with a slightly higher average length than before.
+- **pg_fts did not build against PostgreSQL 19** (report of 2026-10-30, against 19rc1:
+  `tuplestore_putvalues` undeclared, `IndexAmRoutine` incomplete, and the planner hook's
+  new `ExplainState *` argument).  The reporters' patch is applied as sent.  On 19rc1 the
+  regression suite then differed only in plan text, now version-neutral: InitPlans are
+  named `expr_N`, `count()` of a NOT NULL column becomes `count(*)` (answered by the
+  FtsCount pushdown, which the test meant to avoid), and the two index paths are costed
+  differently.
+
+### Added
+
+- **`fts_index_segments(regclass)`**: one row per segment with its documents
+  (`ndocs`, tombstoned ones included), tombstoned documents (`ndeleted`), `nterms`,
+  `doclen_sidecar` and `tombstone_bytes`.  A ranked or counting scan reads past every
+  tombstoned document of its segments until a merge, `fts_vacuum` or REINDEX drops them;
+  through 1.16.0 nothing in SQL showed them (the third suggestion of the churn report of
+  2026-11-02, ROADMAP I25).
 
 ### Changed
 
+- **CI gates on PostgreSQL 19.**  The 19 leg tested nothing (see Retracted): apt
+  could not install `libpq-dev` 19 from the pgdg-testing repository without `-t`, and
+  every step was `continue-on-error`.  It now installs from pgdg-testing and fails like
+  the 17 and 18 legs: 33/33 regression, 5/5 isolation and 12 TAP files on 19rc1.
 - **sparsemap 5.8.4 -> 5.8.5** (`vendor/sm.c`, `vendor/sm.h`): the sparsemap
   maintainers' fix for the read-cursor defect pg_fts reported (ROADMAP I29), a drop-in
   source swap (no API, ABI or wire-format change; `sm_cursor_t` is still 24 bytes).  In
@@ -40,6 +130,38 @@ All notable changes to pg_fts are documented here.
   | `vacuum`, top-200 | 10.578 | 10.634 | +0.54% | +0.14% |
   | `remove`, top-200 | 51.736 | 51.725 | -0.02% | +0.11% |
   | `patch`, top-10, first query of a session | 5.849 | 5.835 | -0.23% | -0.68% |
+
+### Retracted
+
+- **"PostgreSQL 19/`master`-devel builds and is exercised best-effort in CI"**
+  (README, since 1.0.0).  It did not build against 19rc1 (1.15.1, 1.16.0: the errors
+  above), and the CI leg that was to show it did not install PostgreSQL 19 in any run
+  whose log survives (2026-08-28 to 2026-11-05, 8 sampled: apt exited 100 on
+  `libpq-dev`).  Every later step was `continue-on-error`, ran against no server and
+  passed, so the job was green.  It produced runs that tested nothing.  19 builds and
+  gates from 1.17.0.
+
+### Known issues
+
+- **A pure negation does not match a document with no terms through the index**
+  (every release).  The index answers a top-level NOT against the documents that have
+  a posting, and an empty document has none:
+  ```sql
+  CREATE TABLE e (id int, body text);
+  INSERT INTO e SELECT g, CASE WHEN g <= 100 THEN '' ELSE 'alpha w' || g END
+    FROM generate_series(1, 1000) g;
+  CREATE INDEX ON e USING fts (to_ftsdoc('simple', body));
+  SELECT fts_count('e_to_ftsdoc_idx', '!zzz');                         -- 900
+  SELECT count(*) FROM e WHERE fts_match(to_ftsdoc('simple', body), '!zzz');  -- 1000
+  ```
+  A fix indexes empty documents, a design change (ROADMAP I32).
+- **With `doclen_sidecar = on`, avgdl after deletes is an estimate.**  The sidecar
+  keeps each length to 4 significant bits, so the dead documents' share of a segment's
+  exact total is estimated from the byte intervals: within 0.15% in the churn above,
+  exact again after a REINDEX.  With `doclen_sidecar = off` it is exact.  Turning
+  `doclen_sidecar` off on a live index stores the sidecar-era documents' lengths inline
+  at their lower bounds when they are merged, and later deletes of them subtract those
+  bounds: avgdl read 1.3% high after a third of such an index was deleted.
 
 ## 1.16.0 - 2026-11-04
 

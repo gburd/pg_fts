@@ -2201,7 +2201,7 @@ bm25_order_split(Relation index, FtsQuery where, FtsQuery order, ScoredTid **out
 
 	bm25_read_meta(index, &meta);
 	N = meta.ndocs < 1.0 ? 1.0 : meta.ndocs;
-	avgdl = meta.ndocs > 0 ? meta.sumdoclen / meta.ndocs : 1.0;
+	avgdl = meta.ndocs > 0 && meta.sumdoclen > 0 ? meta.sumdoclen / meta.ndocs : 1.0;	/* as fts_bm25_score */
 	for (i = 0; i < (int) meta.nsegments; i++)
 		if (meta.segs[i].doclenstart != InvalidBlockNumber)
 			quantize = true;	/* v4: the index scores the quantized length */
@@ -6922,7 +6922,7 @@ bm25_topk_exact(Relation index, FtsQuery q, const BM25MetaPageData *meta,
 	int			nterms = fts_query_terms(q, &terms, &lens);
 	double	   *dfs = palloc0((Size) Max(nterms, 1) * sizeof(double)); /* alloc-ok: query terms */
 	double		N = Max(meta->ndocs, 1.0);
-	double		avgdl = meta->ndocs > 0 ? meta->sumdoclen / meta->ndocs : 1.0;
+	double		avgdl = meta->ndocs > 0 && meta->sumdoclen > 0 ? meta->sumdoclen / meta->ndocs : 1.0;	/* as fts_bm25_score */
 	ScoredTid  *best = palloc((Size) k * sizeof(ScoredTid));
 	Relation	heap;
 	IndexInfo  *indexInfo;
@@ -7217,7 +7217,7 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 		return bm25_topk_exact(index, q, &meta, wantk,
 							   docid_lo, docid_hi, out);
 	N = meta.ndocs < 1.0 ? 1.0 : meta.ndocs;
-	avgdl = meta.ndocs > 0 ? meta.sumdoclen / meta.ndocs : 1.0;
+	avgdl = meta.ndocs > 0 && meta.sumdoclen > 0 ? meta.sumdoclen / meta.ndocs : 1.0;	/* as fts_bm25_score */
 	/* relcache page directory over the v4 doclen sidecars (built once per backend,
 	 * keyed by meta.generation); NULL if no v4 sidecar segment exists */
 	doclendir = bm25_doclendir_cache(index, &meta);
