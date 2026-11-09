@@ -1,0 +1,52 @@
+diff --git a/pg_fts_customscan.c b/pg_fts_customscan.c
+index bbb1eb6..20cdbfe 100644
+--- a/pg_fts_customscan.c
++++ b/pg_fts_customscan.c
+@@ -17,6 +17,7 @@
+  */
+ #include "postgres.h"
+ 
++#include "access/amapi.h"
+ #include "access/genam.h"
+ #include "access/relscan.h"
+ #include "access/table.h"
+@@ -278,16 +279,27 @@ fts_hint_walk(Plan *plan, Oid ftsqueryoid, Oid distfn)
+ }
+ 
+ static PlannedStmt *
++#if PG_VERSION_NUM >= 190000
++fts_planner(Query *parse, const char *query_string, int cursorOptions,
++			ParamListInfo boundParams, ExplainState *es)
++#else
+ fts_planner(Query *parse, const char *query_string, int cursorOptions,
+ 			ParamListInfo boundParams)
++#endif
+ {
+ 	PlannedStmt *stmt;
+ 	Oid			ftsqueryoid;
+ 	ListCell   *lc;
+ 
++#if PG_VERSION_NUM >= 190000
++	stmt = prev_planner_hook
++		? prev_planner_hook(parse, query_string, cursorOptions, boundParams, es)
++		: standard_planner(parse, query_string, cursorOptions, boundParams, es);
++#else
+ 	stmt = prev_planner_hook
+ 		? prev_planner_hook(parse, query_string, cursorOptions, boundParams)
+ 		: standard_planner(parse, query_string, cursorOptions, boundParams);
++#endif
+ 
+ 	/* pg_fts not installed in this database / not visible: nothing to hint */
+ 	ftsqueryoid = TypenameGetTypid("ftsquery");
+diff --git a/pg_fts_shdoclen.c b/pg_fts_shdoclen.c
+index 88e736c..45ae9ae 100644
+--- a/pg_fts_shdoclen.c
++++ b/pg_fts_shdoclen.c
+@@ -63,6 +63,7 @@
+ #include "storage/procarray.h"
+ #include "utils/resowner.h"
+ #include "funcapi.h"
++#include "utils/tuplestore.h"
+ #include "utils/builtins.h"
+ 
+ #define BM25_SHDOCLEN_SLOTS 256

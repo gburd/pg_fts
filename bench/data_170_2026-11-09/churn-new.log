@@ -1,0 +1,53 @@
+arm=new default_version = '1.17.0' so=f07517fd
+probe-patched: 1 timing-lines: 7
+Mon Nov  9 20:03:48 UTC 2026
+SET
+CREATE EXTENSION
+DROP TABLE
+CREATE TABLE
+
+INSERT 0 1880000
+CREATE INDEX
+VACUUM
+Timing is on.
+Time: 8.180 ms
+Timing is off.
+CREATE FUNCTION
+CREATE PROCEDURE
+A fresh build, packed                              segs 1  remove 13.9 ms  vacuum 7.0 ms  remove/bestfirst=off 2.1 ms  N 1880000/1880000 avgdl 102.090/102.090
+CALL
+B moves                                            segs 2  remove 16.8 ms  vacuum 24.9 ms  remove/bestfirst=off 3.7 ms  N 1903313/1880000 avgdl 102.089/102.090
+Timing is on.
+Time: 100404.293 ms (01:40.404)
+Timing is off.
+C then fts_vacuum                                  segs 1  remove 13.8 ms  vacuum 19.6 ms  remove/bestfirst=off 2.1 ms  N 1903313/1880000 avgdl 102.089/102.090
+Timing is on.
+VACUUM
+Time: 22462.679 ms (00:22.463)
+Timing is off.
+D then VACUUM                                      segs 1  remove 22.0 ms  vacuum 11.9 ms  remove/bestfirst=off 9.9 ms  N 1880000/1880000 avgdl 102.090/102.090
+Timing is on.
+Time: 67214.483 ms (01:07.214)
+Timing is off.
+E then fts_vacuum (returned t)                     segs 1  remove 13.6 ms  vacuum 7.1 ms  remove/bestfirst=off 2.1 ms  N 1880000/1880000 avgdl 102.090/102.090
+F then fts_merge (returned f)                      segs 1  remove 13.6 ms  vacuum 6.8 ms  remove/bestfirst=off 2.0 ms  N 1880000/1880000 avgdl 102.090/102.090
+REINDEX
+G REINDEX                                          segs 1  remove 13.7 ms  vacuum 7.4 ms  remove/bestfirst=off 2.1 ms  N 1880000/1880000 avgdl 102.090/102.090
+CALL
+Timing is on.
+VACUUM
+Time: 22782.217 ms (00:22.782)
+Timing is off.
+Timing is on.
+Time: 68042.159 ms (01:08.042)
+Timing is off.
+H moves, VACUUM, then fts_vacuum                   segs 1  remove 13.7 ms  vacuum 6.9 ms  remove/bestfirst=off 2.1 ms  N 1880000/1880000 avgdl 102.090/102.090
+CALL
+Timing is on.
+VACUUM
+Time: 22841.184 ms (00:22.841)
+Timing is off.
+I moves, VACUUM, no pack                           segs 3  remove 21.7 ms  vacuum 11.8 ms  remove/bestfirst=off 2.7 ms  N 1880000/1880000 avgdl 102.090/102.090
+psql rc=0
+Mon Nov  9 20:19:40 UTC 2026
+CHURN_new_DONE

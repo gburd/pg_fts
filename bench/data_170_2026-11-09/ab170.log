@@ -1,0 +1,73 @@
+so md5: v160 d66a3d76 v170 6577c7b3 v170b 733873b5; markers v170: 5 v160: 0
+rows 1900000
+NOTICE:  index "ag_fts" does not exist, skipping
+VAC arm=v160 sc=off rep=1 vacuum_s=19.216121266 stats=[1876250 103.367] truth=[1876250 102.075]
+NOTICE:  relation "mvsave" already exists, skipping
+VAC arm=v170 sc=off rep=1 vacuum_s=19.123618025 stats=[1876250 102.075] truth=[1876250 102.075]
+NOTICE:  relation "mvsave" already exists, skipping
+VAC arm=v160 sc=on rep=1 vacuum_s=.791182531 stats=[1876250 103.367] truth=[1876250 102.075]
+NOTICE:  relation "mvsave" already exists, skipping
+VAC arm=v170 sc=on rep=1 vacuum_s=.817282049 stats=[1876250 102.075] truth=[1876250 102.075]
+NOTICE:  relation "mvsave" already exists, skipping
+VAC arm=v170 sc=off rep=2 vacuum_s=18.904841451 stats=[1876250 102.075] truth=[1876250 102.075]
+NOTICE:  relation "mvsave" already exists, skipping
+VAC arm=v160 sc=off rep=2 vacuum_s=18.307646635 stats=[1876250 103.367] truth=[1876250 102.075]
+NOTICE:  relation "mvsave" already exists, skipping
+VAC arm=v170 sc=on rep=2 vacuum_s=.816891729 stats=[1876250 102.075] truth=[1876250 102.075]
+NOTICE:  relation "mvsave" already exists, skipping
+VAC arm=v160 sc=on rep=2 vacuum_s=.793025208 stats=[1876250 103.367] truth=[1876250 102.075]
+NOTICE:  relation "mvsave" already exists, skipping
+VAC arm=v160 sc=off rep=3 vacuum_s=18.355863851 stats=[1876250 103.367] truth=[1876250 102.075]
+NOTICE:  relation "mvsave" already exists, skipping
+VAC arm=v170 sc=off rep=3 vacuum_s=19.066896282 stats=[1876250 102.075] truth=[1876250 102.075]
+NOTICE:  relation "mvsave" already exists, skipping
+VAC arm=v160 sc=on rep=3 vacuum_s=.791260355 stats=[1876250 103.367] truth=[1876250 102.075]
+NOTICE:  relation "mvsave" already exists, skipping
+VAC arm=v170 sc=on rep=3 vacuum_s=.816100486 stats=[1876250 102.075] truth=[1876250 102.075]
+Q state: nseg=1 tombstones=23750 stats=1876250 102.075
+CORR v160 [patch 10] 5e5936a22315b61dc484e7f381696d8f
+CORR v160 [vacuum 200] 2f113cb51013aafeed163fd80b6080bf
+CORR v160 [remove 200] 8492640549a5ed8ffb9641f171ead67f
+CORR v170 [patch 10] 5e5936a22315b61dc484e7f381696d8f
+CORR v170 [vacuum 200] 2f113cb51013aafeed163fd80b6080bf
+CORR v170 [remove 200] 8492640549a5ed8ffb9641f171ead67f
+T round=1 so=v160 patch10=1.868 vacuum200=4.705 remove200=20.708
+T round=1 so=v170 patch10=1.894 vacuum200=4.743 remove200=20.869
+T round=1 so=v170b patch10=1.898 vacuum200=4.725 remove200=20.906
+T round=1 so=v170b patch10=1.917 vacuum200=4.736 remove200=20.861
+T round=1 so=v170 patch10=1.888 vacuum200=4.738 remove200=20.895
+T round=1 so=v160 patch10=1.866 vacuum200=4.684 remove200=20.705
+T round=2 so=v170b patch10=1.895 vacuum200=4.752 remove200=20.786
+T round=2 so=v170 patch10=1.885 vacuum200=4.713 remove200=20.878
+T round=2 so=v160 patch10=1.878 vacuum200=4.679 remove200=20.712
+T round=2 so=v160 patch10=1.896 vacuum200=4.674 remove200=20.686
+T round=2 so=v170 patch10=1.876 vacuum200=4.713 remove200=20.892
+T round=2 so=v170b patch10=1.901 vacuum200=4.728 remove200=20.870
+T round=3 so=v160 patch10=1.878 vacuum200=4.664 remove200=20.702
+T round=3 so=v170 patch10=1.912 vacuum200=4.737 remove200=20.840
+T round=3 so=v170b patch10=1.888 vacuum200=4.741 remove200=20.908
+T round=3 so=v170b patch10=1.901 vacuum200=4.717 remove200=20.919
+T round=3 so=v170 patch10=1.886 vacuum200=4.718 remove200=20.815
+T round=3 so=v160 patch10=1.864 vacuum200=4.704 remove200=20.687
+T round=4 so=v170b patch10=1.898 vacuum200=4.728 remove200=20.850
+T round=4 so=v170 patch10=1.908 vacuum200=4.730 remove200=20.852
+T round=4 so=v160 patch10=1.879 vacuum200=4.674 remove200=20.736
+T round=4 so=v160 patch10=1.871 vacuum200=4.699 remove200=20.729
+T round=4 so=v170 patch10=1.891 vacuum200=4.727 remove200=20.832
+T round=4 so=v170b patch10=1.889 vacuum200=4.735 remove200=20.864
+T round=5 so=v160 patch10=1.867 vacuum200=4.701 remove200=20.660
+T round=5 so=v170 patch10=1.880 vacuum200=4.747 remove200=20.774
+T round=5 so=v170b patch10=1.896 vacuum200=4.728 remove200=20.882
+T round=5 so=v170b patch10=1.895 vacuum200=4.742 remove200=20.858
+T round=5 so=v170 patch10=1.899 vacuum200=4.727 remove200=20.836
+T round=5 so=v160 patch10=1.878 vacuum200=4.675 remove200=20.687
+T round=6 so=v170b patch10=1.895 vacuum200=4.734 remove200=20.774
+T round=6 so=v170 patch10=1.888 vacuum200=4.727 remove200=20.797
+T round=6 so=v160 patch10=1.880 vacuum200=4.693 remove200=20.648
+T round=6 so=v160 patch10=1.881 vacuum200=4.685 remove200=20.659
+T round=6 so=v170 patch10=1.904 vacuum200=4.732 remove200=20.868
+T round=6 so=v170b patch10=1.892 vacuum200=4.719 remove200=20.843
+CORR reindex [patch 10] 5e5936a22315b61dc484e7f381696d8f
+CORR reindex [vacuum 200] 2f113cb51013aafeed163fd80b6080bf
+CORR reindex [remove 200] 8492640549a5ed8ffb9641f171ead67f
+AB170_DONE

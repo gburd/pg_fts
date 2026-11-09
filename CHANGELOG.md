@@ -56,6 +56,18 @@ index that deleted rows under an earlier release is repaired by one `fts_vacuum`
   VACUUMs, a merge, 30% more deletes and `fts_vacuum`; three seeds) N matched the table
   at every step, avgdl matched exactly with `doclen_sidecar = off` and to within 0.15%
   with `on` (`sql/corpus_stats.sql` holds a smaller version; it fails on 1.16.0).
+  Cost, on c6id.metal with PG 18.6, at 1.9M rows with 1/80 deleted (23,750 scattered
+  tombstones on one packed segment), 1.16.0 vs 1.17.0 (`bench/RESULTS_170_2026-11-09.md`):
+  - correctness first: the top-10/200 ids of three ranked queries are identical on both
+    releases and on a REINDEX of the same rows;
+  - VACUUM takes 3.9% longer with `doclen_sidecar = off` (18.36 -> 19.07 s, median of 3).
+    That is the second posting walk, which finds the dead documents' lengths.  It took
+    8-10% longer (20.9 -> 22.5-22.8 s, one run each) in the churn report's own script,
+    with 23,313 moves over 1.88M rows;
+  - with `on` it takes 3.2% longer (0.791 -> 0.817 s);
+  - ranked top-10 and top-200 latency is +0.6% to +0.9%, against an A/A of 0.05% to
+    0.3%.  That compares the whole release, sparsemap 5.8.5 included (below), and the
+    cause is not isolated.
 
 - **A build that met recently deleted rows left N negative after the next VACUUM**
   (1.3.0 to 1.16.0).  A row deleted while another snapshot can still see it is indexed
