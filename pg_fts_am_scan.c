@@ -4107,6 +4107,50 @@ fts_index_stats(PG_FUNCTION_ARGS)
 	PG_RETURN_DATUM(HeapTupleGetDatum(tuple));
 }
 
+PG_FUNCTION_INFO_V1(fts_index_segments);
+
+/*
+ * fts_index_segments(regclass) -> one row per segment (1.17.0): its documents,
+ * how many are tombstoned, its terms and storage.  Tombstoned documents still
+ * cost every scan of their segment until a merge, fts_vacuum or REINDEX drops
+ * them; through 1.16.0 nothing in SQL showed them (ROADMAP I25).
+ */
+Datum
+fts_index_segments(PG_FUNCTION_ARGS)
+{
+	Oid			indexoid = PG_GETARG_OID(0);
+	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	Relation	index;
+	BM25MetaPageData meta;
+	uint32		s;
+
+	InitMaterializedSRF(fcinfo, 0);
+	index = index_open(indexoid, AccessShareLock);
+	if (index->rd_rel->relam != get_index_am_oid("fts", true))
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("\"%s\" is not an fts index",
+						RelationGetRelationName(index))));
+	bm25_read_meta(index, &meta);
+	index_close(index, AccessShareLock);
+
+	for (s = 0; s < meta.nsegments; s++)
+	{
+		const BM25SegMeta *sg = &meta.segs[s];
+		Datum		v[6];
+		bool		n[6] = {0};
+
+		v[0] = Int32GetDatum((int32) s);
+		v[1] = Int64GetDatum((int64) sg->ndocs);
+		v[2] = Int64GetDatum((int64) sg->ndeleted);
+		v[3] = Int64GetDatum((int64) sg->nterms);
+		v[4] = BoolGetDatum(sg->doclenstart != InvalidBlockNumber);
+		v[5] = Int64GetDatum((int64) sg->livedocslen);
+		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, v, n);
+	}
+	PG_RETURN_VOID();
+}
+
 PG_FUNCTION_INFO_V1(fts_index_df);
 
 /* fts_index_df(regclass, ftsquery) -> float8[] of df per query term occurrence,

@@ -12,13 +12,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pg: [17, 18, 19]   # 19 = master/devel, may not be packaged yet
+        pg: [17, 18, 19]   # 19 from the pgdg -testing repo until it is released
     steps:
       - uses: actions/checkout@v4
 
       - name: Install PostgreSQL ${{ matrix.pg }} + server headers
-        # 19 lives in the pgdg -testing snapshot repo and may be missing entirely
-        continue-on-error: ${{ matrix.pg == 19 }}
+        # 19 lives in the pgdg -testing repo.  It gates (1.17.0): through 1.16.0
+        # every step here was continue-on-error for 19, apt could not resolve
+        # libpq-dev 19 without -t, and nothing was built -- the leg was green
+        # while pg_fts did not compile against 19.
         run: |
           # The runner's preinstalled Microsoft apt repo intermittently serves a
           # broken InRelease and fails `apt-get update`; remove just that repo
@@ -30,13 +32,13 @@ jobs:
           fi
           curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          T=; [ "${{ matrix.pg }}" = "19" ] && T="-t $(lsb_release -cs)-pgdg-testing"
+          sudo apt-get install -y --no-install-recommends $T \
             postgresql-${{ matrix.pg }} \
             postgresql-server-dev-${{ matrix.pg }} \
             gcc make libipc-run-perl
 
       - name: Build
-        continue-on-error: ${{ matrix.pg == 19 }}
         run: make PG_CONFIG=/usr/lib/postgresql/${{ matrix.pg }}/bin/pg_config
 
       - name: Install SQL is pure ASCII (installs on non-UTF-8 servers)
@@ -46,11 +48,9 @@ jobs:
         run: make check-alloc
 
       - name: Install
-        continue-on-error: ${{ matrix.pg == 19 }}
         run: sudo make install PG_CONFIG=/usr/lib/postgresql/${{ matrix.pg }}/bin/pg_config
 
       - name: Regression + isolation tests
-        continue-on-error: ${{ matrix.pg == 19 }}
         run: |
           PGBIN=/usr/lib/postgresql/${{ matrix.pg }}/bin
           # pg_virtualenv (from postgresql-common) spins up an ephemeral cluster
@@ -65,11 +65,9 @@ jobs:
             make installcheck PROVE_TESTS=ci/noop.pl PG_CONFIG=$PGBIN/pg_config
 
       - name: Binary query input validation
-        continue-on-error: ${{ matrix.pg == 19 }}
         run: pg_virtualenv -v ${{ matrix.pg }} python3 test/query_binary.py --local
 
       - name: TAP tests (corruption recovery, server encodings, concurrency)
-        # Gating on 17/18 (the supported majors); best-effort on 19-devel.
         # t/003 (torn-page/corruption), t/004 (server encodings), t/005 (scan-vs-
         # merge page-recycle), t/007 (segment-cap under concurrent writes) and
         # t/008 (fts_vacuum reclaim) run here: t/001 (crash recovery) and t/002
@@ -77,7 +75,6 @@ jobs:
         # pg_virtualenv does not provide, so they run locally / are exercised
         # elsewhere.  t/006 and t/010 also gate both supported majors here and
         # in the Nix flake.
-        continue-on-error: ${{ matrix.pg == 19 }}
         run: |
           PGBIN=/usr/lib/postgresql/${{ matrix.pg }}/bin
           pg_virtualenv -v ${{ matrix.pg }} \
@@ -99,7 +96,6 @@ jobs:
         # after it needs the normal build, and each matrix job gets a fresh
         # runner.  (No `make clean` after it: that would delete regression.diffs
         # before "Show diffs on failure" prints them.)
-        continue-on-error: ${{ matrix.pg == 19 }}
         run: |
           PGBIN=/usr/lib/postgresql/${{ matrix.pg }}/bin
           make clean PG_CONFIG=$PGBIN/pg_config >/dev/null

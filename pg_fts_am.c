@@ -760,17 +760,16 @@ bm25_build_callback(Relation index, ItemPointer tid, Datum *values,
 	}
 
 	/*
-	 * Corpus statistics (BM25 IDF + length normalization) must count only LIVE
-	 * documents.  During CREATE INDEX/REINDEX/VACUUM FULL, PostgreSQL surfaces
-	 * recently-dead tuples (deleted but not yet past the global horizon -- routine
-	 * whenever any snapshot pins the horizon, e.g. a standby's feedback) to this
-	 * callback with tupleIsAlive = false.  Such a tuple MUST still be indexed (an
-	 * old snapshot may reach it via the index -- so the add_posting loop above
-	 * runs unconditionally) but MUST NOT contribute to ndocs/sumdoclen: counting
-	 * it biases IDF and average-document-length scoring and over-reports the
-	 * document count.  Gate only the statistics on liveness.
+	 * Corpus statistics count every document that has a posting, live or not
+	 * (CHANGELOG 1.17.0).  A recently-dead tuple (tupleIsAlive = false: deleted,
+	 * but an old snapshot may still reach it through this index) is indexed and
+	 * later tombstoned by the VACUUM that removes it, and that VACUUM subtracts
+	 * it from N and the length total.  1.3.0 to 1.16.0 left it out here, so the
+	 * subtraction counted it twice: N went negative.  A document with no terms
+	 * has no posting, is in no segment's docid universe, and is never
+	 * tombstoned, so it is not counted at all (Lucene's docCount is the same).
 	 */
-	if (tupleIsAlive)
+	if (doc->nterms > 0)
 	{
 		bs->ndocs += 1.0;
 		bs->sumdoclen += doc->doclen;
@@ -1877,8 +1876,8 @@ doclen_collector_init(DoclenCollector *c, MemoryContext ctx, long nhint)
 }
 
 /* Record one doc's length (idempotent per docid: the byte is a function of the
- * length, identical across a doc's term postings). */
-static inline void
+ * length, identical across a doc's term postings).  True when the docid is new. */
+static inline bool
 doclen_collector_add(DoclenCollector *c, uint64 docid, uint32 doclen)
 {
 	bool		found;
@@ -1886,6 +1885,20 @@ doclen_collector_add(DoclenCollector *c, uint64 docid, uint32 doclen)
 
 	if (!found)
 		e->byte = fts_doclen_to_byte(doclen);
+	return !found;
+}
+
+/*
+ * A subset's share of a sidecar segment's exact length total `total`, from the
+ * byte intervals: the whole segment's lower ends sum to alo with widths aw, the
+ * subset's to slo and sw.  See bm25_segment_dead_doclen.
+ */
+static double
+bm25_doclen_share(double total, double alo, double aw, double slo, double sw)
+{
+	if (total < alo || total > alo + aw)
+		total = alo + aw / 2;	/* not this sidecar's total: a pre-1.17.0 merge */
+	return aw > 0 ? slo + (total - alo) * (sw / aw) : slo;
 }
 
 static int
@@ -4578,11 +4591,7 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 
 	srcv = (MergeSource *) palloc0(nsel * sizeof(MergeSource));
 	for (i = 0; i < nsel; i++)
-	{
-		bs->sumdoclen += chosen[i].sumdoclen;
-		bs->ndocs += chosen[i].ndocs - chosen[i].ndeleted;
 		merge_source_open(index, &chosen[i], &srcv[i], bs->ctx);
-	}
 
 	dict_spill_begin(&spill);
 
@@ -4597,22 +4606,40 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 	 * it once per document here; a v3 source (inline doclen, no sidecar) still
 	 * feeds it per posting below.  Per posting it was 21% of a merge (1.11.0).
 	 */
+	/*
+	 * The merged segment's length total is its surviving documents' (CHANGELOG
+	 * 1.17.0; through 1.16.0 it was the inputs' totals, deleted documents
+	 * included).  A v4 source has only their bytes, so its survivors' share of
+	 * the source's exact total comes from the byte intervals
+	 * (bm25_doclen_share); a v3 source's survivors are summed exactly below.
+	 */
 	for (i = 0; i < nsel; i++)
 	{
 		MergeSource *s = &srcv[i];
 		int			k;
+		double		alo = 0,
+					aw = 0,
+					llo = 0,
+					lw = 0;
 
 		if (s->has_doclen_col)
 			continue;
 		for (k = 0; k < s->doclens.n; k++)
 		{
 			uint64		dv = s->doclens.docids[k];
+			double		lo = fts_byte_to_doclen(s->doclens.bytes[k]);
+			double		w = fts_byte_doclen_width(s->doclens.bytes[k]);
 
+			alo += lo;
+			aw += w;
 			if (s->hastomb && dv < s->tombdense_n &&
 				(s->tombdense[dv >> 3] & (uint8) (1u << (dv & 7))) != 0)
 				continue;
+			llo += lo;
+			lw += w;
 			doclen_collector_add(&mergedc, dv, fts_byte_to_doclen(s->doclens.bytes[k]));
 		}
+		bs->sumdoclen += bm25_doclen_share(chosen[i].sumdoclen, alo, aw, llo, lw);
 	}
 
 	for (;;)
@@ -4746,7 +4773,8 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 					 * source's documents were collected once above).  WITHOUT
 					 * this the merged sidecar misses these documents and their
 					 * postings are mis-read (garbage doclen). */
-					doclen_collector_add(&mergedc, bm25_tid_to_docid(&post[k].tid), doclen);
+					if (doclen_collector_add(&mergedc, bm25_tid_to_docid(&post[k].tid), doclen))
+						bs->sumdoclen += doclen;	/* first posting of a survivor */
 				}
 				/* every posting gathered here is for smterm: resolve its
 				 * BuildTerm once, then append */
@@ -4808,6 +4836,10 @@ bm25_merge_segments_streaming(Relation index, const BM25SegMeta *chosen,
 
 	MemSet(seg, 0, sizeof(BM25SegMeta));
 	seg->doclenstart = bs->want_sidecar ? bm25_write_doclen_sidecar(index, &mergedc) : InvalidBlockNumber;
+	/* one entry per surviving document, whatever the inputs' counts said
+	 * (1.17.0: through 1.16.0 the inputs' ndocs - ndeleted, which a pre-1.17.0
+	 * build had left wrong; see bm25_build_callback) */
+	bs->ndocs = (double) hash_get_num_entries(mergedc.ht);
 	hash_destroy(mergedc.ht);
 	dict_spill_rewind(&spill);
 	seg->dictstart = bm25_write_dictionary_iter(index, dict_spill_next, &spill,
@@ -7171,7 +7203,7 @@ bm25_insert(Relation index, Datum *values, bool *isnull,
 			((PageHeader) tailpage)->pd_lower += need;
 			metapage = GenericXLogRegisterBuffer(state, metabuf, 0);
 			meta = BM25PageGetMeta(metapage);
-			meta->ndocs += 1.0;
+			meta->ndocs += doc->nterms > 0 ? 1.0 : 0.0;	/* see bm25_build_callback */
 			meta->sumdoclen += doc->doclen;
 			meta->npending += 1;
 			npending = meta->npending;
@@ -7215,7 +7247,7 @@ bm25_insert(Relation index, Datum *values, bool *isnull,
 			metapage = GenericXLogRegisterBuffer(state, metabuf, 0);
 			meta = BM25PageGetMeta(metapage);
 			meta->pendingtail = newblk;
-			meta->ndocs += 1.0;
+			meta->ndocs += doc->nterms > 0 ? 1.0 : 0.0;	/* see bm25_build_callback */
 			meta->sumdoclen += doc->doclen;
 			meta->npending += 1;
 			npending = meta->npending;
@@ -7228,7 +7260,7 @@ bm25_insert(Relation index, Datum *values, bool *isnull,
 			meta = BM25PageGetMeta(metapage);
 			meta->pendinghead = newblk;
 			meta->pendingtail = newblk;
-			meta->ndocs += 1.0;
+			meta->ndocs += doc->nterms > 0 ? 1.0 : 0.0;	/* see bm25_build_callback */
 			meta->sumdoclen += doc->doclen;
 			meta->npending += 1;
 			npending = meta->npending;
@@ -7498,7 +7530,7 @@ bm25_flush_pending(Relation index)
 							entries[j].len, &pi->tid, entries[j].tf,
 							pdoc->doclen, pos, pos ? (int) entries[j].tf : 0);
 			}
-			bs.ndocs += 1.0;
+			bs.ndocs += pdoc->nterms > 0 ? 1.0 : 0.0;	/* see bm25_build_callback */
 			bs.sumdoclen += pdoc->doclen;
 			ptr += MAXALIGN(sizeof(BM25PendingItem) + pi->doclen);
 		}
@@ -7760,6 +7792,145 @@ bm25_segment_docids(Relation index, const BM25SegMeta *seg)
 }
 
 /*
+ * The summed length of `dead` (ascending docids, all in this segment), for the
+ * corpus total after bulkdelete tombstones them (CHANGELOG 1.17.0).
+ *
+ * An inline-doclen segment (v3) stores each posting's exact length: walk the
+ * dictionary decoding postings until every dead docid has been seen once.  The
+ * walk stops at the last of them, usually well before the end.
+ *
+ * A sidecar segment (v4) stores one byte per document, a length to 4
+ * significant bits, so it bounds each length to an interval (see
+ * fts_byte_doclen_width).  The segment's exact total `sumdoclen` is known, so
+ * the slack between it and the sum of the lower ends is shared out in
+ * proportion to interval width: exact when every inexact document dies (the
+ * reporter's case) or none does, and always inside the dead documents' own
+ * bounds.  A total outside the sidecar's bounds (one carried forward by a merge
+ * in 1.16.0 or before, which kept deleted documents' lengths) is replaced by
+ * the midpoint of the bounds.
+ */
+static double
+bm25_segment_dead_doclen(Relation index, const BM25SegMeta *seg,
+						 const uint64 *dead, int ndead)
+{
+	if (ndead <= 0)
+		return 0.0;
+
+	if (seg->doclenstart != InvalidBlockNumber)
+	{
+		BM25Doclens d;
+		double		alo = 0,
+					aw = 0,
+					dlo = 0,
+					dw = 0;
+		int			k,
+					j = 0;
+
+		bm25_doclens_load(index, seg->doclenstart, &d);
+		for (k = 0; k < d.n; k++)
+		{
+			double		lo = fts_byte_to_doclen(d.bytes[k]);
+			double		w = fts_byte_doclen_width(d.bytes[k]);
+
+			alo += lo;
+			aw += w;
+			while (j < ndead && dead[j] < d.docids[k])
+				j++;
+			if (j < ndead && dead[j] == d.docids[k])
+			{
+				dlo += lo;
+				dw += w;
+			}
+		}
+		bm25_doclens_free(&d);
+		return bm25_doclen_share(seg->sumdoclen, alo, aw, dlo, dw);
+	}
+
+	{
+		uint64		lo = dead[0];
+		uint64		span = dead[ndead - 1] - lo + 1;
+		uint8	   *map = NULL; /* dead docids as a dense bitmap: a prefilter */
+		bool	   *seen;		/* per dead[] entry: its length is summed */
+		int			left = ndead;
+		double		sum = 0;
+		BlockNumber blk = seg->dictstart;
+		int			k;
+
+		/* a docid is heap_block * 291 + offset, so the map is ~36 bytes per heap
+		 * page the dead rows span; past 64 MB, binary-search every posting */
+		if (span <= (uint64) 64 * 1024 * 1024 * 8)
+		{
+			map = (uint8 *) palloc0((Size) ((span + 7) / 8));
+			for (k = 0; k < ndead; k++)
+				map[(dead[k] - lo) >> 3] |= (uint8) (1u << ((dead[k] - lo) & 7));
+		}
+		seen = (bool *) FTS_ALLOC_MAYBE_HUGE((Size) ndead * sizeof(bool));
+		memset(seen, 0, (Size) ndead * sizeof(bool));
+		while (blk != InvalidBlockNumber && left > 0)
+		{
+			Buffer		buffer = bm25_readbuf(index, blk);
+			Page		page;
+			char	   *ptr,
+					   *end;
+			BlockNumber next;
+
+			CHECK_FOR_INTERRUPTS();
+			FTS_VACUUM_DELAY_POINT();
+			LockBuffer(buffer, BUFFER_LOCK_SHARE);
+			page = BufferGetPage(buffer);
+			ptr = (char *) PageGetContents(page);
+			end = bm25_page_data_end(page);
+			next = BM25PageGetOpaque(page)->nextblk;
+			bm25_chain_prefetch(index, blk, next);
+			while (ptr < end && left > 0)
+			{
+				BM25DictEntry *de = (BM25DictEntry *) ptr;
+				BM25Posting *post;
+				int			np,
+							p;
+
+				if (!bm25_dict_entry_fits(de, end))
+					break;		/* recycled/corrupt page: stop (see bm25_dict_entry_fits) */
+				np = bm25_decode_term(index, de->firstposting, de->firstoffset,
+									  de->df, &post, NULL, false, NULL, false, true);
+				for (p = 0; p < np; p++)
+				{
+					uint64		v = bm25_tid_to_docid(&post[p].tid);
+					int			a = 0,
+								b = ndead - 1;
+
+					if (v < lo || v - lo >= span ||
+						(map && (map[(v - lo) >> 3] & (1u << ((v - lo) & 7))) == 0))
+						continue;
+					while (a < b)	/* dead[] ascending: first entry >= v */
+					{
+						int			mid = a + (b - a) / 2;
+
+						if (dead[mid] < v)
+							a = mid + 1;
+						else
+							b = mid;
+					}
+					if (dead[a] != v || seen[a])
+						continue;
+					seen[a] = true;
+					sum += post[p].doclen;
+					left--;
+				}
+				pfree(post);
+				ptr += MAXALIGN(offsetof(BM25DictEntry, term) + de->termlen);
+			}
+			UnlockReleaseBuffer(buffer);
+			blk = next;
+		}
+		if (map)
+			pfree(map);
+		pfree(seen);
+		return sum;
+	}
+}
+
+/*
  * bm25_bulkdelete: VACUUM asks us, via `callback`, which of the TIDs in the
  * index refer to now-dead heap tuples.  Because postings live in immutable
  * segments, we cannot cheaply remove individual entries; instead we maintain a
@@ -7826,6 +7997,7 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 		sm_cursor_t ccur;		/* reset immediately before the walk below */
 		uint64		v;
 		uint32		ndead = 0;
+		double		deadlen = 0;	/* summed length of the newly tombstoned docs */
 		BlockNumber oldlivedocs;
 		uint32		oldlen;
 
@@ -7952,6 +8124,7 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 			}
 			dead_v = dead;		/* sm_add_many_grow may realloc: resync cleanup ptr */
 			ndead += nnew;
+			deadlen = bm25_segment_dead_doclen(index, sg, newdead, nnew);
 			if (newdead)
 				pfree(newdead);
 		}
@@ -7992,6 +8165,10 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 					m->segs[s].livedocs = newblk;
 					m->segs[s].livedocslen = newlen;
 					m->segs[s].ndeleted = ndead;
+					/* the corpus length total leaves with the documents, in the same
+					 * record as their tombstones (CHANGELOG 1.17.0: it kept them
+					 * until a REINDEX); N is recomputed below */
+					m->sumdoclen = Max(m->sumdoclen - deadlen, 0.0);
 					m->generation++;	/* livedocs blob pages freed: invalidate scan snapshots */
 				}
 				GenericXLogFinish(st);
@@ -8019,8 +8196,10 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 		mp = GenericXLogRegisterBuffer(st, mb, 0);
 		bm25_meta_upcast_page(mp);	/* v3 -> v4 before reading segs[] and writing */
 		m = BM25PageGetMeta(mp);
+		/* clamped: a segment built before 1.17.0 can hold fewer counted
+		 * documents than tombstones (see bm25_build_callback) */
 		for (i = 0; i < m->nsegments; i++)
-			nd += m->segs[i].ndocs - m->segs[i].ndeleted;
+			nd += Max(m->segs[i].ndocs - m->segs[i].ndeleted, 0.0);
 		m->ndocs = nd + m->npending;
 		GenericXLogFinish(st);
 		UnlockReleaseBuffer(mb);
@@ -8040,6 +8219,87 @@ bm25_bulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	stats->tuples_removed += (double) tuples_removed;
 	stats->num_pages = RelationGetNumberOfBlocks(index);
 	return stats;
+}
+
+/*
+ * Recompute the corpus totals from the segments when nothing is tombstoned or
+ * pending, i.e. the segments hold exactly the live documents (CHANGELOG 1.17.0).
+ * An index that deleted documents through 1.16.0 kept their lengths in the
+ * corpus total, and a merge then in each segment's; bulkdelete now subtracts
+ * them as it tombstones, and this re-anchors the corpus on the segments
+ * whenever they are complete, at the end of fts_vacuum and fts_merge (not in
+ * VACUUM's cleanup: it would read every sidecar on each autovacuum).  A v4 segment's total
+ * is held to its sidecar's bounds (bm25_doclen_share); a v3 segment's is exact
+ * once a merge has rewritten it.  The segment descriptors are not changed:
+ * their counts are cache identity (pg_fts_shdoclen.c, bm25_dictdir_find).
+ * Caller holds the maintenance lock.
+ */
+static void
+bm25_reanchor_corpus(Relation index)
+{
+	BM25MetaPageData meta;
+	double		nd = 0,
+				sl = 0;
+	uint32		s;
+	Buffer		mb;
+	GenericXLogState *st;
+	Page		mp;
+	BM25MetaPageData *m;
+
+	mb = bm25_readbuf(index, BM25_METAPAGE_BLKNO);
+	LockBuffer(mb, BUFFER_LOCK_SHARE);
+	bm25_meta_from_page(BufferGetPage(mb), &meta);
+	UnlockReleaseBuffer(mb);
+	if (meta.npending != 0)
+		return;
+	for (s = 0; s < meta.nsegments; s++)
+	{
+		BM25SegMeta *sg = &meta.segs[s];
+
+		if (sg->ndeleted != 0)
+			return;
+		nd += sg->ndocs;
+		if (sg->doclenstart != InvalidBlockNumber)
+		{
+			BM25Doclens d;
+			double		alo = 0,
+						aw = 0;
+			int			k;
+
+			bm25_doclens_load(index, sg->doclenstart, &d);
+			for (k = 0; k < d.n; k++)
+			{
+				alo += fts_byte_to_doclen(d.bytes[k]);
+				aw += fts_byte_doclen_width(d.bytes[k]);
+			}
+			bm25_doclens_free(&d);
+			sl += bm25_doclen_share(sg->sumdoclen, alo, aw, alo, aw);
+		}
+		else
+			sl += sg->sumdoclen;
+	}
+
+	mb = bm25_readbuf(index, BM25_METAPAGE_BLKNO);
+	LockBuffer(mb, BUFFER_LOCK_EXCLUSIVE);
+	{
+		BM25MetaPageData cur;	/* version-aware read: v3 has other offsets */
+
+		bm25_meta_from_page(BufferGetPage(mb), &cur);
+		if (cur.generation != meta.generation || cur.npending != 0 ||
+			(cur.ndocs == nd && cur.sumdoclen == sl))
+		{
+			UnlockReleaseBuffer(mb);	/* changed under us, or nothing to repair */
+			return;
+		}
+	}
+	st = GenericXLogStart(index);
+	mp = GenericXLogRegisterBuffer(st, mb, 0);
+	bm25_meta_upcast_page(mp);	/* v3 -> v4 before struct write */
+	m = BM25PageGetMeta(mp);
+	m->ndocs = nd;
+	m->sumdoclen = sl;
+	GenericXLogFinish(st);
+	UnlockReleaseBuffer(mb);
 }
 
 static IndexBulkDeleteResult *
@@ -8193,6 +8453,7 @@ fts_merge(PG_FUNCTION_ARGS)
 		 */
 		if (bm25_merge_all(index, true))
 			done = true;
+		bm25_reanchor_corpus(index);
 	}
 	PG_FINALLY();
 	{
@@ -8244,6 +8505,7 @@ fts_vacuum(PG_FUNCTION_ARGS)
 		done = bm25_flush_pending(index);
 		if (bm25_vacuum_compact(index))
 			done = true;
+		bm25_reanchor_corpus(index);
 	}
 	PG_FINALLY();
 	{

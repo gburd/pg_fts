@@ -390,4 +390,18 @@ fts_byte_to_doclen(uint8 b)
 	return (0x08u | mant) << (e - 1);	/* implicit leading 1, shift back */
 }
 
+/*
+ * Every length that encodes to `b` lies in [fts_byte_to_doclen(b),
+ * fts_byte_to_doclen(b) + fts_byte_doclen_width(b)]: the dropped low bits.  0
+ * for the exact codes (lengths 0..15).  Lets a caller bound a sum of lengths it
+ * only has bytes for (CHANGELOG 1.17.0: the corpus total after deletes).
+ */
+static inline uint32
+fts_byte_doclen_width(uint8 b)
+{
+	uint32		e = (b >> 3) & 0x1F;
+
+	return e >= 2 ? (1u << (e - 1)) - 1 : 0;
+}
+
 #endif							/* PG_FTS_FOR_H */

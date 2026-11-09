@@ -1,0 +1,27 @@
+Parsed test spec with 2 sessions
+
+starting permutation: r_snap b_delete b_build b_built r_end b_vacuum b_check
+step r_snap: BEGIN ISOLATION LEVEL REPEATABLE READ; SELECT count(*) AS seen FROM rd;
+seen
+----
+1000
+(1 row)
+
+step b_delete: DELETE FROM rd WHERE id <= 900;
+step b_build: CREATE INDEX rd_fts ON rd USING fts (to_ftsdoc('simple', body));
+step b_built: SELECT ndocs AS ndocs_built FROM fts_index_stats('rd_fts');
+ndocs_built
+-----------
+       1000
+(1 row)
+
+step r_end: COMMIT;
+step b_vacuum: VACUUM rd;
+step b_check: SELECT s.ndocs AS ndocs, (SELECT count(*) FROM rd) AS live,
+                         s.ndocs = (SELECT count(*) FROM rd) AS agree
+                    FROM fts_index_stats('rd_fts') s;
+ndocs|live|agree
+-----+----+-----
+  100| 100|t    
+(1 row)
+

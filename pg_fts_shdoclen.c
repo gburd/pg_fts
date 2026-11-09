@@ -63,6 +63,7 @@
 #include "storage/procarray.h"
 #include "utils/resowner.h"
 #include "funcapi.h"
+#include "utils/tuplestore.h"
 #include "utils/builtins.h"
 
 #define BM25_SHDOCLEN_SLOTS 256

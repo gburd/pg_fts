@@ -1,0 +1,152 @@
+-- corpus_stats (1.17.0): the corpus document count and length total that BM25
+-- scores with (fts_index_stats.ndocs / avgdl) follow deletions.
+--
+-- Through 1.16.0 bulkdelete lowered ndocs as it tombstoned rows but kept their
+-- lengths in the total, a merge carried them into the merged segment, and only
+-- a REINDEX reset them: deleting the long half of a table read avgdl 110
+-- against a true 10 (report of 2026-11-04).  Two siblings with the same cause
+-- (a count the deletions are later subtracted from):
+--   - a build left recently-dead rows (deleted, still visible to an open
+--     snapshot) out of ndocs but indexed them, and the VACUUM that removed
+--     them subtracted them again: ndocs went negative;
+--   - a document with no terms was counted but has no posting, so no VACUUM
+--     could ever subtract it.
+-- Each check compares against the table itself; every count is non-zero.
+SET client_min_messages = warning;
+CREATE TABLE cs_t (id int PRIMARY KEY, body text) WITH (autovacuum_enabled = off);
+CREATE FUNCTION pg_temp.truth(OUT n bigint, OUT avgdl numeric) LANGUAGE sql AS $$
+  SELECT count(*), round(avg(ftsdoc_length(to_ftsdoc('simple', body))), 3)
+    FROM cs_t WHERE ftsdoc_length(to_ftsdoc('simple', body)) > 0 $$;
+CREATE FUNCTION pg_temp.stats(idx regclass) RETURNS text LANGUAGE sql AS $$
+  SELECT format('ndocs %s avgdl %s', s.ndocs, round(s.avgdl::numeric, 3))
+    FROM fts_index_stats(idx) s $$;
+CREATE FUNCTION pg_temp.ok(idx regclass) RETURNS boolean LANGUAGE sql AS $$
+  SELECT s.ndocs = t.n AND abs(s.avgdl::numeric - t.avgdl) <= 0.001 * t.avgdl
+    FROM fts_index_stats(idx) s, pg_temp.truth() t $$;
+-- the report's shape: even ids 10 words, odd ids 100 words, delete the odd
+INSERT INTO cs_t SELECT g, (SELECT string_agg('w' || ((g * 7 + s) % 500), ' ')
+    FROM generate_series(1, CASE WHEN g % 2 = 0 THEN 10 ELSE 100 END) s)
+  FROM generate_series(1, 4000) g;
+CREATE INDEX cs_on ON cs_t USING fts (to_ftsdoc('simple', body)) WITH (doclen_sidecar = on);
+CREATE INDEX cs_off ON cs_t USING fts (to_ftsdoc('simple', body)) WITH (doclen_sidecar = off);
+SELECT pg_temp.stats('cs_on') AS built_on, pg_temp.stats('cs_off') AS built_off;
+        built_on         |        built_off        
+-------------------------+-------------------------
+ ndocs 4000 avgdl 55.000 | ndocs 4000 avgdl 55.000
+(1 row)
+
+DELETE FROM cs_t WHERE id % 2 = 1;
+VACUUM cs_t;
+-- 1.16.0: ndocs 2000 avgdl 110.000 for both
+SELECT pg_temp.stats('cs_on') AS vacuumed_on, pg_temp.stats('cs_off') AS vacuumed_off,
+       pg_temp.ok('cs_on') AND pg_temp.ok('cs_off') AS agree;
+       vacuumed_on       |      vacuumed_off       | agree 
+-------------------------+-------------------------+-------
+ ndocs 2000 avgdl 10.000 | ndocs 2000 avgdl 10.000 | t
+(1 row)
+
+SELECT segment, ndocs, ndeleted, doclen_sidecar, tombstone_bytes > 0 AS has_tombstones
+  FROM fts_index_segments('cs_on');
+ segment | ndocs | ndeleted | doclen_sidecar | has_tombstones 
+---------+-------+----------+----------------+----------------
+       0 |  4000 |     2000 | t              | t
+(1 row)
+
+SELECT fts_vacuum('cs_on') AS expunged_on, fts_vacuum('cs_off') AS expunged_off;
+ expunged_on | expunged_off 
+-------------+--------------
+ t           | t
+(1 row)
+
+SELECT pg_temp.stats('cs_on') AS fts_vacuum_on, pg_temp.stats('cs_off') AS fts_vacuum_off,
+       pg_temp.ok('cs_on') AND pg_temp.ok('cs_off') AS agree;
+      fts_vacuum_on      |     fts_vacuum_off      | agree 
+-------------------------+-------------------------+-------
+ ndocs 2000 avgdl 10.000 | ndocs 2000 avgdl 10.000 | t
+(1 row)
+
+SELECT segment, ndocs, ndeleted, tombstone_bytes FROM fts_index_segments('cs_on');
+ segment | ndocs | ndeleted | tombstone_bytes 
+---------+-------+----------+-----------------
+       0 |  2000 |        0 |               0
+(1 row)
+
+-- churn over several segments and merges: lengths vary, partial deletes.  The
+-- sidecar index keeps lengths to 4 significant bits, so its avgdl is held to
+-- 0.1% here; the inline index is exact.
+SET pg_fts.pending_flush_threshold = 300;   -- inserts flush their own segments
+INSERT INTO cs_t SELECT g, (SELECT string_agg('w' || ((g * 13 + s) % 700), ' ')
+    FROM generate_series(1, 1 + (g * 37) % 230) s)
+  FROM generate_series(10001, 13000) g;
+RESET pg_fts.pending_flush_threshold;
+SELECT fts_index_nsegments('cs_on') > 1 AS several_segments_on,
+       fts_index_nsegments('cs_off') > 1 AS several_segments_off;
+ several_segments_on | several_segments_off 
+---------------------+----------------------
+ t                   | t
+(1 row)
+
+DELETE FROM cs_t WHERE id % 5 = 0 OR (id > 10000 AND id % 3 = 0);
+VACUUM cs_t;    -- tombstones in every segment, and a merge
+SELECT pg_temp.ok('cs_on') AS agree_on, pg_temp.ok('cs_off') AS agree_off;
+ agree_on | agree_off 
+----------+-----------
+ t        | t
+(1 row)
+
+SELECT (SELECT ndocs FROM fts_index_stats('cs_off')) = (SELECT n FROM pg_temp.truth()) AS ndocs_exact_off,
+       (SELECT round(avgdl::numeric, 3) FROM fts_index_stats('cs_off')) = (SELECT avgdl FROM pg_temp.truth()) AS avgdl_exact_off;
+ ndocs_exact_off | avgdl_exact_off 
+-----------------+-----------------
+ t               | t
+(1 row)
+
+SELECT fts_merge('cs_on') AS merged_on, fts_merge('cs_off') AS merged_off;  -- f: VACUUM merged
+ merged_on | merged_off 
+-----------+------------
+ f         | f
+(1 row)
+
+SELECT pg_temp.ok('cs_on') AS merged_agree_on, pg_temp.ok('cs_off') AS merged_agree_off,
+       (SELECT round(avgdl::numeric, 3) FROM fts_index_stats('cs_off')) = (SELECT avgdl FROM pg_temp.truth()) AS avgdl_exact_off;
+ merged_agree_on | merged_agree_off | avgdl_exact_off 
+-----------------+------------------+-----------------
+ t               | t                | t
+(1 row)
+
+SELECT sum(ndeleted) AS tombstones_after_merge FROM fts_index_segments('cs_on');
+ tombstones_after_merge 
+------------------------
+                      0
+(1 row)
+
+REINDEX INDEX cs_on;
+REINDEX INDEX cs_off;
+SELECT pg_temp.ok('cs_on') AS reindex_agree_on, pg_temp.ok('cs_off') AS reindex_agree_off;
+ reindex_agree_on | reindex_agree_off 
+------------------+-------------------
+ t                | t
+(1 row)
+
+-- rows with no terms: not counted, so deleting them leaves ndocs right
+TRUNCATE cs_t;
+INSERT INTO cs_t SELECT g, CASE WHEN g <= 100 THEN '' ELSE 'alpha w' || g END
+  FROM generate_series(1, 1000) g;
+REINDEX INDEX cs_on;
+INSERT INTO cs_t VALUES (2000, ''), (2001, 'beta gamma delta');   -- pending
+SELECT pg_temp.stats('cs_on') AS with_empty_rows, pg_temp.ok('cs_on') AS agree;
+    with_empty_rows    | agree 
+-----------------------+-------
+ ndocs 901 avgdl 2.001 | t
+(1 row)
+
+DELETE FROM cs_t WHERE id <= 100 OR id = 2000;
+VACUUM cs_t;
+-- 1.16.0: ndocs 1001 (truth 901)
+SELECT pg_temp.stats('cs_on') AS empty_rows_deleted, pg_temp.ok('cs_on') AS agree;
+  empty_rows_deleted   | agree 
+-----------------------+-------
+ ndocs 901 avgdl 2.001 | t
+(1 row)
+
+DROP TABLE cs_t;

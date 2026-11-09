@@ -268,6 +268,17 @@ RETURNS record
 AS 'MODULE_PATHNAME', 'fts_index_stats'
 LANGUAGE C STRICT PARALLEL SAFE;
 
+-- 1.17.0: one row per segment, with its tombstoned documents (deleted rows a
+-- scan still reads past until a merge, fts_vacuum or REINDEX drops them).
+CREATE FUNCTION fts_index_segments(regclass,
+                                   OUT segment integer, OUT ndocs bigint,
+                                   OUT ndeleted bigint, OUT nterms bigint,
+                                   OUT doclen_sidecar boolean,
+                                   OUT tombstone_bytes bigint)
+RETURNS SETOF record
+AS 'MODULE_PATHNAME', 'fts_index_segments'
+LANGUAGE C STRICT VOLATILE PARALLEL SAFE;
+
 -- Per-query-term document frequencies from the index (for fts_bm25's dfs arg).
 CREATE FUNCTION fts_index_df(regclass, ftsquery)
 RETURNS float8[]

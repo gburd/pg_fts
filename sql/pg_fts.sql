@@ -1,4 +1,4 @@
-CREATE EXTENSION pg_fts VERSION '1.16.0';
+CREATE EXTENSION pg_fts VERSION '1.17.0';
 
 -- ftsdoc: analysis, output shows terms with term frequencies
 SELECT to_ftsdoc('The quick brown fox, the QUICK fox!');
@@ -916,8 +916,10 @@ INSERT INTO idxdocs (d) VALUES
 CREATE INDEX idxdocs_bm25 ON idxdocs USING fts (d);
 
 -- force index usage and confirm the plan uses a bitmap scan on our AM
-SET enable_seqscan = off;
+-- (enable_indexscan off: PostgreSQL 19 costs the two index paths differently)
+SET enable_seqscan = off; SET enable_indexscan = off;
 EXPLAIN (COSTS OFF) SELECT id FROM idxdocs WHERE d @@@ 'quick'::ftsquery ORDER BY id;
+RESET enable_indexscan;
 
 -- results must match a sequential @@@ evaluation
 SELECT id FROM idxdocs WHERE d @@@ 'quick'::ftsquery ORDER BY id;
@@ -3209,8 +3211,9 @@ DROP TABLE wand_tie_regress;
 -- fts_count -- as the heap matcher under a forced seqscan.  The index has two
 -- segments (the second flushed by VACUUM), tombstones in both (deleted +
 -- vacuumed rows), and a pending list whose rows may reuse the freed heap
--- slots.  count(id), not count(*): a bare count(*) is answered by the FtsCount
--- pushdown, which uses the index even when seqscans are forced.
+-- slots.  count(d), not count(*): a bare count(*) is answered by the FtsCount
+-- pushdown, which uses the index even when seqscans are forced, and from
+-- PostgreSQL 19 so is the count of a NOT NULL column (d is nullable).
 -- ---------------------------------------------------------------------------
 CREATE FUNCTION notseg_doc(g int) RETURNS ftsdoc LANGUAGE sql AS $$
   SELECT to_ftsdoc('w' || g || CASE WHEN g % 2 = 0 THEN ' apple' ELSE '' END
@@ -3227,17 +3230,17 @@ INSERT INTO notseg(d) SELECT notseg_doc(g) FROM generate_series(601, 700) g;  --
 SELECT fts_index_nsegments('notseg_fts') AS notseg_segments;    -- 2
 -- the two plans compared below: bitmap scan of the index vs heap seqscan
 SET enable_seqscan = off; SET enable_indexscan = off; SET enable_bitmapscan = on;
-EXPLAIN (COSTS OFF) SELECT count(id) FROM notseg WHERE d @@@ 'apple & !cherry'::ftsquery;
+EXPLAIN (COSTS OFF) SELECT count(d) FROM notseg WHERE d @@@ 'apple & !cherry'::ftsquery;
 SET enable_seqscan = on; SET enable_bitmapscan = off;
-EXPLAIN (COSTS OFF) SELECT count(id) FROM notseg WHERE d @@@ 'apple & !cherry'::ftsquery;
+EXPLAIN (COSTS OFF) SELECT count(d) FROM notseg WHERE d @@@ 'apple & !cherry'::ftsquery;
 RESET enable_seqscan; RESET enable_indexscan; RESET enable_bitmapscan;
 CREATE FUNCTION notseg_counts(qry text, OUT via_bitmap bigint, OUT via_heap bigint,
                               OUT via_fts_count bigint) LANGUAGE plpgsql AS $$
 BEGIN
   SET LOCAL enable_seqscan = off; SET LOCAL enable_indexscan = off; SET LOCAL enable_bitmapscan = on;
-  EXECUTE format('SELECT count(id) FROM notseg WHERE d @@@ %L::ftsquery', qry) INTO via_bitmap;
+  EXECUTE format('SELECT count(d) FROM notseg WHERE d @@@ %L::ftsquery', qry) INTO via_bitmap;
   SET LOCAL enable_seqscan = on; SET LOCAL enable_bitmapscan = off;
-  EXECUTE format('SELECT count(id) FROM notseg WHERE d @@@ %L::ftsquery', qry) INTO via_heap;
+  EXECUTE format('SELECT count(d) FROM notseg WHERE d @@@ %L::ftsquery', qry) INTO via_heap;
   via_fts_count := fts_count('notseg_fts', qry::ftsquery);
 END $$;
 -- rows 1-4 need no universe; rows 5-10 do (the whole result is negated).
@@ -3545,11 +3548,20 @@ INSERT INTO wrq SELECT g, to_ftsdoc('simple',
 CREATE INDEX wrq_fts ON wrq USING fts (d);
 ANALYZE wrq;
 INSERT INTO wrq VALUES (13, to_ftsdoc('simple', 'apple cherry kiwi'));
+-- PostgreSQL 19 names an InitPlan by its output ("InitPlan expr_1"), not its
+-- plan id ("InitPlan 2"); normalise both to "InitPlan N".
+CREATE FUNCTION pg_temp.explain_initplan(q text) RETURNS SETOF text LANGUAGE plpgsql AS $$
+DECLARE l text;
+BEGIN
+  FOR l IN EXECUTE 'EXPLAIN (COSTS OFF) ' || q LOOP
+    RETURN NEXT regexp_replace(l, 'InitPlan (expr_)?[0-9]+', 'InitPlan N', 'g');
+  END LOOP;
+END $$;
 SET enable_seqscan = off; SET enable_bitmapscan = off;
-EXPLAIN (COSTS OFF)
+SELECT * FROM pg_temp.explain_initplan($q$
 WITH q AS (SELECT to_ftsquery('simple', 'apple & cherry') AS query)
 SELECT id FROM wrq WHERE d @@@ (SELECT query FROM q)
-ORDER BY d <=> (SELECT query FROM q) LIMIT 20;
+ORDER BY d <=> (SELECT query FROM q) LIMIT 20 $q$);
 WITH q AS (SELECT to_ftsquery('simple', 'apple & cherry') AS query)
 SELECT id FROM wrq WHERE d @@@ (SELECT query FROM q)
 ORDER BY d <=> (SELECT query FROM q) LIMIT 20;
@@ -3679,10 +3691,10 @@ INSERT INTO wrn VALUES (1, to_ftsdoc('simple', 'apple cherry')),
 CREATE INDEX wrn_fts ON wrn USING fts (d);
 ANALYZE wrn;
 SET enable_seqscan = off; SET enable_bitmapscan = off;
-EXPLAIN (COSTS OFF)
+SELECT * FROM pg_temp.explain_initplan($q$
 WITH q AS (SELECT NULL::ftsquery AS query)
 SELECT id FROM wrn WHERE d @@@ (SELECT query FROM q)
-ORDER BY d <=> 'apple'::ftsquery LIMIT 10;
+ORDER BY d <=> 'apple'::ftsquery LIMIT 10 $q$);
 WITH q AS (SELECT NULL::ftsquery AS query)
 SELECT id FROM wrn WHERE d @@@ (SELECT query FROM q)
 ORDER BY d <=> 'apple'::ftsquery LIMIT 10;

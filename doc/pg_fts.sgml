@@ -383,6 +383,30 @@ SELECT id FROM docs
       holds.  <literal>nterms</literal> sums the segment dictionaries only: a term
       held only by pending documents is not counted until the next merge or
       flush, and a term in several segments is counted once per segment.
+      <literal>ndocs</literal> counts documents with at least one term, and
+      both it and <literal>avgdl</literal> drop deleted rows when
+      <command>VACUUM</command> tombstones them (1.17.0; before, the length
+      total kept them until a <command>REINDEX</command>).  With
+      <literal>doclen_sidecar = on</literal> the index keeps each length only to
+      4 significant bits, so after deletes <literal>avgdl</literal> is an
+      estimate held within those bounds; with <literal>off</literal> it stays
+      exact.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><function>fts_index_segments(<replaceable>index</replaceable> regclass)</function></term>
+    <listitem>
+     <para>
+      One row per segment: <literal>segment</literal> (its position in the
+      directory), <literal>ndocs</literal> (documents, tombstoned ones
+      included), <literal>ndeleted</literal> (tombstoned),
+      <literal>nterms</literal>, <literal>doclen_sidecar</literal> and
+      <literal>tombstone_bytes</literal>.  A ranked or counting scan still reads
+      past every tombstoned document of its segments; a merge,
+      <function>fts_vacuum</function> or <command>REINDEX</command> drops them
+      (1.17.0).
      </para>
     </listitem>
    </varlistentry>
