@@ -12,31 +12,31 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pg: [17, 18, 19]   # 19 from the pgdg -testing repo until it is released
+        pg: [17, 18, 19]
     steps:
       - uses: actions/checkout@v4
 
       - name: Install PostgreSQL ${{ matrix.pg }} + server headers
-        # 19 lives in the pgdg -testing repo.  It gates (1.17.0): through 1.16.0
-        # every step here was continue-on-error for 19 and apt could not resolve
-        # libpq-dev 19 without -t, so the leg was green while it built nothing
-        # and pg_fts did not compile against 19.
+        # 19 comes from the pgdg repository's own "19" component (it held the
+        # betas and RCs and holds 19.0 from its release); it gates like 17 and
+        # 18.  Through 1.16.0 every step was continue-on-error for 19 and the
+        # install never succeeded, so the leg was green while it built nothing
+        # (CHANGELOG 1.17.0, Retracted).
         run: |
           # The runner's preinstalled Microsoft apt repo intermittently serves a
           # broken InRelease and fails `apt-get update`; remove just that repo
           # (keep the LLVM/ubuntu repos — postgresql-server-dev depends on clang).
           sudo rm -f /etc/apt/sources.list.d/microsoft*.list /etc/apt/sources.list.d/microsoft*.sources || true
-          sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
-          if [ "${{ matrix.pg }}" = "19" ]; then
-            sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg-testing main 19" > /etc/apt/sources.list.d/pgdg-testing.list'
-          fi
+          # Component <major> carries that major's server and the libpq it
+          # needs (main has the newest released libpq, 18 for a 19 beta/RC).
+          sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main ${{ matrix.pg }}" > /etc/apt/sources.list.d/pgdg.list'
           curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
           sudo apt-get update
-          T=; [ "${{ matrix.pg }}" = "19" ] && T="-t $(lsb_release -cs)-pgdg-testing"
-          sudo apt-get install -y --no-install-recommends $T \
+          sudo apt-get install -y --no-install-recommends \
             postgresql-${{ matrix.pg }} \
             postgresql-server-dev-${{ matrix.pg }} \
             gcc make libipc-run-perl
+          echo "PostgreSQL under test: $(/usr/lib/postgresql/${{ matrix.pg }}/bin/postgres --version)"
 
       - name: Build
         run: make PG_CONFIG=/usr/lib/postgresql/${{ matrix.pg }}/bin/pg_config
