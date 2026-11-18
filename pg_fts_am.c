@@ -850,10 +850,17 @@ bm25_maint_io_begin(void)
 	{
 		/* TopMemoryContext: kept for the backend's life and reused, so an
 		 * abort that skips bm25_maint_io_end can never leave a dangling
-		 * pointer; the depth is reset at the next outermost begin */
+		 * pointer; the depth is reset at the next outermost begin.  An
+		 * autovacuum worker gets a VACUUM ring of the same size: pg_stat_io
+		 * does not track bulk-write I/O there, and an assert-enabled server
+		 * aborts the worker on its first read (pgstat_count_io_op, since
+		 * 1.11.0; CHANGELOG 1.18.0).  The two ring types reuse buffers
+		 * alike (StrategyRejectBuffer acts only on BAS_BULKREAD). */
 		MemoryContext old = MemoryContextSwitchTo(TopMemoryContext);
 
-		bm25_maint_strategy = GetAccessStrategy(BAS_BULKWRITE);
+		bm25_maint_strategy = AmAutoVacuumWorkerProcess()
+			? GetAccessStrategyWithSize(BAS_VACUUM, 16 * 1024)
+			: GetAccessStrategy(BAS_BULKWRITE);
 		MemoryContextSwitchTo(old);
 	}
 }

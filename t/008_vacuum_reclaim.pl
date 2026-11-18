@@ -23,6 +23,7 @@ $node->init;
 $node->append_conf('postgresql.conf', "fsync = off\n");
 $node->append_conf('postgresql.conf', "shared_buffers = 256MB\n");
 $node->append_conf('postgresql.conf', "maintenance_work_mem = 64MB\n");
+$node->append_conf('postgresql.conf', "autovacuum_naptime = 1s\n");
 $node->start;
 
 $node->safe_psql('postgres', 'CREATE EXTENSION pg_fts');
@@ -67,6 +68,35 @@ my $seq = $node->safe_psql('postgres',
     q{SET enable_indexscan=off; SET enable_bitmapscan=off;
       SELECT count(*) FROM docs WHERE to_ftsdoc('simple', body) @@@ 'w7'::ftsquery});
 is($c, $seq, 'index results still correct after fts_vacuum compaction');
+
+# An autovacuum of the fts index (1.18.0).  Its bulk delete and cleanup run
+# under pg_fts's maintenance buffer ring; until 1.18.0 that ring was a
+# bulk-write one, which pg_stat_io does not track for an autovacuum worker, and
+# an assert-enabled server aborted the worker on its first read
+# (pgstat_count_io_op): "terminated by signal 6" in the log, and with
+# restart_after_crash off the server stopped.  A server built without asserts
+# counts the I/O silently, so there this checks only that the index still
+# answers; the assert-enabled gate is what catches a regression.
+my $logstart = -s $node->logfile;
+$node->safe_psql('postgres', q{
+    ALTER TABLE docs SET (autovacuum_vacuum_threshold = 0,
+                          autovacuum_vacuum_scale_factor = 0.01);
+    DELETE FROM docs WHERE id % 10 = 0;
+});
+$node->poll_query_until('postgres', q{
+    SELECT autovacuum_count > 0 FROM pg_stat_user_tables WHERE relname = 'docs'
+}) or die 'autovacuum did not vacuum docs';
+my $log = slurp_file($node->logfile, $logstart);
+unlike($log, qr/autovacuum worker .* was terminated by signal/,
+       'the autovacuum worker that vacuumed the fts index did not crash');
+my $after = $node->safe_psql('postgres',
+    q{SET enable_seqscan=off;
+      SELECT count(*) FROM docs WHERE to_ftsdoc('simple', body) @@@ 'w7'::ftsquery});
+my $after_seq = $node->safe_psql('postgres',
+    q{SET enable_indexscan=off; SET enable_bitmapscan=off;
+      SELECT count(*) FROM docs WHERE to_ftsdoc('simple', body) @@@ 'w7'::ftsquery});
+ok($after > 0 && $after == $after_seq,
+   "server survived the autovacuum and the index matches the heap ($after)");
 
 $node->stop;
 done_testing();
