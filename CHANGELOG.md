@@ -4,8 +4,9 @@ All notable changes to pg_fts are documented here.
 
 ## 1.18.0 - 2026-11-19
 
-A minor release: PostgreSQL 19.0 support, sparsemap 5.9.0, and a fix for an
-autovacuum abort that only assert-enabled servers showed.  No SQL object changes, no
+A minor release: PostgreSQL 19.0 support, sparsemap 5.9.0 (ranked queries on an index
+with tombstones 17-31% faster, `count(*)` 13%), and a fix for an autovacuum abort that
+only assert-enabled servers showed.  No SQL object changes, no
 on-disk format change, no REINDEX (`ALTER EXTENSION pg_fts UPDATE TO '1.18.0'`).
 
 ### Fixed
@@ -55,7 +56,17 @@ on-disk format change, no REINDEX (`ALTER EXTENSION pg_fts UPDATE TO '1.18.0'`).
   - **In pg_fts** (c6id.metal, PG 18.7, 1.9M rows, 23,750 scattered tombstones on one
     packed segment, `doclen_sidecar = off`; identical ids and counts on every arm):
 
-SM_AB_TABLE
+    | query | 1.17.0 ms | 1.18.0 ms | change | A/A |
+    |---|---:|---:|---:|---:|
+    | `patch`, ranked top-10 | 1.893 | 1.299 | -31.4% | -0.24% |
+    | `vacuum`, ranked top-200 | 4.724 | 3.758 | -20.5% | +0.07% |
+    | `remove`, ranked top-200 | 20.812 | 17.276 | -17.0% | +0.05% |
+    | `remove`, `count(*)` | 5.919 | 5.118 | -13.5% | +0.10% |
+
+    Each is the median of 12 samples (6 ABBA rounds of medians of 11), and every
+    1.18.0 sample was faster than every 1.17.0 one.  1.17.0 with only sparsemap 5.9.0
+    swapped in measured the same (-31.3 / -20.5 / -17.1 / -13.4%), so the gain is the
+    library's.  VACUUM after the same delete was unchanged (19.0 s, median of 3).
 
 ## 1.17.0 - 2026-11-09
 

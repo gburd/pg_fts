@@ -1,0 +1,29 @@
+pg_fts dev shell — PostgreSQL 17.10 on PATH
+  make PG_CONFIG=$(command -v pg_config)      # build
+  nix flake check                              # build+test all PG majors
+  nix run .#docs                               # validate doc/pg_fts.sgml
+cbmc 6.10.0 (n/a)
+ok    smcursor_layouts.h matches what vendor/sm.c writes
+ok    sm_ascending layout=0              PASS as expected (169s)
+ok    sm_any_cursor layout=0             PASS as expected (56s)
+ok    sm_stale_hint layout=0             PASS as expected (44s)
+ok    sm_stale_offset layout=0           PASS as expected (43s)
+ok    sm_ascending layout=1              PASS as expected (152s)
+ok    sm_any_cursor layout=1             PASS as expected (42s)
+ok    sm_stale_hint layout=1             PASS as expected (42s)
+ok    sm_stale_offset layout=1           PASS as expected (40s)
+ok    sm_ascending layout=2              PASS as expected (157s)
+ok    sm_any_cursor layout=2             PASS as expected (43s)
+ok    sm_stale_hint layout=2             PASS as expected (39s)
+ok    sm_stale_offset layout=2           PASS as expected (42s)
+ok    sm_ascending layout=3              PASS as expected (119s)
+ok    sm_any_cursor layout=3             PASS as expected (51s)
+ok    sm_stale_hint layout=3             PASS as expected (37s)
+ok    sm_stale_offset layout=3           PASS as expected (39s)
+ok    sm_stale_offset TEETH (no start-word check) FAIL as expected (65s)
+        caught: [memcpy.precondition_instance.2] line 29 memcpy source region readable: FAILURE
+        caught: [__sm_get_chunk_offset.overflow.1] line 2430 arithmetic overflow on signed - in p - base: FAILURE
+
+real	19m43.327s
+user	18m2.230s
+sys	1m27.427s

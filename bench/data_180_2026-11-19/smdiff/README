@@ -1,0 +1,6 @@
+w585.c builds tombstone maps the way bm25_bulkdelete does and writes them with sparsemap 5.8.5; r590.c opens
+each with 5.9.0 as bm25_sm_open_checked does and checks size, sm_validate and membership.  Build (sm585.c /
+sm590.c = the tags' sm.c with the include renamed to sm585.h / sm590.h):
+  gcc -O2 -DSPARSEMAP_PREFIX=v585_ -o w585 w585.c sm585.c
+  gcc -O2 -DSPARSEMAP_PREFIX=v590_ -o r590 r590.c sm590.c
+  for seed in 11 12 13 14 15 16 17 18; do ./w585 250 b$seed.bin $seed && ./r590 b$seed.bin; done

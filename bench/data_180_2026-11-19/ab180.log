@@ -1,0 +1,75 @@
+so md5: v170 26418598 v170b bd4190a0 sm590 c9f61d35 v180 5b0e5c25 
+sm versions: v170 SM_VERSION_STRING "5.8.5" sm590 SM_VERSION_STRING "5.9.0" v180 SM_VERSION_STRING "5.9.0" 
+rows 1900000
+NOTICE:  index "ag_fts" does not exist, skipping
+VAC arm=v170 rep=1 vacuum_s=19.963804670 stats=[1876250 102.075]
+VAC arm=sm590 rep=1 vacuum_s=18.857059222 stats=[1876250 102.075]
+VAC arm=v180 rep=1 vacuum_s=18.956474626 stats=[1876250 102.075]
+VAC arm=v180 rep=2 vacuum_s=19.042528367 stats=[1876250 102.075]
+VAC arm=sm590 rep=2 vacuum_s=18.854233703 stats=[1876250 102.075]
+VAC arm=v170 rep=2 vacuum_s=18.959717574 stats=[1876250 102.075]
+VAC arm=v170 rep=3 vacuum_s=18.988636156 stats=[1876250 102.075]
+VAC arm=sm590 rep=3 vacuum_s=18.885077992 stats=[1876250 102.075]
+VAC arm=v180 rep=3 vacuum_s=19.243199799 stats=[1876250 102.075]
+Q state: nseg=1 tombstones=23750
+CORR v170 [patch 10] 5e5936a22315b61dc484e7f381696d8f
+CORR v170 [vacuum 200] 2f113cb51013aafeed163fd80b6080bf
+CORR v170 [remove 200] 8492640549a5ed8ffb9641f171ead67f
+CORR v170 [count remove] 112770
+CORR sm590 [patch 10] 5e5936a22315b61dc484e7f381696d8f
+CORR sm590 [vacuum 200] 2f113cb51013aafeed163fd80b6080bf
+CORR sm590 [remove 200] 8492640549a5ed8ffb9641f171ead67f
+CORR sm590 [count remove] 112770
+CORR v180 [patch 10] 5e5936a22315b61dc484e7f381696d8f
+CORR v180 [vacuum 200] 2f113cb51013aafeed163fd80b6080bf
+CORR v180 [remove 200] 8492640549a5ed8ffb9641f171ead67f
+CORR v180 [count remove] 112770
+T round=1 so=v170 patch10=1.899 vacuum200=4.726 remove200=20.814 count_remove=5.909
+T round=1 so=sm590 patch10=1.294 vacuum200=3.750 remove200=17.243 count_remove=5.108
+T round=1 so=v180 patch10=1.298 vacuum200=3.758 remove200=17.183 count_remove=5.122
+T round=1 so=v170b patch10=1.886 vacuum200=4.731 remove200=20.807 count_remove=5.939
+T round=1 so=v170b patch10=1.880 vacuum200=4.756 remove200=20.868 count_remove=5.915
+T round=1 so=v180 patch10=1.300 vacuum200=3.749 remove200=17.223 count_remove=5.128
+T round=1 so=sm590 patch10=1.299 vacuum200=3.755 remove200=17.251 count_remove=5.122
+T round=1 so=v170 patch10=1.897 vacuum200=4.721 remove200=20.839 count_remove=5.924
+T round=2 so=v170b patch10=1.890 vacuum200=4.740 remove200=20.792 count_remove=5.884
+T round=2 so=v180 patch10=1.296 vacuum200=3.760 remove200=17.285 count_remove=5.132
+T round=2 so=sm590 patch10=1.302 vacuum200=3.811 remove200=17.256 count_remove=5.124
+T round=2 so=v170 patch10=1.910 vacuum200=4.725 remove200=20.801 count_remove=5.950
+T round=2 so=v170 patch10=1.874 vacuum200=4.717 remove200=20.731 count_remove=5.918
+T round=2 so=sm590 patch10=1.314 vacuum200=3.795 remove200=17.262 count_remove=5.126
+T round=2 so=v180 patch10=1.293 vacuum200=3.754 remove200=17.274 count_remove=5.108
+T round=2 so=v170b patch10=1.882 vacuum200=4.741 remove200=20.827 count_remove=5.929
+T round=3 so=v170 patch10=1.894 vacuum200=4.757 remove200=20.832 count_remove=5.939
+T round=3 so=sm590 patch10=1.313 vacuum200=3.759 remove200=17.292 count_remove=5.136
+T round=3 so=v180 patch10=1.307 vacuum200=3.748 remove200=17.193 count_remove=5.092
+T round=3 so=v170b patch10=1.893 vacuum200=4.725 remove200=20.815 count_remove=5.915
+T round=3 so=v170b patch10=1.884 vacuum200=4.711 remove200=20.820 count_remove=5.931
+T round=3 so=v180 patch10=1.308 vacuum200=3.797 remove200=17.321 count_remove=5.090
+T round=3 so=sm590 patch10=1.313 vacuum200=3.764 remove200=17.318 count_remove=5.123
+T round=3 so=v170 patch10=1.894 vacuum200=4.719 remove200=20.781 count_remove=5.909
+T round=4 so=v170b patch10=1.891 vacuum200=4.718 remove200=20.860 count_remove=5.932
+T round=4 so=v180 patch10=1.307 vacuum200=3.762 remove200=17.255 count_remove=5.144
+T round=4 so=sm590 patch10=1.297 vacuum200=3.738 remove200=17.259 count_remove=5.123
+T round=4 so=v170 patch10=1.893 vacuum200=4.734 remove200=20.759 count_remove=5.894
+T round=4 so=v170 patch10=1.888 vacuum200=4.733 remove200=20.827 count_remove=5.892
+T round=4 so=sm590 patch10=1.300 vacuum200=3.756 remove200=17.295 count_remove=5.127
+T round=4 so=v180 patch10=1.297 vacuum200=3.749 remove200=17.355 count_remove=5.125
+T round=4 so=v170b patch10=1.918 vacuum200=4.742 remove200=20.887 count_remove=5.932
+T round=5 so=v170 patch10=1.885 vacuum200=4.715 remove200=20.755 count_remove=5.920
+T round=5 so=sm590 patch10=1.306 vacuum200=3.753 remove200=17.239 count_remove=5.147
+T round=5 so=v180 patch10=1.296 vacuum200=3.757 remove200=17.279 count_remove=5.090
+T round=5 so=v170b patch10=1.881 vacuum200=4.720 remove200=20.792 count_remove=5.945
+T round=5 so=v170b patch10=1.896 vacuum200=4.722 remove200=20.773 count_remove=5.895
+T round=5 so=v180 patch10=1.294 vacuum200=3.756 remove200=17.240 count_remove=5.109
+T round=5 so=sm590 patch10=1.298 vacuum200=3.752 remove200=17.200 count_remove=5.095
+T round=5 so=v170 patch10=1.881 vacuum200=4.714 remove200=20.809 count_remove=5.910
+T round=6 so=v170b patch10=1.895 vacuum200=4.716 remove200=20.824 count_remove=5.902
+T round=6 so=v180 patch10=1.301 vacuum200=3.802 remove200=17.304 count_remove=5.151
+T round=6 so=sm590 patch10=1.309 vacuum200=3.757 remove200=17.289 count_remove=5.147
+T round=6 so=v170 patch10=1.892 vacuum200=4.724 remove200=20.816 count_remove=5.930
+T round=6 so=v170 patch10=1.891 vacuum200=4.731 remove200=20.828 count_remove=5.921
+T round=6 so=sm590 patch10=1.293 vacuum200=3.752 remove200=17.225 count_remove=5.120
+T round=6 so=v180 patch10=1.307 vacuum200=3.764 remove200=17.307 count_remove=5.114
+T round=6 so=v170b patch10=1.875 vacuum200=4.742 remove200=20.823 count_remove=5.921
+AB180_DONE
