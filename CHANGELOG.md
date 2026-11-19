@@ -2,6 +2,61 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.18.0 - 2026-11-19
+
+A minor release: PostgreSQL 19.0 support, sparsemap 5.9.0, and a fix for an
+autovacuum abort that only assert-enabled servers showed.  No SQL object changes, no
+on-disk format change, no REINDEX (`ALTER EXTENSION pg_fts UPDATE TO '1.18.0'`).
+
+### Fixed
+
+- **An assert-enabled server aborted the autovacuum worker that vacuumed an fts
+  index** (every release since 1.11.0).  pg_fts reads and writes its merges, bulk
+  deletes and cleanups through a 16 MB buffer ring, a bulk-write one.  pg_stat_io does
+  not track bulk-write I/O for an autovacuum worker, so on a server built with
+  `--enable-cassert` the worker's first read in pg_fts's bulk delete failed
+  `Assert(pgstat_tracks_io_op(...))` and killed the worker, and the postmaster
+  restarted every backend.  A server built without asserts was not affected beyond
+  losing those I/O counts from `pg_stat_io`.  Found by the first TAP run against an
+  assert-enabled PostgreSQL, 19.0 (`t/006` lost its server); it reproduces on an
+  assert-enabled 17 with 1.17.0.  An autovacuum worker now gets a VACUUM ring of the
+  same size, which pg_stat_io tracks and which reuses buffers the same way.  `t/008`
+  triggers an autovacuum of an fts index and fails on 1.17.0 with an assert-enabled
+  server.  No release gate before this one ran TAP on an assert-enabled build; this one
+  runs every TAP file on an assert-enabled 19.0.
+
+### Changed
+
+- **PostgreSQL 19.0.**  1.17.0 built and passed on 19rc1.  1.18.0 is gated on 19.0
+  (`REL_19_0`, the release's tag) on x86_64 and aarch64, as for 17 and 18:
+  installcheck, `query_binary.py`, every TAP file and the test-hook TAP files.  There
+  is also the assert-enabled 19.0 above, and the in-place upgrade from 1.17.0 on 19.
+  CI takes 19 from the pgdg repository's `19` component (it held the betas and RCs and
+  receives 19.0), not from pgdg-testing with a pin.
+- **sparsemap 5.8.5 -> 5.9.0** (`vendor/sm.c`, `vendor/sm.h`): upstream 5.9.0 verbatim
+  plus pg_fts's symbol prefix.  No API removal, no wire-format version change (still
+  2), and `sm_t` and `sm_cursor_t` keep their sizes.  Upstream measures `sm_contains`
+  2.6-7.5x faster on random and 1.9-8.6x on an ascending cursor, and successor
+  lookups 2.8-7.5x, against 5.8.5.  Checked here:
+  - **Tombstones written by 5.8.5 read back identically.**  5.9.0's `sm_open` drops
+    empty chunks before validating, which would change a blob's size and make pg_fts
+    report it corrupt, so I ran a differential.  2,000 tombstone maps were built the
+    way the bulk delete builds them, over 1-4 VACUUM rounds and six density and range
+    shapes, written by 5.8.5 and opened by 5.9.0 as pg_fts opens them.  It found 0 size
+    or validation changes and 0 membership differences.  pg_fts never removes, splits
+    or offsets, the paths that left empty chunks.  The release gate also upgrades
+    1.17.0 indexes with tombstones in place and checks counts against the heap.
+  - **Proofs and fuzzing.**  The CBMC read-cursor proofs (`test/cbmc/smcursor_harness.c`,
+    which includes `vendor/sm.c`) verify on all four layouts, and the mutant without
+    the cursor's start-word check still fails.  The fuzzers are clean.
+  - **The 5.8.5 defects 5.9.0 fixes are on paths pg_fts does not call:** remove next
+    to an RLE run, runs of 2^31 bits, the top of the 64-bit universe, select0 and
+    `sm_offset`.
+  - **In pg_fts** (c6id.metal, PG 18.7, 1.9M rows, 23,750 scattered tombstones on one
+    packed segment, `doclen_sidecar = off`; identical ids and counts on every arm):
+
+SM_AB_TABLE
+
 ## 1.17.0 - 2026-11-09
 
 A minor release: BM25's corpus statistics follow deletions (the document count and the

@@ -25,9 +25,8 @@ answered from the index with no heap recheck.
 ## Requirements
 
 - PostgreSQL **17, 18 and 19** are supported and gated in CI (build +
-  regression + isolation + TAP on each; 19 from the pgdg-testing packages,
-  19rc1, until it is released).  Version differences are handled with
-  compile-time guards.
+  regression + isolation + TAP on each).  Version differences are handled
+  with compile-time guards.
 - A C toolchain and the PostgreSQL server headers (`postgresql-server-dev-*`
   or a source install exposing `pg_config`).
 
@@ -575,6 +574,10 @@ AccessExclusiveLock), so a REINDEX is no longer the only way to reclaim them.  A
 index with segments merged by 1.5.0-1.5.2 that was never reindexed (1.5.3 asked for
 it) now ranks them without reading past a block, but their length normalisation is
 still approximate: REINDEX them (CHANGELOG 1.16.0).
+
+1.18.0 needs nothing after the upgrade (no SQL or on-disk change).  It vendors
+sparsemap 5.9.0 and supports PostgreSQL 19.0; an assert-enabled server no longer
+aborts an autovacuum worker that vacuums an fts index (CHANGELOG 1.18.0).
 
 1.17.0 changes scores after deletes: the document count and average length now drop
 deleted rows when VACUUM tombstones them, so a ranked query scores as it would after a
