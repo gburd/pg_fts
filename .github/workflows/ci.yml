@@ -17,9 +17,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install PostgreSQL ${{ matrix.pg }} + server headers
-        # 19 comes from the pgdg repository's own "19" component (it held the
-        # betas and RCs and holds 19.0 from its release); it gates like 17 and
-        # 18.  Through 1.16.0 every step was continue-on-error for 19 and the
+        # pgdg puts a major's betas and RCs in its own component ("19") and
+        # moves it to main on release (19.0, 2026-11-19); listing both covers
+        # either.  19 gates like 17 and 18.  Through 1.16.0 every step was continue-on-error for 19 and the
         # install never succeeded, so the leg was green while it built nothing
         # (CHANGELOG 1.17.0, Retracted).
         run: |
@@ -27,8 +27,6 @@ jobs:
           # broken InRelease and fails `apt-get update`; remove just that repo
           # (keep the LLVM/ubuntu repos — postgresql-server-dev depends on clang).
           sudo rm -f /etc/apt/sources.list.d/microsoft*.list /etc/apt/sources.list.d/microsoft*.sources || true
-          # Component <major> carries that major's server and the libpq it
-          # needs (main has the newest released libpq, 18 for a 19 beta/RC).
           sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main ${{ matrix.pg }}" > /etc/apt/sources.list.d/pgdg.list'
           curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
           sudo apt-get update

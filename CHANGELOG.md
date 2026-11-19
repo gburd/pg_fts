@@ -32,8 +32,10 @@ on-disk format change, no REINDEX (`ALTER EXTENSION pg_fts UPDATE TO '1.18.0'`).
   (`REL_19_0`, the release's tag) on x86_64 and aarch64, as for 17 and 18:
   installcheck, `query_binary.py`, every TAP file and the test-hook TAP files.  There
   is also the assert-enabled 19.0 above, and the in-place upgrade from 1.17.0 on 19.
-  CI takes 19 from the pgdg repository's `19` component (it held the betas and RCs and
-  receives 19.0), not from pgdg-testing with a pin.
+  The release tarball (sha256 `a89fd70e...`) is byte-identical to that tag's tree.  CI
+  takes 19 from the pgdg repository (its `19` component before the release, `main`
+  after), not from pgdg-testing with a pin, and passes on the released
+  `19.0-1.pgdg26.04+1`.
 - **sparsemap 5.8.5 -> 5.9.0** (`vendor/sm.c`, `vendor/sm.h`): upstream 5.9.0 verbatim
   plus pg_fts's symbol prefix.  No API removal, no wire-format version change (still
   2), and `sm_t` and `sm_cursor_t` keep their sizes.  Upstream measures `sm_contains`
