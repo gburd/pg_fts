@@ -1,0 +1,44 @@
+[2026-11-19T22:46:12Z] postgres binaries identical across arms: 1 distinct md5
+/tmp/in/pg_fts-1.18.0.zip: OK
+[2026-11-19T22:46:18Z] arm fts: pg_fts 1.18.0 so=8b215ae4 sm=SM_VERSION_STRING "5.9.0"
+[2026-11-19T22:46:20Z] arm pgts_rel: v1.5.1 fa142d04 v1.5.1 default_version = '1.5.1' so=fd51b7ca
+[2026-11-19T22:46:21Z] arm pgts_main: 8923a5ba 8923a5ba v1.5.0-24-g8923a5ba default_version = '1.6.0-dev' so=1c7ea4ec
+[2026-11-19T22:46:21Z] arm psearch rpm sha256 ad3f61528bff7803 pg_search_18-0.27.0-1PARADEDB.el10.x86_64.rpm
+[2026-11-19T22:46:24Z] arm psearch: pgvector v0.8.7 f37c13f6
+[2026-11-19T22:46:24Z] arm psearch: pg_search so=e42527ee ldd-missing=0
+[2026-11-19T22:46:24Z] arm psearch_pn rpm sha256 ad3f61528bff7803 pg_search_18-0.27.0-1PARADEDB.el10.x86_64.rpm
+[2026-11-19T22:46:25Z] arm psearch_pn: pgvector v0.8.7 f37c13f6
+[2026-11-19T22:46:26Z] arm psearch_pn: pg_search so=e42527ee ldd-missing=0
+[2026-11-19T22:46:26Z] arm vchord zip sha256 42bccb95b46933c0 postgresql-18-pg-tokenizer_0.1.1_x86_64-linux-gnu.zip
+[2026-11-19T22:46:26Z] arm vchord zip sha256 532a2f9cd197281c postgresql-18-vchord-bm25_0.3.0_x86_64-linux-gnu.zip
+[2026-11-19T22:46:26Z] arm vchord: so=df32ad68 0fd6acf9  ldd-missing=0
+[2026-11-19T22:46:26Z] arm gin: built in
+initdb: warning: enabling "trust" authentication for local connections
+initdb: hint: You can change this by editing pg_hba.conf or using the option -A, or --auth-local and --auth-host, the next time you run initdb.
+[2026-11-19T22:48:55Z] cluster fts rows=2188038 ext=pg_fts 1.18.0
+initdb: warning: enabling "trust" authentication for local connections
+initdb: hint: You can change this by editing pg_hba.conf or using the option -A, or --auth-local and --auth-host, the next time you run initdb.
+[2026-11-19T22:51:26Z] cluster pgts_rel rows=2188038 ext=pg_textsearch 1.5.1
+initdb: warning: enabling "trust" authentication for local connections
+initdb: hint: You can change this by editing pg_hba.conf or using the option -A, or --auth-local and --auth-host, the next time you run initdb.
+[2026-11-19T22:53:58Z] cluster pgts_main rows=2188038 ext=pg_textsearch 1.6.0-dev
+initdb: warning: enabling "trust" authentication for local connections
+initdb: hint: You can change this by editing pg_hba.conf or using the option -A, or --auth-local and --auth-host, the next time you run initdb.
+NOTICE:  installing required extension "vector"
+[2026-11-19T22:56:29Z] cluster psearch rows=2188038 ext=vector 0.8.7,pg_search 0.27.0
+initdb: warning: enabling "trust" authentication for local connections
+initdb: hint: You can change this by editing pg_hba.conf or using the option -A, or --auth-local and --auth-host, the next time you run initdb.
+NOTICE:  installing required extension "vector"
+[2026-11-19T22:59:01Z] cluster psearch_pn rows=2188038 ext=vector 0.8.7,pg_search 0.27.0
+initdb: warning: enabling "trust" authentication for local connections
+initdb: hint: You can change this by editing pg_hba.conf or using the option -A, or --auth-local and --auth-host, the next time you run initdb.
+[2026-11-19T23:01:33Z] cluster vchord rows=2188038 ext=pg_tokenizer 0.1.1,vchord_bm25 0.3.0
+initdb: warning: enabling "trust" authentication for local connections
+initdb: hint: You can change this by editing pg_hba.conf or using the option -A, or --auth-local and --auth-host, the next time you run initdb.
+ ?column? 
+----------
+        1
+(1 row)
+
+[2026-11-19T23:04:04Z] cluster gin rows=2188038 ext=
+[2026-11-19T23:04:08Z] SETUP_ARMS_DONE

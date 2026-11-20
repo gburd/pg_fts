@@ -1,0 +1,30 @@
+[2026-11-20T06:45:55Z] postgres binaries identical across arms: 1 distinct md5
+[2026-11-20T06:46:02Z] arm fts: pg_fts 1.18.0 so=9d7a68bd sm=SM_VERSION_STRING "5.9.0"
+[2026-11-20T06:46:03Z] arm pgts_main: 8923a5ba 8923a5ba v1.5.0-24-g8923a5ba default_version = '1.6.0-dev' so=a256c4cc
+[2026-11-20T06:46:03Z] arm gin: built in
+[2026-11-20T06:48:19Z] cluster fts rows=2188038 ext=pg_fts 1.18.0
+[2026-11-20T06:50:39Z] cluster pgts_main rows=2188038 ext=pg_textsearch 1.6.0-dev
+[2026-11-20T06:53:00Z] cluster gin rows=2188038 ext=
+[2026-11-20T06:53:03Z] SETUP_ARMS_DONE
+[2026-11-20T06:57:28Z] build fts expr s=264.077905350 size=1435525120
+[2026-11-20T06:57:28Z] fts_vacuum s=.047216088 size=1435525120
+[2026-11-20T07:03:14Z] build fts positions s=321.130064405 size=2703556608
+[2026-11-20T07:08:41Z] build pgts_main s=312.436534446 size=1978351616 all_rels_bytes=1978351616
+[2026-11-20T07:27:25Z] build gin column_s=1035.650610391 index_s=71.352648216 size=1645469696 heap_growth_bytes=6659473408
+[2026-11-20T07:27:26Z] BUILD_DONE
+[2026-11-20T07:43:51Z] GATE_DONE
+[2026-11-20T07:44:56Z] hoststate lat_start: chase  4096 MiB thp : 133.6 ns/load (AnonHugePages 0 kB) | load 1.65 2.56 3.70 | thp always madvise [never] | no_turbo 1 | gov performance
+[2026-11-20T07:45:04Z] lat pass 1 order: fts pgts_main gin fts_aa
+[2026-11-20T08:44:06Z] lat pass 2 order: pgts_main gin fts_aa fts
+[2026-11-20T08:53:10Z] lat pass 3 order: gin fts_aa fts pgts_main
+[2026-11-20T09:02:22Z] lat pass 4 order: fts_aa fts pgts_main gin
+[2026-11-20T09:11:22Z] lat pass 5 order: fts pgts_main gin fts_aa
+[2026-11-20T09:21:37Z] hoststate lat_end: chase  4096 MiB thp : 133.1 ns/load (AnonHugePages 0 kB) | load 1.17 1.44 1.42 | thp always madvise [never] | no_turbo 1 | gov performance
+[2026-11-20T09:21:37Z] LAT_DONE
+[2026-11-20T09:26:37Z] agree N=2188038 avgdl=484.8482069324207349
+[2026-11-20T09:27:30Z] AGREE_DONE
+[2026-11-20T09:28:35Z] hoststate tps_start: chase  4096 MiB thp : 132.6 ns/load (AnonHugePages 0 kB) | load 1.41 2.07 1.80 | thp always madvise [never] | no_turbo 1 | gov performance
+[2026-11-20T10:18:42Z] hoststate tps_end: chase  4096 MiB thp : 133.5 ns/load (AnonHugePages 0 kB) | load 56.20 86.53 79.84 | thp always madvise [never] | no_turbo 1 | gov performance
+[2026-11-20T10:18:42Z] TPS_DONE
+[2026-11-20T10:20:56Z] COLD_DONE
+[2026-11-20T10:20:56Z] MAJOR_19_DONE

@@ -1,0 +1,59 @@
+[2026-11-19T22:42:38Z] host x86_64 7.3.4-300.fc45.x86_64 Intel(R) Xeon(R) Platinum 8375C CPU @ 2.90GHz nproc=128 mem=251G microcode=0xd000433
+[2026-11-19T22:42:38Z] os Fedora Linux 45 (Cloud Edition)
+[2026-11-19T22:42:42Z] perf counters:  265,678 cycles:u 
+[2026-11-19T22:43:48Z] hoststate start: chase  4096 MiB thp : 135.1 ns/load (AnonHugePages 0 kB) | load 1.11 0.51 0.20 | thp always madvise [never] | no_turbo 1 | gov performance
+[2026-11-19T22:44:29Z] pg postgres (PostgreSQL) 18.7 configure= --prefix=/nvme/pg18 --with-icu CFLAGS=-O2 -g -fno-omit-frame-pointer
+[2026-11-19T22:45:11Z] pg postgres (PostgreSQL) 19.0 configure= --prefix=/nvme/pg19 --with-icu CFLAGS=-O2 -g -fno-omit-frame-pointer
+[2026-11-19T22:46:11Z] corpus md5=f5939e8559543f16e8a2365049836d63 rows=2188038
+[2026-11-19T22:46:11Z] SETUP_HOST_DONE
+[2026-11-19T22:46:12Z] postgres binaries identical across arms: 1 distinct md5
+[2026-11-19T22:46:18Z] arm fts: pg_fts 1.18.0 so=8b215ae4 sm=SM_VERSION_STRING "5.9.0"
+[2026-11-19T22:46:20Z] arm pgts_rel: v1.5.1 fa142d04 v1.5.1 default_version = '1.5.1' so=fd51b7ca
+[2026-11-19T22:46:21Z] arm pgts_main: 8923a5ba 8923a5ba v1.5.0-24-g8923a5ba default_version = '1.6.0-dev' so=1c7ea4ec
+[2026-11-19T22:46:21Z] arm psearch rpm sha256 ad3f61528bff7803 pg_search_18-0.27.0-1PARADEDB.el10.x86_64.rpm
+[2026-11-19T22:46:24Z] arm psearch: pgvector v0.8.7 f37c13f6
+[2026-11-19T22:46:24Z] arm psearch: pg_search so=e42527ee ldd-missing=0
+[2026-11-19T22:46:24Z] arm psearch_pn rpm sha256 ad3f61528bff7803 pg_search_18-0.27.0-1PARADEDB.el10.x86_64.rpm
+[2026-11-19T22:46:25Z] arm psearch_pn: pgvector v0.8.7 f37c13f6
+[2026-11-19T22:46:26Z] arm psearch_pn: pg_search so=e42527ee ldd-missing=0
+[2026-11-19T22:46:26Z] arm vchord zip sha256 42bccb95b46933c0 postgresql-18-pg-tokenizer_0.1.1_x86_64-linux-gnu.zip
+[2026-11-19T22:46:26Z] arm vchord zip sha256 532a2f9cd197281c postgresql-18-vchord-bm25_0.3.0_x86_64-linux-gnu.zip
+[2026-11-19T22:46:26Z] arm vchord: so=df32ad68 0fd6acf9  ldd-missing=0
+[2026-11-19T22:46:26Z] arm gin: built in
+[2026-11-19T22:48:55Z] cluster fts rows=2188038 ext=pg_fts 1.18.0
+[2026-11-19T22:51:26Z] cluster pgts_rel rows=2188038 ext=pg_textsearch 1.5.1
+[2026-11-19T22:53:58Z] cluster pgts_main rows=2188038 ext=pg_textsearch 1.6.0-dev
+[2026-11-19T22:56:29Z] cluster psearch rows=2188038 ext=vector 0.8.7,pg_search 0.27.0
+[2026-11-19T22:59:01Z] cluster psearch_pn rows=2188038 ext=vector 0.8.7,pg_search 0.27.0
+[2026-11-19T23:01:33Z] cluster vchord rows=2188038 ext=pg_tokenizer 0.1.1,vchord_bm25 0.3.0
+[2026-11-19T23:04:04Z] cluster gin rows=2188038 ext=
+[2026-11-19T23:04:08Z] SETUP_ARMS_DONE
+[2026-11-19T23:08:25Z] build fts expr s=256.501291983 size=1435435008
+[2026-11-19T23:08:25Z] fts_vacuum s=.045736824 size=1435435008
+[2026-11-19T23:14:01Z] build fts positions s=313.244857165 size=2703425536
+[2026-11-19T23:19:14Z] build pgts_rel s=298.009572464 size=1978302464 all_rels_bytes=1978302464
+[2026-11-19T23:24:17Z] build pgts_main s=300.777662296 size=1978302464 all_rels_bytes=1978302464
+[2026-11-19T23:26:18Z] build psearch ('stemmer=english') s=118.261554373 size=2420580352 all_rels_bytes=2420621312 def=CREATE INDEX docs_idx ON public.docs USING paradedb (id, ((content)::pdb.simple('stemmer=english')))
+[2026-11-19T23:28:36Z] build psearch_pn ('stemmer=english', 'pnorms=true') s=134.136199468 size=2835456000 all_rels_bytes=2835496960 def=CREATE INDEX docs_idx ON public.docs USING paradedb (id, ((content)::pdb.simple('stemmer=english', 'pnorms=true')))
+[2026-11-20T00:25:12Z] build vchord model_s=893.633676747 tokenize_s=2334.252877351 index_s=150.184971462 size=44495831040 all_rels_bytes=44915154944
+[2026-11-20T00:43:45Z] build gin column_s=983.738554392 index_s=69.593549907 size=1645436928 heap_growth_bytes=6657007616
+[2026-11-20T00:43:46Z] BUILD_DONE
+[2026-11-20T01:13:57Z] GATE_DONE
+[2026-11-20T01:15:03Z] hoststate lat_start: chase  4096 MiB thp : 134.8 ns/load (AnonHugePages 0 kB) | load 1.67 2.60 2.66 | thp always madvise [never] | no_turbo 1 | gov performance
+[2026-11-20T01:15:36Z] lat pass 1 order: fts pgts_rel pgts_main psearch psearch_pn vchord gin fts_aa
+[2026-11-20T03:09:04Z] lat pass 2 order: pgts_rel pgts_main psearch psearch_pn vchord gin fts_aa fts
+[2026-11-20T03:32:38Z] lat pass 3 order: pgts_main psearch psearch_pn vchord gin fts_aa fts pgts_rel
+[2026-11-20T03:56:04Z] lat pass 4 order: psearch psearch_pn vchord gin fts_aa fts pgts_rel pgts_main
+[2026-11-20T04:19:31Z] lat pass 5 order: psearch_pn vchord gin fts_aa fts pgts_rel pgts_main psearch
+[2026-11-20T04:44:02Z] hoststate lat_end: chase  4096 MiB thp : 133.0 ns/load (AnonHugePages 0 kB) | load 1.70 2.18 2.08 | thp always madvise [never] | no_turbo 1 | gov performance
+[2026-11-20T04:44:02Z] LAT_DONE
+[2026-11-20T04:48:50Z] agree N=2188038 avgdl=484.8482069324207349
+[2026-11-20T04:50:26Z] AGREE_DONE
+[2026-11-20T04:51:31Z] hoststate tps_start: chase  4096 MiB thp : 133.5 ns/load (AnonHugePages 0 kB) | load 1.15 2.00 2.12 | thp always madvise [never] | no_turbo 1 | gov performance
+[2026-11-20T06:00:34Z] TPS WARNING arm=gin band=count_common c=256: pgbench: error: client 57 script 0 aborted in command 0 query 0: ERROR:  too many dynamic shared memory segments
+[2026-11-20T06:06:59Z] TPS WARNING arm=gin band=count_common c=256: pgbench: error: client 149 script 0 aborted in command 0 query 0: ERROR:  too many dynamic shared memory segments
+[2026-11-20T07:16:02Z] hoststate tps_end: chase  4096 MiB thp : 134.8 ns/load (AnonHugePages 0 kB) | load 57.08 87.41 80.15 | thp always madvise [never] | no_turbo 1 | gov performance
+[2026-11-20T07:16:02Z] TPS_DONE
+[2026-11-20T07:20:28Z] COLD_DONE
+[2026-11-20T07:20:28Z] MAJOR_18_DONE
+[2026-11-20T10:55:54Z] ALL_DONE

@@ -1,0 +1,17 @@
+[2026-11-19T22:05:50Z] host aarch64 7.3.4-300.fc45.aarch64 Neoverse-V1 nproc=64 mem=125G microcode=
+[2026-11-19T22:05:50Z] os Fedora Linux 45 (Cloud Edition)
+available: 1 nodes (0)
+node 0 cpus: 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63
+node 0 size: 128513 MB
+[2026-11-19T22:05:50Z] perf counters:  134,625 cycles:u 
+[2026-11-19T22:07:01Z] hoststate start: chase  4096 MiB thp : 151.2 ns/load (AnonHugePages 0 kB) | load 0.81 0.41 0.16 | thp always madvise [never] | no_turbo n/a | gov n/a
+[2026-11-19T22:07:43Z] pg postgres (PostgreSQL) 18.7 configure= --prefix=/nvme/pg18 --with-icu CFLAGS=-O2 -g -fno-omit-frame-pointer
+[2026-11-19T22:08:27Z] pg postgres (PostgreSQL) 19.0 configure= --prefix=/nvme/pg19 --with-icu CFLAGS=-O2 -g -fno-omit-frame-pointer
+
+[notice] A new release of pip is available: 26.1.2 -> 26.3
+[notice] To update, run: /nvme/venv/bin/python3 -m pip install --upgrade pip
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+ROWS 2188038
+[2026-11-19T22:09:23Z] corpus md5=f5939e8559543f16e8a2365049836d63 rows=2188038
+[2026-11-19T22:09:23Z] SETUP_HOST_DONE
+[2026-11-20T11:09:14Z] ALL_DONE

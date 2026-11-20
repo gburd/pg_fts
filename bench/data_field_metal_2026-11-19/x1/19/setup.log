@@ -1,0 +1,20 @@
+[2026-11-20T06:45:55Z] postgres binaries identical across arms: 1 distinct md5
+/tmp/in/pg_fts-1.18.0.zip: OK
+[2026-11-20T06:46:02Z] arm fts: pg_fts 1.18.0 so=9d7a68bd sm=SM_VERSION_STRING "5.9.0"
+[2026-11-20T06:46:03Z] arm pgts_main: 8923a5ba 8923a5ba v1.5.0-24-g8923a5ba default_version = '1.6.0-dev' so=a256c4cc
+[2026-11-20T06:46:03Z] arm gin: built in
+initdb: warning: enabling "trust" authentication for local connections
+initdb: hint: You can change this by editing pg_hba.conf or using the option -A, or --auth-local and --auth-host, the next time you run initdb.
+[2026-11-20T06:48:19Z] cluster fts rows=2188038 ext=pg_fts 1.18.0
+initdb: warning: enabling "trust" authentication for local connections
+initdb: hint: You can change this by editing pg_hba.conf or using the option -A, or --auth-local and --auth-host, the next time you run initdb.
+[2026-11-20T06:50:39Z] cluster pgts_main rows=2188038 ext=pg_textsearch 1.6.0-dev
+initdb: warning: enabling "trust" authentication for local connections
+initdb: hint: You can change this by editing pg_hba.conf or using the option -A, or --auth-local and --auth-host, the next time you run initdb.
+ ?column? 
+----------
+        1
+(1 row)
+
+[2026-11-20T06:53:00Z] cluster gin rows=2188038 ext=
+[2026-11-20T06:53:03Z] SETUP_ARMS_DONE

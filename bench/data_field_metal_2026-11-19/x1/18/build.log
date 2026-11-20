@@ -1,3 +1,134 @@
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+[2026-11-19T22:31:36Z] build fts expr s=255.439295478 size=1435435008
+[2026-11-19T22:31:36Z] fts_vacuum s=.046258946 size=1435435008
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+[2026-11-19T22:37:15Z] build fts positions s=314.209785155 size=2703384576
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  BM25 index build completed: 2188038 documents, avg_length=316.55
+[2026-11-19T22:42:29Z] build pgts_rel s=299.438282785 size=1978302464 all_rels_bytes=1978302464
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  BM25 index build completed: 2188038 documents, avg_length=316.55
+[2026-11-19T22:47:32Z] build pgts_main s=300.736793267 size=1978302464 all_rels_bytes=1978302464
+[2026-11-19T22:49:45Z] build psearch ('stemmer=english') s=130.431007831 size=2420252672 all_rels_bytes=2420293632 def=CREATE INDEX docs_idx ON public.docs USING paradedb (id, ((content)::pdb.simple('stemmer=english')))
+[2026-11-19T22:52:02Z] build psearch_pn ('stemmer=english', 'pnorms=true') s=133.710029515 size=2835374080 all_rels_bytes=2835415040 def=CREATE INDEX docs_idx ON public.docs USING paradedb (id, ((content)::pdb.simple('stemmer=english', 'pnorms=true')))
+[2026-11-19T23:48:37Z] build vchord model_s=891.276695780 tokenize_s=2335.460285592 index_s=150.359291205 size=44495831040 all_rels_bytes=44915154944
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+[2026-11-20T00:07:14Z] build gin column_s=985.624096586 index_s=71.351690257 size=1645436928 heap_growth_bytes=6657007616
+[2026-11-20T00:07:15Z] BUILD_DONE
+arm=fts term=slovakia count=10875
+arm=fts term=hungary count=24097
+arm=fts term=year count=734896
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+arm=pgts_rel term=slovakia count=10875
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+arm=pgts_rel term=hungary count=24097
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+arm=pgts_rel term=year count=734896
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+arm=pgts_main term=slovakia count=10875
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+arm=pgts_main term=hungary count=24097
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+arm=pgts_main term=year count=734896
+arm=psearch term=slovakia count=10898
+arm=psearch term=hungary count=24152
+arm=psearch term=year count=735955
+arm=psearch_pn term=slovakia count=10898
+arm=psearch_pn term=hungary count=24152
+arm=psearch_pn term=year count=735955
+arm=vchord term=slovakia count=n/a
+arm=vchord term=hungary count=n/a
+arm=vchord term=year count=n/a
+arm=gin term=slovakia count=10875
+arm=gin term=hungary count=24097
+arm=gin term=year count=734896
+regex term=slovakia count=10898
+regex term=hungary count=24148
+regex term=years? count=733960
+[2026-11-20T00:37:28Z] GATE_DONE
+[2026-11-20T00:38:33Z] hoststate lat_start: chase  4096 MiB thp : 132.9 ns/load (AnonHugePages 0 kB) | load 1.66 2.59 2.68 | thp always madvise [never] | no_turbo 1 | gov performance
+[2026-11-20T00:39:06Z] lat pass 1 order: fts pgts_rel pgts_main psearch psearch_pn vchord gin fts_aa
 pass=1 arm=fts band=rare_k10 rows=10, median_last5=0.234 raw=[19.272 0.530 0.385 0.338 0.234 0.231 0.239 0.229 ] reps=8 probe=44.576
 pass=1 arm=fts band=mid_k10 rows=10, median_last5=0.300 raw=[16.027 0.346 0.326 0.302 0.300 0.307 0.251 0.247 ] reps=8 probe=15.302
 pass=1 arm=fts band=common_k10 rows=10, median_last5=0.358 raw=[22.578 0.599 0.381 0.374 0.361 0.353 0.358 0.346 ] reps=8 probe=22.267
@@ -115,6 +246,7 @@ pass=1 arm=fts_aa band=not_k10 rows=10, median_last5=1.958 raw=[11.020 2.050 1.9
 pass=1 arm=fts_aa band=phrase_us_k10 rows=10, median_last5=2.545 raw=[44.509 2.987 2.666 2.551 2.557 2.545 2.532 2.537 ] reps=8 probe=70.142
 pass=1 arm=fts_aa band=phrase_ww_k10 rows=10, median_last5=6.540 raw=[33.745 6.949 6.562 6.551 6.550 6.540 6.529 6.540 ] reps=8 probe=34.890
 pass=1 arm=fts_aa band=count_common rows=734896, median_last5=0.175 raw=[6.195 0.243 0.193 0.189 0.178 0.175 0.174 0.174 ] reps=8 probe=5.658
+[2026-11-20T02:32:57Z] lat pass 2 order: pgts_rel pgts_main psearch psearch_pn vchord gin fts_aa fts
 pass=2 arm=pgts_rel band=rare_k10 rows=10, median_last5=0.925 raw=[4.341 0.985 0.941 0.929 0.925 0.921 0.923 0.960 ] reps=8 probe=4.706
 pass=2 arm=pgts_rel band=mid_k10 rows=10, median_last5=1.129 raw=[4.384 1.180 1.142 1.136 1.132 1.129 1.127 1.126 ] reps=8 probe=4.461
 pass=2 arm=pgts_rel band=common_k10 rows=10, median_last5=9.889 raw=[13.889 9.995 9.910 9.889 9.886 9.935 9.843 9.932 ] reps=8 probe=13.897
@@ -232,6 +364,7 @@ pass=2 arm=fts band=not_k10 rows=10, median_last5=1.817 raw=[12.169 1.903 1.835 
 pass=2 arm=fts band=phrase_us_k10 rows=10, median_last5=2.655 raw=[44.818 2.969 2.705 2.665 2.655 2.647 2.634 2.655 ] reps=8 probe=45.090
 pass=2 arm=fts band=phrase_ww_k10 rows=10, median_last5=6.612 raw=[34.069 6.923 6.628 6.625 6.622 6.612 6.605 6.603 ] reps=8 probe=33.924
 pass=2 arm=fts band=count_common rows=734896, median_last5=0.180 raw=[6.062 0.238 0.206 0.187 0.180 0.178 0.178 0.184 ] reps=8 probe=5.508
+[2026-11-20T02:56:49Z] lat pass 3 order: pgts_main psearch psearch_pn vchord gin fts_aa fts pgts_rel
 pass=3 arm=pgts_main band=rare_k10 rows=10, median_last5=0.919 raw=[4.387 0.987 0.941 0.926 0.919 0.921 0.916 0.917 ] reps=8 probe=4.748
 pass=3 arm=pgts_main band=mid_k10 rows=10, median_last5=1.117 raw=[4.438 1.168 1.130 1.122 1.118 1.117 1.112 1.115 ] reps=8 probe=3.886
 pass=3 arm=pgts_main band=common_k10 rows=10, median_last5=10.085 raw=[14.381 9.994 9.948 10.016 10.117 10.135 10.085 9.885 ] reps=8 probe=14.196
@@ -349,6 +482,7 @@ pass=3 arm=pgts_rel band=not_k10_cte rows=10, median_last5=19383.480 raw=[19359.
 pass=3 arm=pgts_rel band=phrase_us_k10_cte rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
 pass=3 arm=pgts_rel band=phrase_ww_k10_cte rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
 pass=3 arm=pgts_rel band=count_common rows=734896, median_last5=291669.508 raw=[291669.508] reps=1 probe=291669.508
+[2026-11-20T03:20:34Z] lat pass 4 order: psearch psearch_pn vchord gin fts_aa fts pgts_rel pgts_main
 pass=4 arm=psearch band=rare_k10 rows=10, median_last5=1.167 raw=[4.910 1.278 1.191 1.167 1.194 1.165 1.158 1.210 ] reps=8 probe=6.416
 pass=4 arm=psearch band=mid_k10 rows=10, median_last5=1.170 raw=[4.817 1.262 1.186 1.207 1.170 1.155 1.207 1.169 ] reps=8 probe=6.231
 pass=4 arm=psearch band=common_k10 rows=10, median_last5=1.243 raw=[5.910 1.355 1.299 1.252 1.236 1.263 1.243 1.229 ] reps=8 probe=5.206
@@ -466,6 +600,7 @@ pass=4 arm=pgts_main band=not_k10_cte rows=10, median_last5=19276.920 raw=[19244
 pass=4 arm=pgts_main band=phrase_us_k10_cte rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
 pass=4 arm=pgts_main band=phrase_ww_k10_cte rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
 pass=4 arm=pgts_main band=count_common rows=734896, median_last5=291840.009 raw=[291840.009] reps=1 probe=291840.009
+[2026-11-20T03:44:21Z] lat pass 5 order: psearch_pn vchord gin fts_aa fts pgts_rel pgts_main psearch
 pass=5 arm=psearch_pn band=rare_k10 rows=10, median_last5=1.019 raw=[5.591 1.137 1.078 1.037 1.018 1.019 1.087 1.013 ] reps=8 probe=6.448
 pass=5 arm=psearch_pn band=mid_k10 rows=10, median_last5=1.066 raw=[5.452 1.180 1.087 1.066 1.085 1.077 1.053 1.031 ] reps=8 probe=4.838
 pass=5 arm=psearch_pn band=common_k10 rows=10, median_last5=1.191 raw=[5.038 1.297 1.232 1.191 1.178 1.221 1.181 1.220 ] reps=8 probe=5.725
@@ -583,3 +718,246 @@ pass=5 arm=psearch band=not_k10 rows=10, median_last5=1.657 raw=[6.529 1.706 1.7
 pass=5 arm=psearch band=phrase_us_k10 rows=10, median_last5=8.651 raw=[12.246 9.508 9.313 8.651 8.739 8.607 8.346 9.125 ] reps=8 probe=12.100
 pass=5 arm=psearch band=phrase_ww_k10 rows=10, median_last5=8.659 raw=[12.239 9.119 9.382 8.852 8.422 8.659 8.587 8.791 ] reps=8 probe=12.247
 pass=5 arm=psearch band=count_common rows=735955, median_last5=0.957 raw=[4.255 1.055 0.981 0.965 0.956 0.957 0.975 0.955 ] reps=8 probe=3.838
+[2026-11-20T04:09:14Z] hoststate lat_end: chase  4096 MiB thp : 132.6 ns/load (AnonHugePages 0 kB) | load 1.62 2.15 2.04 | thp always madvise [never] | no_turbo 1 | gov performance
+[2026-11-20T04:09:14Z] LAT_DONE
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+NOTICE:  word is too long to be indexed
+DETAIL:  Words longer than 2047 characters are ignored.
+[2026-11-20T04:14:02Z] agree N=2188038 avgdl=484.8482069324207349
+[2026-11-20T04:15:36Z] AGREE_DONE
+[2026-11-20T04:16:42Z] hoststate tps_start: chase  4096 MiB thp : 133.4 ns/load (AnonHugePages 0 kB) | load 1.32 2.11 2.15 | thp always madvise [never] | no_turbo 1 | gov performance
+pass=1 arm=fts band=and_us_k10 c1=457.738979 f1=0 c16=6507.513153 f16=0 c64=23498.984726 f64=0 c128=32250.611959 f128=0 c256=31998.025497 f256=0
+pass=1 arm=fts band=common_k10 c1=3043.381952 f1=0 c16=40489.813679 f16=0 c64=121249.647464 f64=0 c128=164025.029666 f128=0 c256=155826.728802 f256=0
+pass=1 arm=fts band=count_common c1=5719.780841 f1=0 c16=78115.912257 f16=0 c64=246226.302408 f64=0 c128=343899.187634 f128=0 c256=357500.306903 f256=0
+pass=1 arm=fts band=rare_k10 c1=4562.929667 f1=0 c16=62099.286115 f16=0 c64=121931.941768 f64=0 c128=134608.399890 f128=0 c256=108307.708622 f256=0
+pass=1 arm=pgts_rel band=and_us_k10_cte SKIPPED(timeout in latency)
+pass=1 arm=pgts_rel band=and_us_k10 SKIPPED(timeout in latency)
+pass=1 arm=pgts_rel band=common_k10 c1=102.768256 f1=0 c16=654.978716 f16=0 c64=1284.971363 f64=0 c128=1384.477604 f128=0 c256=1402.716370 f256=0
+pass=1 arm=pgts_rel band=count_common SKIPPED(latency 290151.070 ms > 1 s)
+pass=1 arm=pgts_rel band=rare_k10 c1=1098.761755 f1=0 c16=12554.160756 f16=0 c64=20261.357474 f64=0 c128=15703.208869 f128=0 c256=15207.447910 f256=0
+pass=1 arm=pgts_main band=and_us_k10_cte SKIPPED(timeout in latency)
+pass=1 arm=pgts_main band=and_us_k10 SKIPPED(timeout in latency)
+pass=1 arm=pgts_main band=common_k10 c1=99.761629 f1=0 c16=696.798449 f16=0 c64=1354.114241 f64=0 c128=1245.554498 f128=0 c256=1319.607966 f256=0
+pass=1 arm=pgts_main band=count_common SKIPPED(latency 290098.259 ms > 1 s)
+pass=1 arm=pgts_main band=rare_k10 c1=1100.201690 f1=0 c16=11680.215674 f16=0 c64=19530.741502 f64=0 c128=16241.565447 f128=0 c256=15396.900886 f256=0
+pass=1 arm=psearch band=and_us_k10 c1=111.920399 f1=0 c16=1604.746504 f16=0 c64=7202.261399 f64=0 c128=7018.026361 f128=0 c256=7049.232528 f256=0
+pass=1 arm=psearch band=common_k10 c1=803.301905 f1=0 c16=12562.499958 f16=0 c64=44142.453923 f64=0 c128=34728.593265 f128=0 c256=44444.825757 f256=0
+pass=1 arm=psearch band=count_common c1=1072.965630 f1=0 c16=16699.701814 f16=0 c64=11491.357906 f64=0 c128=8094.489096 f128=0 c256=8179.455519 f256=0
+pass=1 arm=psearch band=pn_and_us_k10 c1=110.513614 f1=0 c16=1564.400632 f16=0 c64=7226.790854 f64=0 c128=7011.851164 f128=0 c256=7057.303900 f256=0
+pass=1 arm=psearch band=pn_common_k10 c1=819.302771 f1=0 c16=12568.362740 f16=0 c64=43850.986125 f64=0 c128=40635.424910 f128=0 c256=44942.207520 f256=0
+pass=1 arm=psearch band=pn_count_common c1=1080.314597 f1=0 c16=16752.983005 f16=0 c64=11673.698021 f64=0 c128=8102.553248 f128=0 c256=6610.390093 f256=0
+pass=1 arm=psearch band=pn_rare_k10 c1=878.024526 f1=0 c16=13398.528616 f16=0 c64=46881.725866 f64=0 c128=10186.083769 f128=0 c256=45091.681928 f256=0
+pass=1 arm=psearch band=rare_k10 c1=864.622278 f1=0 c16=13407.613789 f16=0 c64=47200.800657 f64=0 c128=10703.070104 f128=0 c256=44479.538349 f256=0
+pass=1 arm=psearch_pn band=and_us_k10 c1=111.575141 f1=0 c16=1568.031371 f16=0 c64=7180.779521 f64=0 c128=7008.176311 f128=0 c256=7052.002598 f256=0
+pass=1 arm=psearch_pn band=common_k10 c1=846.659213 f1=0 c16=13139.140155 f16=0 c64=46901.504742 f64=0 c128=19202.310948 f128=0 c256=45814.320254 f256=0
+pass=1 arm=psearch_pn band=count_common c1=1055.275368 f1=0 c16=16514.450123 f16=0 c64=10872.076165 f64=0 c128=6059.107155 f128=0 c256=8882.300607 f256=0
+pass=1 arm=psearch_pn band=rare_k10 c1=993.005890 f1=0 c16=15237.125882 f16=0 c64=52723.086342 f64=0 c128=23248.028162 f128=0 c256=44055.707533 f256=0
+pass=1 arm=vchord band=common_k10 c1=18.154341 f1=0 c16=104.401252 f16=0 c64=120.884892 f64=0 c128=115.647720 f128=0 c256=111.314292 f256=0
+pass=1 arm=vchord band=rare_k10 c1=112.063598 f1=0 c16=1093.166309 f16=0 c64=2539.070000 f64=0 c128=2176.710977 f128=0 c256=1984.110116 f256=0
+pass=1 arm=gin band=and_us_k10 SKIPPED(latency 2627.324 ms > 1 s)
+pass=1 arm=gin band=common_k10 SKIPPED(latency 2355.460 ms > 1 s)
+[2026-11-20T05:25:43Z] TPS WARNING arm=gin band=count_common c=256: pgbench: error: client 97 script 0 aborted in command 0 query 0: ERROR:  too many dynamic shared memory segments
+pass=1 arm=gin band=count_common c1=1.791069 f1=0 c16=30.686350 f16=0 c64=94.432101 f64=0 c128=135.078545 f128=0 c256=144.214477 f256=0
+pass=1 arm=gin band=rare_k10 c1=20.014816 f1=0 c16=237.053425 f16=0 c64=442.475389 f64=0 c128=359.626474 f128=0 c256=356.805554 f256=0
+pass=2 arm=gin band=and_us_k10 SKIPPED(latency 2627.324 ms > 1 s)
+pass=2 arm=gin band=common_k10 SKIPPED(latency 2355.460 ms > 1 s)
+[2026-11-20T05:32:08Z] TPS WARNING arm=gin band=count_common c=256: pgbench: error: client 255 script 0 aborted in command 0 query 0: ERROR:  too many dynamic shared memory segments
+pass=2 arm=gin band=count_common c1=1.933329 f1=0 c16=30.823136 f16=0 c64=94.110869 f64=0 c128=134.927550 f128=0 c256=145.274606 f256=0
+pass=2 arm=gin band=rare_k10 c1=19.123808 f1=0 c16=238.746655 f16=0 c64=448.537417 f64=0 c128=360.890128 f128=0 c256=356.381512 f256=0
+pass=2 arm=vchord band=common_k10 c1=18.015190 f1=0 c16=104.228974 f16=0 c64=137.067269 f64=0 c128=121.193589 f128=0 c256=121.587698 f256=0
+pass=2 arm=vchord band=rare_k10 c1=116.279298 f1=0 c16=1116.991307 f16=0 c64=2522.163175 f64=0 c128=2220.645409 f128=0 c256=1873.818083 f256=0
+pass=2 arm=psearch_pn band=and_us_k10 c1=108.449138 f1=0 c16=1548.358075 f16=0 c64=7197.262228 f64=0 c128=7010.496854 f128=0 c256=7058.349241 f256=0
+pass=2 arm=psearch_pn band=common_k10 c1=840.971850 f1=0 c16=13072.897288 f16=0 c64=46246.128353 f64=0 c128=19900.722747 f128=0 c256=38250.415291 f256=0
+pass=2 arm=psearch_pn band=count_common c1=1048.219078 f1=0 c16=16387.006106 f16=0 c64=10666.898234 f64=0 c128=6009.945930 f128=0 c256=8412.131688 f256=0
+pass=2 arm=psearch_pn band=rare_k10 c1=991.960014 f1=0 c16=15144.309145 f16=0 c64=52562.518009 f64=0 c128=16418.373759 f128=0 c256=43531.716882 f256=0
+pass=2 arm=psearch band=and_us_k10 c1=109.570692 f1=0 c16=1567.474072 f16=0 c64=7200.847719 f64=0 c128=7029.759502 f128=0 c256=7064.750703 f256=0
+pass=2 arm=psearch band=common_k10 c1=820.515898 f1=0 c16=12580.071464 f16=0 c64=44674.843704 f64=0 c128=23714.738850 f128=0 c256=45645.751810 f256=0
+pass=2 arm=psearch band=count_common c1=1084.601627 f1=0 c16=16718.998619 f16=0 c64=12024.016018 f64=0 c128=7709.401206 f128=0 c256=6894.070452 f256=0
+pass=2 arm=psearch band=pn_and_us_k10 c1=108.369936 f1=0 c16=1585.522285 f16=0 c64=7288.471712 f64=0 c128=7027.488305 f128=0 c256=7077.377605 f256=0
+pass=2 arm=psearch band=pn_common_k10 c1=809.617596 f1=0 c16=12634.008182 f16=0 c64=44070.774512 f64=0 c128=20667.792300 f128=0 c256=37923.379823 f256=0
+pass=2 arm=psearch band=pn_count_common c1=1081.885624 f1=0 c16=16753.515298 f16=0 c64=15398.214004 f64=0 c128=6080.863121 f128=0 c256=8386.577297 f256=0
+pass=2 arm=psearch band=pn_rare_k10 c1=863.446569 f1=0 c16=13340.652462 f16=0 c64=47376.519768 f64=0 c128=10194.996440 f128=0 c256=36404.325098 f256=0
+pass=2 arm=psearch band=rare_k10 c1=863.219755 f1=0 c16=13325.621168 f16=0 c64=47099.740786 f64=0 c128=26052.499107 f128=0 c256=44674.100944 f256=0
+pass=2 arm=pgts_main band=and_us_k10_cte SKIPPED(timeout in latency)
+pass=2 arm=pgts_main band=and_us_k10 SKIPPED(timeout in latency)
+pass=2 arm=pgts_main band=common_k10 c1=100.410433 f1=0 c16=663.187810 f16=0 c64=1451.791148 f64=0 c128=1317.301894 f128=0 c256=1264.507618 f256=0
+pass=2 arm=pgts_main band=count_common SKIPPED(latency 290098.259 ms > 1 s)
+pass=2 arm=pgts_main band=rare_k10 c1=1104.109911 f1=0 c16=11752.956132 f16=0 c64=20270.615025 f64=0 c128=15697.872111 f128=0 c256=12984.161012 f256=0
+pass=2 arm=pgts_rel band=and_us_k10_cte SKIPPED(timeout in latency)
+pass=2 arm=pgts_rel band=and_us_k10 SKIPPED(timeout in latency)
+pass=2 arm=pgts_rel band=common_k10 c1=102.787857 f1=0 c16=623.181665 f16=0 c64=1335.311904 f64=0 c128=1276.550252 f128=0 c256=1195.883434 f256=0
+pass=2 arm=pgts_rel band=count_common SKIPPED(latency 290151.070 ms > 1 s)
+pass=2 arm=pgts_rel band=rare_k10 c1=1095.944240 f1=0 c16=12549.737078 f16=0 c64=20188.230677 f64=0 c128=14394.457892 f128=0 c256=15515.523167 f256=0
+pass=2 arm=fts band=and_us_k10 c1=465.343679 f1=0 c16=6643.011127 f16=0 c64=23890.747652 f64=0 c128=32376.938166 f128=0 c256=32297.942660 f256=0
+pass=2 arm=fts band=common_k10 c1=2893.744977 f1=0 c16=39007.375689 f16=0 c64=120506.520321 f64=0 c128=164696.168702 f128=0 c256=156240.420536 f256=0
+pass=2 arm=fts band=count_common c1=5896.450366 f1=0 c16=81432.758452 f16=0 c64=246622.572042 f64=0 c128=339464.502291 f128=0 c256=350868.080827 f256=0
+pass=2 arm=fts band=rare_k10 c1=4657.867158 f1=0 c16=62442.223425 f16=0 c64=122995.993914 f64=0 c128=136817.809541 f128=0 c256=123505.370988 f256=0
+[2026-11-20T06:41:12Z] hoststate tps_end: chase  4096 MiB thp : 133.3 ns/load (AnonHugePages 0 kB) | load 56.81 88.12 80.57 | thp always madvise [never] | no_turbo 1 | gov performance
+[2026-11-20T06:41:12Z] TPS_DONE
+rep=1 arm=fts band=rare_k10 cold_ms=45.967
+rep=1 arm=fts band=common_k10 cold_ms=54.688
+rep=1 arm=fts band=and_k10 cold_ms=61.873
+rep=1 arm=pgts_rel band=rare_k10 cold_ms=28.467
+rep=1 arm=pgts_rel band=common_k10 cold_ms=43.723
+rep=1 arm=pgts_rel band=and_k10 cold_ms=SKIPPED(timeout in latency)
+rep=1 arm=pgts_rel band=and_k10_cte cold_ms=6961.397
+rep=1 arm=pgts_main band=rare_k10 cold_ms=23.416
+rep=1 arm=pgts_main band=common_k10 cold_ms=39.25
+rep=1 arm=pgts_main band=and_k10 cold_ms=SKIPPED(timeout in latency)
+rep=1 arm=pgts_main band=and_k10_cte cold_ms=6951.578
+rep=1 arm=psearch band=rare_k10 cold_ms=66.772
+rep=1 arm=psearch band=common_k10 cold_ms=70.268
+rep=1 arm=psearch band=and_k10 cold_ms=66.741
+rep=1 arm=psearch_pn band=rare_k10 cold_ms=55.532
+rep=1 arm=psearch_pn band=common_k10 cold_ms=68.06
+rep=1 arm=psearch_pn band=and_k10 cold_ms=62.6
+rep=1 arm=vchord band=rare_k10 cold_ms=2352.472
+rep=1 arm=vchord band=common_k10 cold_ms=1223.313
+rep=1 arm=gin band=rare_k10 cold_ms=2110.61
+rep=1 arm=gin band=common_k10 cold_ms=7217.855
+rep=1 arm=gin band=and_k10 cold_ms=1411.711
+pg_ctl: PID file "/nvme/data18_fts/postmaster.pid" does not exist
+Is server running?
+pg_ctl: could not start server
+Examine the log output.
+rep=2 arm=fts band=rare_k10 cold_ms=ERR Expecting value: line 1 column 1 (char 0)
+pg_ctl: PID file "/nvme/data18_fts/postmaster.pid" does not exist
+Is server running?
+pg_ctl: could not start server
+Examine the log output.
+rep=2 arm=fts band=common_k10 cold_ms=ERR Expecting value: line 1 column 1 (char 0)
+pg_ctl: PID file "/nvme/data18_fts/postmaster.pid" does not exist
+Is server running?
+pg_ctl: could not start server
+Examine the log output.
+rep=2 arm=fts band=and_k10 cold_ms=ERR Expecting value: line 1 column 1 (char 0)
+rep=2 arm=pgts_rel band=rare_k10 cold_ms=24.896
+rep=2 arm=pgts_rel band=common_k10 cold_ms=43.504
+rep=2 arm=pgts_rel band=and_k10 cold_ms=SKIPPED(timeout in latency)
+rep=2 arm=pgts_rel band=and_k10_cte cold_ms=6964.177
+rep=2 arm=pgts_main band=rare_k10 cold_ms=24.993
+rep=2 arm=pgts_main band=common_k10 cold_ms=40.667
+rep=2 arm=pgts_main band=and_k10 cold_ms=SKIPPED(timeout in latency)
+rep=2 arm=pgts_main band=and_k10_cte cold_ms=7031.835
+rep=2 arm=psearch band=rare_k10 cold_ms=68.226
+rep=2 arm=psearch band=common_k10 cold_ms=70.316
+rep=2 arm=psearch band=and_k10 cold_ms=67.979
+rep=2 arm=psearch_pn band=rare_k10 cold_ms=55.148
+rep=2 arm=psearch_pn band=common_k10 cold_ms=71.23
+rep=2 arm=psearch_pn band=and_k10 cold_ms=62.906
+rep=2 arm=vchord band=rare_k10 cold_ms=2344.051
+rep=2 arm=vchord band=common_k10 cold_ms=1237.718
+rep=2 arm=gin band=rare_k10 cold_ms=2133.611
+rep=2 arm=gin band=common_k10 cold_ms=7237.356
+rep=2 arm=gin band=and_k10 cold_ms=1435.197
+pg_ctl: PID file "/nvme/data18_fts/postmaster.pid" does not exist
+Is server running?
+pg_ctl: could not start server
+Examine the log output.
+rep=3 arm=fts band=rare_k10 cold_ms=ERR Expecting value: line 1 column 1 (char 0)
+pg_ctl: PID file "/nvme/data18_fts/postmaster.pid" does not exist
+Is server running?
+pg_ctl: could not start server
+Examine the log output.
+rep=3 arm=fts band=common_k10 cold_ms=ERR Expecting value: line 1 column 1 (char 0)
+pg_ctl: PID file "/nvme/data18_fts/postmaster.pid" does not exist
+Is server running?
+pg_ctl: could not start server
+Examine the log output.
+rep=3 arm=fts band=and_k10 cold_ms=ERR Expecting value: line 1 column 1 (char 0)
+rep=3 arm=pgts_rel band=rare_k10 cold_ms=24.614
+rep=3 arm=pgts_rel band=common_k10 cold_ms=42.556
+rep=3 arm=pgts_rel band=and_k10 cold_ms=SKIPPED(timeout in latency)
+rep=3 arm=pgts_rel band=and_k10_cte cold_ms=7024.761
+rep=3 arm=pgts_main band=rare_k10 cold_ms=24.118
+rep=3 arm=pgts_main band=common_k10 cold_ms=40.457
+rep=3 arm=pgts_main band=and_k10 cold_ms=SKIPPED(timeout in latency)
+rep=3 arm=pgts_main band=and_k10_cte cold_ms=6998.72
+rep=3 arm=psearch band=rare_k10 cold_ms=66.078
+rep=3 arm=psearch band=common_k10 cold_ms=72.76
+rep=3 arm=psearch band=and_k10 cold_ms=66.131
+rep=3 arm=psearch_pn band=rare_k10 cold_ms=57.354
+rep=3 arm=psearch_pn band=common_k10 cold_ms=69.055
+rep=3 arm=psearch_pn band=and_k10 cold_ms=62.761
+rep=3 arm=vchord band=rare_k10 cold_ms=2368.052
+rep=3 arm=vchord band=common_k10 cold_ms=1239.11
+rep=3 arm=gin band=rare_k10 cold_ms=2117.457
+rep=3 arm=gin band=common_k10 cold_ms=7600.768
+rep=3 arm=gin band=and_k10 cold_ms=1445.4
+pg_ctl: PID file "/nvme/data18_fts/postmaster.pid" does not exist
+Is server running?
+pg_ctl: could not start server
+Examine the log output.
+rep=4 arm=fts band=rare_k10 cold_ms=ERR Expecting value: line 1 column 1 (char 0)
+pg_ctl: PID file "/nvme/data18_fts/postmaster.pid" does not exist
+Is server running?
+pg_ctl: could not start server
+Examine the log output.
+rep=4 arm=fts band=common_k10 cold_ms=ERR Expecting value: line 1 column 1 (char 0)
+pg_ctl: PID file "/nvme/data18_fts/postmaster.pid" does not exist
+Is server running?
+pg_ctl: could not start server
+Examine the log output.
+rep=4 arm=fts band=and_k10 cold_ms=ERR Expecting value: line 1 column 1 (char 0)
+rep=4 arm=pgts_rel band=rare_k10 cold_ms=25.25
+rep=4 arm=pgts_rel band=common_k10 cold_ms=42.666
+rep=4 arm=pgts_rel band=and_k10 cold_ms=SKIPPED(timeout in latency)
+rep=4 arm=pgts_rel band=and_k10_cte cold_ms=7008.528
+rep=4 arm=pgts_main band=rare_k10 cold_ms=23.956
+rep=4 arm=pgts_main band=common_k10 cold_ms=39.772
+rep=4 arm=pgts_main band=and_k10 cold_ms=SKIPPED(timeout in latency)
+rep=4 arm=pgts_main band=and_k10_cte cold_ms=7039.92
+rep=4 arm=psearch band=rare_k10 cold_ms=67.083
+rep=4 arm=psearch band=common_k10 cold_ms=72.108
+rep=4 arm=psearch band=and_k10 cold_ms=67.233
+rep=4 arm=psearch_pn band=rare_k10 cold_ms=56.626
+rep=4 arm=psearch_pn band=common_k10 cold_ms=69.01
+rep=4 arm=psearch_pn band=and_k10 cold_ms=63.322
+rep=4 arm=vchord band=rare_k10 cold_ms=2339.049
+rep=4 arm=vchord band=common_k10 cold_ms=1241.49
+rep=4 arm=gin band=rare_k10 cold_ms=2009.783
+rep=4 arm=gin band=common_k10 cold_ms=7160.899
+rep=4 arm=gin band=and_k10 cold_ms=1463.805
+pg_ctl: PID file "/nvme/data18_fts/postmaster.pid" does not exist
+Is server running?
+pg_ctl: could not start server
+Examine the log output.
+rep=5 arm=fts band=rare_k10 cold_ms=ERR Expecting value: line 1 column 1 (char 0)
+pg_ctl: PID file "/nvme/data18_fts/postmaster.pid" does not exist
+Is server running?
+pg_ctl: could not start server
+Examine the log output.
+rep=5 arm=fts band=common_k10 cold_ms=ERR Expecting value: line 1 column 1 (char 0)
+pg_ctl: PID file "/nvme/data18_fts/postmaster.pid" does not exist
+Is server running?
+pg_ctl: could not start server
+Examine the log output.
+rep=5 arm=fts band=and_k10 cold_ms=ERR Expecting value: line 1 column 1 (char 0)
+rep=5 arm=pgts_rel band=rare_k10 cold_ms=24.457
+rep=5 arm=pgts_rel band=common_k10 cold_ms=41.833
+rep=5 arm=pgts_rel band=and_k10 cold_ms=SKIPPED(timeout in latency)
+rep=5 arm=pgts_rel band=and_k10_cte cold_ms=6972.446
+rep=5 arm=pgts_main band=rare_k10 cold_ms=24.58
+rep=5 arm=pgts_main band=common_k10 cold_ms=39.57
+rep=5 arm=pgts_main band=and_k10 cold_ms=SKIPPED(timeout in latency)
+rep=5 arm=pgts_main band=and_k10_cte cold_ms=7036.121
+rep=5 arm=psearch band=rare_k10 cold_ms=66.798
+rep=5 arm=psearch band=common_k10 cold_ms=69.474
+rep=5 arm=psearch band=and_k10 cold_ms=67.961
+rep=5 arm=psearch_pn band=rare_k10 cold_ms=56.44
+rep=5 arm=psearch_pn band=common_k10 cold_ms=69.987
+rep=5 arm=psearch_pn band=and_k10 cold_ms=61.603
+rep=5 arm=vchord band=rare_k10 cold_ms=2354.412
+rep=5 arm=vchord band=common_k10 cold_ms=1249.873
+rep=5 arm=gin band=rare_k10 cold_ms=2138.716
+rep=5 arm=gin band=common_k10 cold_ms=7120.432
+rep=5 arm=gin band=and_k10 cold_ms=1471.339
+[2026-11-20T06:45:54Z] COLD_DONE
+[2026-11-20T06:45:54Z] MAJOR_18_DONE
