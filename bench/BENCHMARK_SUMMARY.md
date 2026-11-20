@@ -1,4 +1,4 @@
-# pg_fts benchmark summary — methodology and results (as of v1.13.0, 2026-10-15)
+# pg_fts benchmark summary — methodology and results (as of v1.18.0, 2026-11-20)
 
 Consolidated view of the current measurements. Every number here is traceable to a
 run recorded under `bench/`; nothing is estimated. Where a figure was previously
@@ -9,15 +9,18 @@ published wrong, the correction is stated rather than quietly replaced.
 ## 1. Methodology
 
 ### Rig
-**Current (1.11.0 release run, 2026-10-09):** EC2 **r7gd.4xlarge** (AWS Graviton3 / Neoverse-V1, 16 vCPU, 128 GiB,
+**Current cross-engine run (2026-11-19/20, section 2e):** 2x c6id.metal + 2x c7gd.metal, Fedora 45,
+XFS on local NVMe, PG 18.7 and 19.0 from source, every engine on every host, one cluster at
+a time.  **Earlier (1.11.0 release run, 2026-10-09):** EC2 **r7gd.4xlarge** (AWS Graviton3 / Neoverse-V1, 16 vCPU, 128 GiB,
 32 MB L3, local NVMe instance store), Debian 13 arm64, PostgreSQL **17.10** built from
 source, `shared_buffers = 32GB`; full protocol in `bench/PROTOCOL_111_2026-10-09.md` (on top of
 `PROTOCOL_A_2026-10-07.md` and `PROTOCOL_110_2026-10-07.md`).
 Earlier sections were measured on EC2 **r6id.4xlarge** (Xeon 8375C @ 2.90 GHz, 16 vCPU,
 128 GB RAM, 884 GB local NVMe), Amazon Linux 2023 or Debian 13 x86-64,
 `shared_buffers = 64GB`; numbers from the two rigs are not compared column by column.
-**One dedicated instance per engine** for comparative runs — no engine shares a host
-with another.
+Through 1.11.0, comparative runs used **one dedicated instance per engine**.  Since the
+2026-10-15 metal run, every engine runs on every host with one cluster up at a time, so
+host differences cancel instead of confounding.
 
 Benchmarks run on **local NVMe, never tmpfs**, so I/O behaviour is real.
 
@@ -60,6 +63,49 @@ alone.
 ---
 
 ## 2. Comparative latency
+
+### 2e. pg_fts 1.18.0 vs the field on bare metal, PG 18.7 and 19.0 (2026-11-19/20, x86_64 + aarch64, four hosts; the current cross-engine run)
+
+`RESULTS_FIELD_METAL_2026-11-19.md` (protocol `PROTOCOL_FIELD_METAL_2026-11-19.md`, written
+before the run, five amendments from the smoke test; data `data_field_metal_2026-11-19/`).
+
+Setup:
+- Hosts: 2x c6id.metal and 2x c7gd.metal; Fedora 45; XFS on local NVMe.
+- PostgreSQL: 18.7 and 19.0 from source.
+- Arms on 18.7: pg_fts 1.18.0, pg_textsearch 1.5.1 and main (8923a5ba), pg_search 0.27.0
+  as shipped and with `pnorms=true`, VectorChord-bm25 0.3.0, and GIN on a stored
+  `tsvector`.  On 19.0: pg_fts, pg_textsearch main and GIN, the only engines that run there.
+- Method: 5 rotated passes with an A/A arm (spread 0.0-4.5%), and a bootstrap CI and a
+  verdict per band.
+
+Single-client latency on 18.7 (median ms, host range, x86 / arm):
+
+| band | pg_fts 1.18.0 | pg_textsearch 1.5.1 | pg_search 0.27.0 | pg_search pnorms | VectorChord | GIN |
+|---|---|---|---|---|---|---|
+| rare top-10 | **0.23 / 0.24** | 0.91 / 0.98-0.99 | 1.18 / 1.19-1.20 | 1.04 / 1.02-1.06 | 8.7-8.8 / 11.2-11.3 | 55 / 42-43 |
+| common top-10 | **0.36 / 0.35** | 9.9 / 10.7-10.8 | 1.22-1.26 / 1.22-1.24 | 1.18-1.23 / 1.17-1.20 | 55 / 68 | 2,347-2,672 / 1,699-1,712 |
+| common top-1000 | 13.4 / 11.8 | 14.0 / 15.1-15.2 | 7.6-7.8 / 8.4-8.5 | **5.8-5.9 / 5.7** | short (100 rows) | 2,345-2,704 / 1,708-1,709 |
+| 4-term OR | 15.7 / 12.6 | 15.8 / 13.9-14.1 | 10.4-10.6 / 9.2-9.3 | **10.1-10.2 / 9.1-9.2** | 32 / 37 | 1,719-1,726 / 1,245-1,258 |
+| `united & states` | **2.16 / 1.89-1.93** | >300 s / 274.5 s cte | 9.2 / 8.6-8.8 | 9.2-9.5 / 8.6-8.8 | n/a | 1,583-2,712 / 1,869-1,875 |
+| `world & war` | 6.27 / 5.52-5.54 | 189.5 s cte / 150.2 s cte | 2.85-2.93 / 2.85-2.98 | **2.18-2.27 / 2.26-2.35** | n/a | 1,123-1,231 / 926-934 |
+| `"united states"` | **2.56-2.57 / 2.38-2.44** | >300 s | 8.9-9.0 / 8.7-8.9 | 9.4-9.6 / 8.6-8.9 | n/a | 2,090-3,294 / 2,642-2,655 |
+| exact count | **0.18 / 0.16** | 290.7-290.9 s / 232.8-232.9 s | 0.95-0.96 / 0.90-0.91 | 0.96-0.99 / 0.91-0.93 | n/a | 552-578 / 400-406 |
+
+Findings (every verdict STABLE on both architectures unless stated):
+- pg_fts is ahead of every engine on single-term top-10/100, on conjunctions of a rare
+  and a frequent term, on phrases, and on the exact count.
+- pg_search (0.27.0) is ahead on common top-1000, on the 4-term OR, on `world & war`
+  (two frequent terms) and on `hungary & !slovakia`, more so with `pnorms=true`.
+- pg_textsearch ties pg_fts on the 2-term OR (no claim), and on the 4-term OR on x86.
+- On 19.0, pg_fts performs the same as on 18.7 (ratio 0.945-1.036, no claim).
+- Settled throughput at 64 clients, rare top-10: pg_fts 119.7-122.5k (x86) and
+  144.4-148.2k (arm), against pg_search 47.0-47.2k / 48.8k and pg_textsearch 19.9-20.1k /
+  12.5-20.4k.
+- Build: pg_search 118-130 s, pg_fts 239-264 s, pg_textsearch 265-312 s.
+- Index: pg_fts 1,369 MiB, GIN 1,569 MiB (plus 6.2 GiB of stored column), pg_textsearch
+  1,887, pg_search 2,308 (2,704 with pnorms), VectorChord 42,435.
+- Cold single-term first queries: pg_textsearch is still faster.
+- Gate 4 (pg_fts's exhaustive top-k references) did not run on these hosts.
 
 ### 2d. pg_fts 1.13.0 vs pg_textsearch on bare metal (2026-10-15, x86_64 + aarch64, four hosts)
 

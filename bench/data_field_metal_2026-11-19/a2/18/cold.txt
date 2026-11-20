@@ -1,0 +1,110 @@
+rep=1 arm=fts band=rare_k10 cold_ms=40.679
+rep=1 arm=fts band=common_k10 cold_ms=48.356
+rep=1 arm=fts band=and_k10 cold_ms=55.027
+rep=1 arm=pgts_rel band=rare_k10 cold_ms=25.292
+rep=1 arm=pgts_rel band=common_k10 cold_ms=38.197
+rep=1 arm=pgts_rel band=and_k10 cold_ms=SKIPPED(timeout in latency)
+rep=1 arm=pgts_rel band=and_k10_cte cold_ms=5198.61
+rep=1 arm=pgts_main band=rare_k10 cold_ms=21.339
+rep=1 arm=pgts_main band=common_k10 cold_ms=36.956
+rep=1 arm=pgts_main band=and_k10 cold_ms=SKIPPED(timeout in latency)
+rep=1 arm=pgts_main band=and_k10_cte cold_ms=5219.056
+rep=1 arm=psearch band=rare_k10 cold_ms=35.572
+rep=1 arm=psearch band=common_k10 cold_ms=43.438
+rep=1 arm=psearch band=and_k10 cold_ms=45.354
+rep=1 arm=psearch_pn band=rare_k10 cold_ms=36.436
+rep=1 arm=psearch_pn band=common_k10 cold_ms=44.629
+rep=1 arm=psearch_pn band=and_k10 cold_ms=37.546
+rep=1 arm=vchord band=rare_k10 cold_ms=2047.952
+rep=1 arm=vchord band=common_k10 cold_ms=1064.975
+rep=1 arm=gin band=rare_k10 cold_ms=1890.106
+rep=1 arm=gin band=common_k10 cold_ms=6905.59
+rep=1 arm=gin band=and_k10 cold_ms=1213.984
+rep=2 arm=fts band=rare_k10 cold_ms=ERR Expecting value: line 1 column 1 (char 0)
+rep=2 arm=fts band=common_k10 cold_ms=ERR Expecting value: line 1 column 1 (char 0)
+rep=2 arm=fts band=and_k10 cold_ms=ERR Expecting value: line 1 column 1 (char 0)
+rep=2 arm=pgts_rel band=rare_k10 cold_ms=21.694
+rep=2 arm=pgts_rel band=common_k10 cold_ms=38.055
+rep=2 arm=pgts_rel band=and_k10 cold_ms=SKIPPED(timeout in latency)
+rep=2 arm=pgts_rel band=and_k10_cte cold_ms=5186.842
+rep=2 arm=pgts_main band=rare_k10 cold_ms=21.46
+rep=2 arm=pgts_main band=common_k10 cold_ms=37.299
+rep=2 arm=pgts_main band=and_k10 cold_ms=SKIPPED(timeout in latency)
+rep=2 arm=pgts_main band=and_k10_cte cold_ms=5225.774
+rep=2 arm=psearch band=rare_k10 cold_ms=35.438
+rep=2 arm=psearch band=common_k10 cold_ms=43.689
+rep=2 arm=psearch band=and_k10 cold_ms=45.541
+rep=2 arm=psearch_pn band=rare_k10 cold_ms=36.7
+rep=2 arm=psearch_pn band=common_k10 cold_ms=44.646
+rep=2 arm=psearch_pn band=and_k10 cold_ms=37.616
+rep=2 arm=vchord band=rare_k10 cold_ms=2045.299
+rep=2 arm=vchord band=common_k10 cold_ms=1067.282
+rep=2 arm=gin band=rare_k10 cold_ms=1682.687
+rep=2 arm=gin band=common_k10 cold_ms=6844.991
+rep=2 arm=gin band=and_k10 cold_ms=1244.995
+rep=3 arm=fts band=rare_k10 cold_ms=ERR Expecting value: line 1 column 1 (char 0)
+rep=3 arm=fts band=common_k10 cold_ms=ERR Expecting value: line 1 column 1 (char 0)
+rep=3 arm=fts band=and_k10 cold_ms=ERR Expecting value: line 1 column 1 (char 0)
+rep=3 arm=pgts_rel band=rare_k10 cold_ms=21.675
+rep=3 arm=pgts_rel band=common_k10 cold_ms=37.596
+rep=3 arm=pgts_rel band=and_k10 cold_ms=SKIPPED(timeout in latency)
+rep=3 arm=pgts_rel band=and_k10_cte cold_ms=5170.39
+rep=3 arm=pgts_main band=rare_k10 cold_ms=21.459
+rep=3 arm=pgts_main band=common_k10 cold_ms=37.014
+rep=3 arm=pgts_main band=and_k10 cold_ms=SKIPPED(timeout in latency)
+rep=3 arm=pgts_main band=and_k10_cte cold_ms=5236.515
+rep=3 arm=psearch band=rare_k10 cold_ms=35.493
+rep=3 arm=psearch band=common_k10 cold_ms=43.533
+rep=3 arm=psearch band=and_k10 cold_ms=45.523
+rep=3 arm=psearch_pn band=rare_k10 cold_ms=36.703
+rep=3 arm=psearch_pn band=common_k10 cold_ms=44.575
+rep=3 arm=psearch_pn band=and_k10 cold_ms=37.553
+rep=3 arm=vchord band=rare_k10 cold_ms=2044.83
+rep=3 arm=vchord band=common_k10 cold_ms=1067.7
+rep=3 arm=gin band=rare_k10 cold_ms=1784.821
+rep=3 arm=gin band=common_k10 cold_ms=6865.8
+rep=3 arm=gin band=and_k10 cold_ms=1232.036
+rep=4 arm=fts band=rare_k10 cold_ms=ERR Expecting value: line 1 column 1 (char 0)
+rep=4 arm=fts band=common_k10 cold_ms=ERR Expecting value: line 1 column 1 (char 0)
+rep=4 arm=fts band=and_k10 cold_ms=ERR Expecting value: line 1 column 1 (char 0)
+rep=4 arm=pgts_rel band=rare_k10 cold_ms=21.692
+rep=4 arm=pgts_rel band=common_k10 cold_ms=37.657
+rep=4 arm=pgts_rel band=and_k10 cold_ms=SKIPPED(timeout in latency)
+rep=4 arm=pgts_rel band=and_k10_cte cold_ms=5175.357
+rep=4 arm=pgts_main band=rare_k10 cold_ms=21.771
+rep=4 arm=pgts_main band=common_k10 cold_ms=37.871
+rep=4 arm=pgts_main band=and_k10 cold_ms=SKIPPED(timeout in latency)
+rep=4 arm=pgts_main band=and_k10_cte cold_ms=5204.942
+rep=4 arm=psearch band=rare_k10 cold_ms=35.604
+rep=4 arm=psearch band=common_k10 cold_ms=43.493
+rep=4 arm=psearch band=and_k10 cold_ms=45.479
+rep=4 arm=psearch_pn band=rare_k10 cold_ms=36.491
+rep=4 arm=psearch_pn band=common_k10 cold_ms=44.582
+rep=4 arm=psearch_pn band=and_k10 cold_ms=37.751
+rep=4 arm=vchord band=rare_k10 cold_ms=2045.12
+rep=4 arm=vchord band=common_k10 cold_ms=1064.598
+rep=4 arm=gin band=rare_k10 cold_ms=1681.087
+rep=4 arm=gin band=common_k10 cold_ms=6831.823
+rep=4 arm=gin band=and_k10 cold_ms=1233.292
+rep=5 arm=fts band=rare_k10 cold_ms=ERR Expecting value: line 1 column 1 (char 0)
+rep=5 arm=fts band=common_k10 cold_ms=ERR Expecting value: line 1 column 1 (char 0)
+rep=5 arm=fts band=and_k10 cold_ms=ERR Expecting value: line 1 column 1 (char 0)
+rep=5 arm=pgts_rel band=rare_k10 cold_ms=22.042
+rep=5 arm=pgts_rel band=common_k10 cold_ms=38.069
+rep=5 arm=pgts_rel band=and_k10 cold_ms=SKIPPED(timeout in latency)
+rep=5 arm=pgts_rel band=and_k10_cte cold_ms=5159.599
+rep=5 arm=pgts_main band=rare_k10 cold_ms=21.445
+rep=5 arm=pgts_main band=common_k10 cold_ms=37.457
+rep=5 arm=pgts_main band=and_k10 cold_ms=SKIPPED(timeout in latency)
+rep=5 arm=pgts_main band=and_k10_cte cold_ms=5208.786
+rep=5 arm=psearch band=rare_k10 cold_ms=35.535
+rep=5 arm=psearch band=common_k10 cold_ms=43.504
+rep=5 arm=psearch band=and_k10 cold_ms=45.375
+rep=5 arm=psearch_pn band=rare_k10 cold_ms=36.565
+rep=5 arm=psearch_pn band=common_k10 cold_ms=44.402
+rep=5 arm=psearch_pn band=and_k10 cold_ms=37.579
+rep=5 arm=vchord band=rare_k10 cold_ms=2049.13
+rep=5 arm=vchord band=common_k10 cold_ms=1065.958
+rep=5 arm=gin band=rare_k10 cold_ms=1779.968
+rep=5 arm=gin band=common_k10 cold_ms=6882.073
+rep=5 arm=gin band=and_k10 cold_ms=1224.31

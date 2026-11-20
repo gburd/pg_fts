@@ -1,0 +1,585 @@
+pass=1 arm=fts band=rare_k10 rows=10, median_last5=0.234 raw=[19.272 0.530 0.385 0.338 0.234 0.231 0.239 0.229 ] reps=8 probe=44.576
+pass=1 arm=fts band=mid_k10 rows=10, median_last5=0.300 raw=[16.027 0.346 0.326 0.302 0.300 0.307 0.251 0.247 ] reps=8 probe=15.302
+pass=1 arm=fts band=common_k10 rows=10, median_last5=0.358 raw=[22.578 0.599 0.381 0.374 0.361 0.353 0.358 0.346 ] reps=8 probe=22.267
+pass=1 arm=fts band=common_k100 rows=100, median_last5=0.802 raw=[58.999 0.983 0.829 0.818 0.810 0.802 0.797 0.783 ] reps=8 probe=59.972
+pass=1 arm=fts band=common_k1000 rows=1000, median_last5=13.369 raw=[646.255 13.699 13.488 13.475 13.473 13.364 13.369 13.346 ] reps=8 probe=653.341
+pass=1 arm=fts band=or2_k10 rows=10, median_last5=1.308 raw=[30.843 1.493 1.334 1.318 1.313 1.308 1.302 1.304 ] reps=8 probe=31.438
+pass=1 arm=fts band=or4_k10 rows=10, median_last5=15.756 raw=[27.263 15.855 15.761 15.779 15.893 15.720 15.756 15.519 ] reps=8 probe=25.884
+pass=1 arm=fts band=and_k10 rows=10, median_last5=0.666 raw=[30.909 0.852 0.702 0.681 0.666 0.667 0.664 0.654 ] reps=8 probe=30.682
+pass=1 arm=fts band=and_us_k10 rows=10, median_last5=2.160 raw=[39.054 2.423 2.181 2.173 2.162 2.147 2.160 2.149 ] reps=8 probe=39.900
+pass=1 arm=fts band=and_ww_k10 rows=10, median_last5=6.269 raw=[29.580 6.366 6.315 6.309 6.302 6.265 6.269 6.238 ] reps=8 probe=30.461
+pass=1 arm=fts band=not_k10 rows=10, median_last5=1.836 raw=[11.135 1.915 1.857 1.845 1.836 1.827 1.836 1.832 ] reps=8 probe=10.324
+pass=1 arm=fts band=phrase_us_k10 rows=10, median_last5=2.563 raw=[43.561 3.045 2.713 2.591 2.557 2.555 2.564 2.563 ] reps=8 probe=68.118
+pass=1 arm=fts band=phrase_ww_k10 rows=10, median_last5=6.575 raw=[33.047 6.966 6.591 6.577 6.578 6.574 6.562 6.575 ] reps=8 probe=34.084
+pass=1 arm=fts band=count_common rows=734896, median_last5=0.177 raw=[5.062 0.236 0.193 0.181 0.176 0.186 0.177 0.175 ] reps=8 probe=5.442
+pass=1 arm=pgts_rel band=rare_k10 rows=10, median_last5=0.925 raw=[4.175 0.996 0.936 0.925 0.922 0.919 0.933 1.025 ] reps=8 probe=4.642
+pass=1 arm=pgts_rel band=mid_k10 rows=10, median_last5=1.113 raw=[4.082 1.177 1.139 1.123 1.121 1.113 1.104 1.103 ] reps=8 probe=4.263
+pass=1 arm=pgts_rel band=common_k10 rows=10, median_last5=9.654 raw=[12.700 9.728 9.669 9.735 9.642 9.652 9.654 9.661 ] reps=8 probe=13.631
+pass=1 arm=pgts_rel band=common_k100 rows=100, median_last5=12.154 raw=[15.453 11.974 12.048 12.166 12.154 12.169 12.006 12.019 ] reps=8 probe=16.849
+pass=1 arm=pgts_rel band=common_k1000 rows=1000, median_last5=13.891 raw=[24.297 14.178 13.937 13.921 13.874 13.818 13.891 13.898 ] reps=8 probe=23.698
+pass=1 arm=pgts_rel band=or2_k10 rows=10, median_last5=1.280 raw=[4.092 1.337 1.297 1.284 1.280 1.280 1.274 1.273 ] reps=8 probe=4.036
+pass=1 arm=pgts_rel band=or4_k10 rows=10, median_last5=15.717 raw=[19.904 15.935 15.781 15.714 15.762 15.749 15.717 15.534 ] reps=8 probe=20.070
+pass=1 arm=pgts_rel band=and_k10 rows=TIMEOUT(300s) median_last5= raw=[300000.186]
+pass=1 arm=pgts_rel band=and_us_k10 rows=TIMEOUT(300s) median_last5= raw=[300000.210]
+pass=1 arm=pgts_rel band=and_ww_k10 rows=TIMEOUT(300s) median_last5= raw=[300000.252]
+pass=1 arm=pgts_rel band=not_k10 rows=TIMEOUT(300s) median_last5= raw=[300000.594]
+pass=1 arm=pgts_rel band=phrase_us_k10 rows=TIMEOUT(300s) median_last5= raw=[300000.518]
+pass=1 arm=pgts_rel band=phrase_ww_k10 rows=TIMEOUT(300s) median_last5= raw=[300000.419]
+pass=1 arm=pgts_rel band=and_k10_cte rows=10, median_last5=4961.626 raw=[4982.027 5019.097 4952.659 4990.756 4946.906 4941.705 4961.626 4982.848 ] reps=8 probe=5002.704
+pass=1 arm=pgts_rel band=and_us_k10_cte rows=TIMEOUT(300s) median_last5= raw=[300021.378]
+pass=1 arm=pgts_rel band=and_ww_k10_cte rows=10, median_last5=188440.823 raw=[188440.823] reps=1 probe=188440.823
+pass=1 arm=pgts_rel band=not_k10_cte rows=10, median_last5=19267.007 raw=[19237.023 19267.007 19465.220 ] reps=3 probe=19255.449
+pass=1 arm=pgts_rel band=phrase_us_k10_cte rows=TIMEOUT(300s) median_last5= raw=[300006.986]
+pass=1 arm=pgts_rel band=phrase_ww_k10_cte rows=TIMEOUT(300s) median_last5= raw=[300005.423]
+pass=1 arm=pgts_rel band=count_common rows=734896, median_last5=290151.070 raw=[290151.070] reps=1 probe=290151.070
+pass=1 arm=pgts_main band=rare_k10 rows=10, median_last5=0.919 raw=[4.374 0.977 0.932 0.927 0.919 0.919 0.920 0.918 ] reps=8 probe=5.159
+pass=1 arm=pgts_main band=mid_k10 rows=10, median_last5=1.133 raw=[4.184 1.182 1.148 1.141 1.130 1.165 1.133 1.128 ] reps=8 probe=3.702
+pass=1 arm=pgts_main band=common_k10 rows=10, median_last5=10.341 raw=[14.418 10.255 10.275 10.341 10.348 10.362 10.328 10.304 ] reps=8 probe=14.094
+pass=1 arm=pgts_main band=common_k100 rows=100, median_last5=12.472 raw=[16.787 12.437 12.457 12.506 12.472 12.389 12.484 12.316 ] reps=8 probe=16.066
+pass=1 arm=pgts_main band=common_k1000 rows=1000, median_last5=14.445 raw=[24.227 15.052 14.482 14.446 14.448 14.371 14.445 14.335 ] reps=8 probe=24.691
+pass=1 arm=pgts_main band=or2_k10 rows=10, median_last5=1.291 raw=[4.416 1.346 1.309 1.305 1.291 1.288 1.300 1.281 ] reps=8 probe=3.947
+pass=1 arm=pgts_main band=or4_k10 rows=10, median_last5=15.773 raw=[20.317 15.899 15.791 16.110 15.773 15.860 15.756 15.677 ] reps=8 probe=19.870
+pass=1 arm=pgts_main band=and_k10 rows=TIMEOUT(300s) median_last5= raw=[300000.524]
+pass=1 arm=pgts_main band=and_us_k10 rows=TIMEOUT(300s) median_last5= raw=[300000.298]
+pass=1 arm=pgts_main band=and_ww_k10 rows=TIMEOUT(300s) median_last5= raw=[300000.221]
+pass=1 arm=pgts_main band=not_k10 rows=TIMEOUT(300s) median_last5= raw=[300000.440]
+pass=1 arm=pgts_main band=phrase_us_k10 rows=TIMEOUT(300s) median_last5= raw=[300001.067]
+pass=1 arm=pgts_main band=phrase_ww_k10 rows=TIMEOUT(300s) median_last5= raw=[300000.482]
+pass=1 arm=pgts_main band=and_k10_cte rows=10, median_last5=4963.778 raw=[4984.127 5019.644 4951.132 4984.736 4945.374 4944.552 4963.778 4984.156 ] reps=8 probe=5007.143
+pass=1 arm=pgts_main band=and_us_k10_cte rows=TIMEOUT(300s) median_last5= raw=[300020.023]
+pass=1 arm=pgts_main band=and_ww_k10_cte rows=10, median_last5=188597.380 raw=[188597.380] reps=1 probe=188597.380
+pass=1 arm=pgts_main band=not_k10_cte rows=10, median_last5=19248.311 raw=[19242.316 19248.311 19511.711 ] reps=3 probe=19295.991
+pass=1 arm=pgts_main band=phrase_us_k10_cte rows=TIMEOUT(300s) median_last5= raw=[300006.650]
+pass=1 arm=pgts_main band=phrase_ww_k10_cte rows=TIMEOUT(300s) median_last5= raw=[300004.780]
+pass=1 arm=pgts_main band=count_common rows=734896, median_last5=290098.259 raw=[290098.259] reps=1 probe=290098.259
+pass=1 arm=psearch band=rare_k10 rows=10, median_last5=1.237 raw=[6.376 1.409 1.279 1.238 1.220 1.265 1.237 1.190 ] reps=8 probe=6.510
+pass=1 arm=psearch band=mid_k10 rows=10, median_last5=1.174 raw=[5.935 1.330 1.217 1.201 1.166 1.219 1.174 1.157 ] reps=8 probe=5.082
+pass=1 arm=psearch band=common_k10 rows=10, median_last5=1.260 raw=[5.562 1.345 1.258 1.264 1.260 1.255 1.241 1.300 ] reps=8 probe=5.679
+pass=1 arm=psearch band=common_k100 rows=100, median_last5=2.467 raw=[8.180 2.560 2.483 2.505 2.446 2.467 2.446 2.468 ] reps=8 probe=8.364
+pass=1 arm=psearch band=common_k1000 rows=1000, median_last5=7.564 raw=[19.136 8.164 7.768 7.572 7.564 7.610 7.556 7.559 ] reps=8 probe=19.907
+pass=1 arm=psearch band=or2_k10 rows=10, median_last5=1.805 raw=[6.543 1.930 1.834 1.805 1.818 1.792 1.802 1.808 ] reps=8 probe=5.982
+pass=1 arm=psearch band=or4_k10 rows=10, median_last5=10.560 raw=[15.161 11.135 10.895 10.877 10.766 10.533 10.560 10.509 ] reps=8 probe=15.039
+pass=1 arm=psearch band=and_k10 rows=10, median_last5=1.651 raw=[6.362 1.699 1.686 1.652 1.651 1.617 1.646 1.654 ] reps=8 probe=6.725
+pass=1 arm=psearch band=and_us_k10 rows=10, median_last5=8.834 raw=[11.553 8.900 8.846 8.629 9.591 8.875 8.834 8.807 ] reps=8 probe=11.926
+pass=1 arm=psearch band=and_ww_k10 rows=10, median_last5=2.915 raw=[8.000 3.089 2.960 2.971 2.907 2.909 2.931 2.915 ] reps=8 probe=7.962
+pass=1 arm=psearch band=not_k10 rows=10, median_last5=1.616 raw=[5.827 1.673 1.622 1.616 1.627 1.592 1.677 1.597 ] reps=8 probe=6.417
+pass=1 arm=psearch band=phrase_us_k10 rows=10, median_last5=8.936 raw=[12.070 9.593 9.128 8.935 9.281 8.782 8.936 9.002 ] reps=8 probe=12.206
+pass=1 arm=psearch band=phrase_ww_k10 rows=10, median_last5=8.993 raw=[11.884 9.242 9.009 8.899 8.985 8.993 9.686 9.706 ] reps=8 probe=11.741
+pass=1 arm=psearch band=count_common rows=735955, median_last5=0.952 raw=[4.046 1.024 0.963 0.952 0.961 0.955 0.937 0.931 ] reps=8 probe=4.374
+pass=1 arm=psearch_pn band=rare_k10 rows=10, median_last5=1.037 raw=[5.522 1.142 1.071 1.081 1.033 1.012 1.055 1.037 ] reps=8 probe=6.412
+pass=1 arm=psearch_pn band=mid_k10 rows=10, median_last5=1.056 raw=[5.516 1.166 1.082 1.074 1.056 1.034 1.027 1.060 ] reps=8 probe=4.861
+pass=1 arm=psearch_pn band=common_k10 rows=10, median_last5=1.183 raw=[5.510 1.299 1.183 1.185 1.183 1.161 1.211 1.180 ] reps=8 probe=5.034
+pass=1 arm=psearch_pn band=common_k100 rows=100, median_last5=1.989 raw=[8.114 2.172 2.000 2.024 1.964 1.989 1.971 1.999 ] reps=8 probe=7.339
+pass=1 arm=psearch_pn band=common_k1000 rows=1000, median_last5=5.854 raw=[17.378 6.223 5.948 5.886 5.838 5.867 5.831 5.854 ] reps=8 probe=18.383
+pass=1 arm=psearch_pn band=or2_k10 rows=10, median_last5=1.603 raw=[5.795 1.667 1.647 1.603 1.617 1.651 1.601 1.586 ] reps=8 probe=5.545
+pass=1 arm=psearch_pn band=or4_k10 rows=10, median_last5=10.265 raw=[13.713 9.337 10.318 10.424 9.934 9.253 10.265 10.403 ] reps=8 probe=13.726
+pass=1 arm=psearch_pn band=and_k10 rows=10, median_last5=1.370 raw=[5.482 1.440 1.409 1.356 1.365 1.370 1.375 1.408 ] reps=8 probe=5.571
+pass=1 arm=psearch_pn band=and_us_k10 rows=10, median_last5=9.156 raw=[11.863 9.870 9.691 9.373 8.349 8.876 9.343 9.156 ] reps=8 probe=12.144
+pass=1 arm=psearch_pn band=and_ww_k10 rows=10, median_last5=2.251 raw=[7.103 2.370 2.318 2.281 2.244 2.266 2.240 2.251 ] reps=8 probe=7.079
+pass=1 arm=psearch_pn band=not_k10 rows=10, median_last5=1.533 raw=[5.783 1.580 1.513 1.543 1.533 1.535 1.519 1.521 ] reps=8 probe=5.614
+pass=1 arm=psearch_pn band=phrase_us_k10 rows=10, median_last5=9.349 raw=[10.705 9.156 10.183 9.434 9.154 9.349 9.893 9.106 ] reps=8 probe=11.644
+pass=1 arm=psearch_pn band=phrase_ww_k10 rows=10, median_last5=9.260 raw=[12.212 8.799 9.039 9.414 9.921 8.794 8.551 9.260 ] reps=8 probe=12.271
+pass=1 arm=psearch_pn band=count_common rows=735955, median_last5=0.964 raw=[4.113 1.040 0.979 0.992 0.964 0.946 0.969 0.950 ] reps=8 probe=4.215
+pass=1 arm=vchord band=rare_k10 rows=10, median_last5=9.217 raw=[30.674 15.096 9.639 9.434 9.217 9.246 9.052 9.085 ] reps=8 probe=81.114
+pass=1 arm=vchord band=mid_k10 rows=10, median_last5=17.190 raw=[45.362 25.686 17.848 17.325 17.190 17.122 17.197 17.049 ] reps=8 probe=120.971
+pass=1 arm=vchord band=common_k10 rows=10, median_last5=55.100 raw=[97.903 72.349 60.799 55.953 55.100 55.151 54.607 54.341 ] reps=8 probe=258.230
+pass=1 arm=vchord band=common_k100 rows=100, median_last5=58.234 raw=[85.746 61.150 59.532 58.654 58.312 58.234 58.175 57.827 ] reps=8 probe=92.888
+pass=1 arm=vchord band=common_k1000 rows=100, median_last5=56.561 raw=[90.360 60.335 58.041 57.051 56.713 56.447 56.561 56.156 ] reps=8 probe=85.866
+pass=1 arm=vchord band=or2_k10 rows=10, median_last5=5.700 raw=[21.353 6.605 6.010 5.862 5.729 5.700 5.698 5.688 ] reps=8 probe=22.518
+pass=1 arm=vchord band=or4_k10 rows=10, median_last5=31.984 raw=[63.712 38.825 33.061 32.125 31.984 31.885 32.004 31.813 ] reps=8 probe=135.505
+pass=1 arm=gin band=rare_k10 rows=10, median_last5=51.951 raw=[90.636 55.662 54.261 53.392 52.743 51.951 51.346 51.011 ] reps=8 probe=183.538
+pass=1 arm=gin band=mid_k10 rows=10, median_last5=141.408 raw=[211.580 141.920 141.394 141.408 141.175 141.361 143.834 147.930 ] reps=8 probe=390.964
+pass=1 arm=gin band=common_k10 rows=10, median_last5=2355.460 raw=[2076.186 2202.068 2220.698 2257.813 2494.507 2391.501 2355.460 2248.717 ] reps=8 probe=4014.980
+pass=1 arm=gin band=common_k100 rows=100, median_last5=2140.333 raw=[2092.764 2062.005 2044.178 2140.191 2218.237 2492.559 2140.333 2089.155 ] reps=8 probe=2121.961
+pass=1 arm=gin band=common_k1000 rows=1000, median_last5=3198.588 raw=[2420.725 2772.457 2763.109 3167.042 3340.084 3331.167 3198.588 3077.075 ] reps=8 probe=2282.510
+pass=1 arm=gin band=or2_k10 rows=10, median_last5=168.265 raw=[248.874 166.375 165.395 164.927 165.518 168.265 173.139 177.673 ] reps=8 probe=278.860
+pass=1 arm=gin band=or4_k10 rows=10, median_last5=1783.606 raw=[1711.893 1748.139 1852.678 1772.567 1745.008 1783.606 1797.724 1830.353 ] reps=8 probe=1968.989
+pass=1 arm=gin band=and_k10 rows=10, median_last5=19.110 raw=[49.848 25.232 22.589 20.416 19.506 19.110 18.941 18.711 ] reps=8 probe=46.311
+pass=1 arm=gin band=and_us_k10 rows=10, median_last5=2627.324 raw=[2905.076 2794.058 2536.803 2755.674 2627.324 2499.882 2748.762 2318.814 ] reps=8 probe=2987.772
+pass=1 arm=gin band=and_ww_k10 rows=10, median_last5=1175.917 raw=[1525.932 1169.753 1189.740 1110.715 1160.018 1179.787 1175.917 1186.790 ] reps=8 probe=1725.872
+pass=1 arm=gin band=not_k10 rows=10, median_last5=130.172 raw=[204.287 130.922 130.806 130.600 130.172 130.015 129.720 136.366 ] reps=8 probe=181.629
+pass=1 arm=gin band=phrase_us_k10 rows=10, median_last5=3293.709 raw=[3565.405 3423.595 3862.299 3293.709 3703.221 4149.687 3242.793 3255.849 ] reps=8 probe=3572.568
+pass=1 arm=gin band=phrase_ww_k10 rows=10, median_last5=1644.821 raw=[2009.711 1723.353 1639.289 1644.821 1690.073 1684.916 1631.313 1641.251 ] reps=8 probe=1784.021
+pass=1 arm=gin band=count_common rows=734896, median_last5=551.880 raw=[503.613 437.024 469.107 551.880 556.431 457.509 564.598 459.179 ] reps=8 probe=484.163
+pass=1 arm=fts_aa band=rare_k10 rows=10, median_last5=0.225 raw=[19.625 0.502 0.248 0.241 0.225 0.223 0.221 0.239 ] reps=8 probe=44.951
+pass=1 arm=fts_aa band=mid_k10 rows=10, median_last5=0.254 raw=[15.928 0.399 0.272 0.272 0.254 0.250 0.250 0.263 ] reps=8 probe=16.676
+pass=1 arm=fts_aa band=common_k10 rows=10, median_last5=0.378 raw=[22.943 0.585 0.432 0.391 0.422 0.365 0.378 0.361 ] reps=8 probe=23.619
+pass=1 arm=fts_aa band=common_k100 rows=100, median_last5=0.809 raw=[60.208 1.041 0.837 0.820 0.813 0.806 0.809 0.793 ] reps=8 probe=58.629
+pass=1 arm=fts_aa band=common_k1000 rows=1000, median_last5=13.423 raw=[645.827 13.873 13.438 13.358 13.352 13.428 13.432 13.423 ] reps=8 probe=648.709
+pass=1 arm=fts_aa band=or2_k10 rows=10, median_last5=1.483 raw=[32.407 1.670 1.512 1.493 1.483 1.490 1.474 1.476 ] reps=8 probe=33.036
+pass=1 arm=fts_aa band=or4_k10 rows=10, median_last5=15.743 raw=[27.961 15.864 15.717 15.712 15.743 15.822 15.805 15.589 ] reps=8 probe=26.676
+pass=1 arm=fts_aa band=and_k10 rows=10, median_last5=0.672 raw=[31.000 0.929 0.710 0.692 0.672 0.676 0.671 0.659 ] reps=8 probe=30.412
+pass=1 arm=fts_aa band=and_us_k10 rows=10, median_last5=2.146 raw=[40.251 2.389 2.175 2.151 2.151 2.139 2.144 2.146 ] reps=8 probe=39.581
+pass=1 arm=fts_aa band=and_ww_k10 rows=10, median_last5=6.250 raw=[30.952 6.426 6.259 6.262 6.248 6.232 6.258 6.250 ] reps=8 probe=30.817
+pass=1 arm=fts_aa band=not_k10 rows=10, median_last5=1.958 raw=[11.020 2.050 1.990 1.971 1.958 1.953 1.958 1.948 ] reps=8 probe=10.108
+pass=1 arm=fts_aa band=phrase_us_k10 rows=10, median_last5=2.545 raw=[44.509 2.987 2.666 2.551 2.557 2.545 2.532 2.537 ] reps=8 probe=70.142
+pass=1 arm=fts_aa band=phrase_ww_k10 rows=10, median_last5=6.540 raw=[33.745 6.949 6.562 6.551 6.550 6.540 6.529 6.540 ] reps=8 probe=34.890
+pass=1 arm=fts_aa band=count_common rows=734896, median_last5=0.175 raw=[6.195 0.243 0.193 0.189 0.178 0.175 0.174 0.174 ] reps=8 probe=5.658
+pass=2 arm=pgts_rel band=rare_k10 rows=10, median_last5=0.925 raw=[4.341 0.985 0.941 0.929 0.925 0.921 0.923 0.960 ] reps=8 probe=4.706
+pass=2 arm=pgts_rel band=mid_k10 rows=10, median_last5=1.129 raw=[4.384 1.180 1.142 1.136 1.132 1.129 1.127 1.126 ] reps=8 probe=4.461
+pass=2 arm=pgts_rel band=common_k10 rows=10, median_last5=9.889 raw=[13.889 9.995 9.910 9.889 9.886 9.935 9.843 9.932 ] reps=8 probe=13.897
+pass=2 arm=pgts_rel band=common_k100 rows=100, median_last5=12.127 raw=[17.300 11.968 12.026 12.131 12.156 12.127 12.015 12.034 ] reps=8 probe=16.077
+pass=2 arm=pgts_rel band=common_k1000 rows=1000, median_last5=14.044 raw=[22.012 14.241 14.070 14.065 14.021 14.060 13.957 14.044 ] reps=8 probe=26.004
+pass=2 arm=pgts_rel band=or2_k10 rows=10, median_last5=1.293 raw=[4.284 1.342 1.306 1.293 1.299 1.302 1.292 1.285 ] reps=8 probe=4.849
+pass=2 arm=pgts_rel band=or4_k10 rows=10, median_last5=15.773 raw=[20.413 15.861 15.911 15.773 15.816 15.661 15.798 15.698 ] reps=8 probe=21.020
+pass=2 arm=pgts_rel band=and_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=2 arm=pgts_rel band=and_us_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=2 arm=pgts_rel band=and_ww_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=2 arm=pgts_rel band=not_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=2 arm=pgts_rel band=phrase_us_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=2 arm=pgts_rel band=phrase_ww_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=2 arm=pgts_rel band=and_k10_cte rows=10, median_last5=4965.698 raw=[4968.040 5004.667 4955.706 4965.698 4947.274 4967.171 5009.426 4953.783 ] reps=8 probe=5010.458
+pass=2 arm=pgts_rel band=and_us_k10_cte rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=2 arm=pgts_rel band=and_ww_k10_cte rows=10, median_last5=189472.178 raw=[189472.178] reps=1 probe=189472.178
+pass=2 arm=pgts_rel band=not_k10_cte rows=10, median_last5=19238.359 raw=[19218.871 19238.359 19302.664 ] reps=3 probe=19282.786
+pass=2 arm=pgts_rel band=phrase_us_k10_cte rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=2 arm=pgts_rel band=phrase_ww_k10_cte rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=2 arm=pgts_rel band=count_common rows=734896, median_last5=290821.599 raw=[290821.599] reps=1 probe=290821.599
+pass=2 arm=pgts_main band=rare_k10 rows=10, median_last5=0.907 raw=[3.489 1.000 0.935 0.915 0.907 0.906 0.904 0.907 ] reps=8 probe=4.973
+pass=2 arm=pgts_main band=mid_k10 rows=10, median_last5=1.129 raw=[4.539 1.190 1.143 1.128 1.129 1.198 1.135 1.119 ] reps=8 probe=3.875
+pass=2 arm=pgts_main band=common_k10 rows=10, median_last5=9.973 raw=[14.725 9.950 9.895 9.973 10.061 10.049 9.828 9.902 ] reps=8 probe=14.153
+pass=2 arm=pgts_main band=common_k100 rows=100, median_last5=12.201 raw=[17.029 12.335 12.271 12.229 12.257 12.201 12.091 12.137 ] reps=8 probe=16.202
+pass=2 arm=pgts_main band=common_k1000 rows=1000, median_last5=14.216 raw=[24.869 14.974 14.377 14.284 14.216 14.174 14.260 14.190 ] reps=8 probe=25.336
+pass=2 arm=pgts_main band=or2_k10 rows=10, median_last5=1.294 raw=[4.888 1.351 1.321 1.301 1.297 1.294 1.291 1.283 ] reps=8 probe=4.203
+pass=2 arm=pgts_main band=or4_k10 rows=10, median_last5=15.762 raw=[20.423 15.982 15.802 15.762 15.688 15.837 15.939 15.693 ] reps=8 probe=20.169
+pass=2 arm=pgts_main band=and_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=2 arm=pgts_main band=and_us_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=2 arm=pgts_main band=and_ww_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=2 arm=pgts_main band=not_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=2 arm=pgts_main band=phrase_us_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=2 arm=pgts_main band=phrase_ww_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=2 arm=pgts_main band=and_k10_cte rows=10, median_last5=4980.988 raw=[4979.893 5029.991 4973.768 4993.041 4955.989 4980.988 5021.083 4966.802 ] reps=8 probe=5005.985
+pass=2 arm=pgts_main band=and_us_k10_cte rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=2 arm=pgts_main band=and_ww_k10_cte rows=10, median_last5=189532.698 raw=[189532.698] reps=1 probe=189532.698
+pass=2 arm=pgts_main band=not_k10_cte rows=10, median_last5=19473.504 raw=[19246.978 19473.504 19567.183 ] reps=3 probe=19260.362
+pass=2 arm=pgts_main band=phrase_us_k10_cte rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=2 arm=pgts_main band=phrase_ww_k10_cte rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=2 arm=pgts_main band=count_common rows=734896, median_last5=291140.348 raw=[291140.348] reps=1 probe=291140.348
+pass=2 arm=psearch band=rare_k10 rows=10, median_last5=1.169 raw=[6.541 1.400 1.198 1.175 1.160 1.148 1.202 1.169 ] reps=8 probe=6.210
+pass=2 arm=psearch band=mid_k10 rows=10, median_last5=1.173 raw=[5.723 1.311 1.223 1.168 1.177 1.154 1.173 1.185 ] reps=8 probe=6.207
+pass=2 arm=psearch band=common_k10 rows=10, median_last5=1.263 raw=[6.029 1.363 1.286 1.263 1.289 1.284 1.249 1.255 ] reps=8 probe=5.200
+pass=2 arm=psearch band=common_k100 rows=100, median_last5=2.446 raw=[8.041 2.595 2.455 2.471 2.440 2.411 2.446 2.449 ] reps=8 probe=7.803
+pass=2 arm=psearch band=common_k1000 rows=1000, median_last5=7.561 raw=[19.012 8.378 7.774 7.606 7.555 7.558 7.561 7.572 ] reps=8 probe=19.984
+pass=2 arm=psearch band=or2_k10 rows=10, median_last5=1.826 raw=[6.658 1.946 1.837 1.826 1.820 1.861 1.807 1.840 ] reps=8 probe=7.245
+pass=2 arm=psearch band=or4_k10 rows=10, median_last5=10.708 raw=[15.538 12.628 10.681 10.708 10.559 10.377 10.855 10.784 ] reps=8 probe=14.424
+pass=2 arm=psearch band=and_k10 rows=10, median_last5=1.570 raw=[6.942 1.672 1.602 1.584 1.552 1.570 1.580 1.545 ] reps=8 probe=6.471
+pass=2 arm=psearch band=and_us_k10 rows=10, median_last5=9.526 raw=[11.088 8.975 9.071 9.287 9.618 9.272 9.716 9.526 ] reps=8 probe=11.505
+pass=2 arm=psearch band=and_ww_k10 rows=10, median_last5=2.929 raw=[8.590 3.086 2.903 2.972 2.929 2.901 2.943 2.927 ] reps=8 probe=8.503
+pass=2 arm=psearch band=not_k10 rows=10, median_last5=1.630 raw=[6.335 1.656 1.622 1.632 1.595 1.630 1.648 1.589 ] reps=8 probe=6.473
+pass=2 arm=psearch band=phrase_us_k10 rows=10, median_last5=8.868 raw=[12.254 9.241 8.720 8.849 8.868 9.208 9.087 8.817 ] reps=8 probe=12.452
+pass=2 arm=psearch band=phrase_ww_k10 rows=10, median_last5=8.847 raw=[11.931 9.271 9.470 9.463 9.325 8.712 8.817 8.847 ] reps=8 probe=10.738
+pass=2 arm=psearch band=count_common rows=735955, median_last5=0.965 raw=[4.211 1.048 0.981 0.965 0.958 0.977 0.967 0.951 ] reps=8 probe=3.942
+pass=2 arm=psearch_pn band=rare_k10 rows=10, median_last5=1.044 raw=[4.467 1.112 1.071 1.044 1.071 1.021 1.021 1.049 ] reps=8 probe=6.269
+pass=2 arm=psearch_pn band=mid_k10 rows=10, median_last5=1.061 raw=[5.652 1.180 1.123 1.063 1.052 1.084 1.055 1.061 ] reps=8 probe=4.517
+pass=2 arm=psearch_pn band=common_k10 rows=10, median_last5=1.181 raw=[4.971 1.280 1.225 1.194 1.208 1.179 1.179 1.181 ] reps=8 probe=5.332
+pass=2 arm=psearch_pn band=common_k100 rows=100, median_last5=2.010 raw=[7.864 2.198 2.037 2.033 2.010 1.993 1.991 2.024 ] reps=8 probe=8.101
+pass=2 arm=psearch_pn band=common_k1000 rows=1000, median_last5=5.879 raw=[17.178 6.423 6.018 5.925 5.881 5.879 5.833 5.840 ] reps=8 probe=17.855
+pass=2 arm=psearch_pn band=or2_k10 rows=10, median_last5=1.623 raw=[6.059 1.679 1.641 1.617 1.623 1.626 1.629 1.612 ] reps=8 probe=5.572
+pass=2 arm=psearch_pn band=or4_k10 rows=10, median_last5=10.282 raw=[13.895 10.340 9.833 10.283 10.282 10.235 9.832 10.394 ] reps=8 probe=13.577
+pass=2 arm=psearch_pn band=and_k10 rows=10, median_last5=1.375 raw=[5.947 1.439 1.412 1.357 1.395 1.387 1.371 1.375 ] reps=8 probe=5.780
+pass=2 arm=psearch_pn band=and_us_k10 rows=10, median_last5=8.873 raw=[11.772 9.220 9.063 9.318 7.877 8.873 8.705 9.162 ] reps=8 probe=12.702
+pass=2 arm=psearch_pn band=and_ww_k10 rows=10, median_last5=2.298 raw=[7.109 2.405 2.288 2.309 2.303 2.298 2.293 2.273 ] reps=8 probe=7.396
+pass=2 arm=psearch_pn band=not_k10 rows=10, median_last5=1.537 raw=[5.706 1.593 1.605 1.532 1.553 1.530 1.565 1.537 ] reps=8 probe=6.391
+pass=2 arm=psearch_pn band=phrase_us_k10 rows=10, median_last5=9.480 raw=[11.304 9.226 9.523 9.480 10.096 9.059 8.828 9.579 ] reps=8 probe=12.755
+pass=2 arm=psearch_pn band=phrase_ww_k10 rows=10, median_last5=9.572 raw=[11.024 9.627 9.199 9.439 9.572 9.585 9.749 9.180 ] reps=8 probe=11.468
+pass=2 arm=psearch_pn band=count_common rows=735955, median_last5=0.963 raw=[4.478 1.049 0.986 0.964 0.960 0.949 0.966 0.963 ] reps=8 probe=4.198
+pass=2 arm=vchord band=rare_k10 rows=10, median_last5=8.514 raw=[27.711 13.165 9.099 8.672 8.548 8.514 8.511 8.488 ] reps=8 probe=87.883
+pass=2 arm=vchord band=mid_k10 rows=10, median_last5=16.403 raw=[41.480 22.095 17.183 16.769 16.530 16.403 16.228 16.186 ] reps=8 probe=126.945
+pass=2 arm=vchord band=common_k10 rows=10, median_last5=55.780 raw=[99.819 73.143 59.582 56.659 56.098 55.780 55.388 55.169 ] reps=8 probe=252.690
+pass=2 arm=vchord band=common_k100 rows=100, median_last5=59.233 raw=[88.938 63.293 61.004 59.586 59.233 59.285 58.917 58.752 ] reps=8 probe=93.822
+pass=2 arm=vchord band=common_k1000 rows=100, median_last5=57.403 raw=[84.957 63.409 59.995 58.264 57.699 57.403 57.269 56.987 ] reps=8 probe=89.801
+pass=2 arm=vchord band=or2_k10 rows=10, median_last5=5.681 raw=[21.472 6.510 5.873 5.775 5.681 5.704 5.649 5.633 ] reps=8 probe=23.007
+pass=2 arm=vchord band=or4_k10 rows=10, median_last5=31.850 raw=[63.788 38.203 32.713 32.019 31.854 31.789 31.850 31.734 ] reps=8 probe=136.210
+pass=2 arm=gin band=rare_k10 rows=10, median_last5=55.571 raw=[92.747 59.506 57.689 56.592 56.198 55.571 54.792 54.536 ] reps=8 probe=182.567
+pass=2 arm=gin band=mid_k10 rows=10, median_last5=138.449 raw=[209.333 138.951 138.382 137.801 138.449 138.027 139.857 145.199 ] reps=8 probe=394.681
+pass=2 arm=gin band=common_k10 rows=10, median_last5=2315.350 raw=[2085.063 2202.378 2180.791 2277.637 2520.304 2399.151 2315.350 2256.828 ] reps=8 probe=4129.178
+pass=2 arm=gin band=common_k100 rows=100, median_last5=3158.812 raw=[2257.641 2797.498 2828.195 3270.542 3381.724 2798.122 3158.812 3080.278 ] reps=8 probe=2122.341
+pass=2 arm=gin band=common_k1000 rows=1000, median_last5=2703.991 raw=[2537.875 2510.135 2482.389 2510.126 2684.653 2703.991 2735.467 2745.604 ] reps=8 probe=2162.223
+pass=2 arm=gin band=or2_k10 rows=10, median_last5=190.099 raw=[269.829 183.774 183.628 183.456 184.829 194.774 190.099 191.335 ] reps=8 probe=240.421
+pass=2 arm=gin band=or4_k10 rows=10, median_last5=1710.705 raw=[1694.822 1595.589 1774.908 1710.705 1577.768 1667.992 1737.842 1735.601 ] reps=8 probe=2051.635
+pass=2 arm=gin band=and_k10 rows=10, median_last5=19.363 raw=[46.869 25.583 23.604 21.261 19.926 19.363 19.282 19.077 ] reps=8 probe=53.709
+pass=2 arm=gin band=and_us_k10 rows=10, median_last5=2729.278 raw=[2903.463 2878.922 2565.115 2910.382 2665.687 2441.178 2729.278 2994.373 ] reps=8 probe=2933.188
+pass=2 arm=gin band=and_ww_k10 rows=10, median_last5=1121.112 raw=[1497.076 1149.092 1155.227 1088.005 1109.426 1121.112 1126.965 1136.968 ] reps=8 probe=1724.234
+pass=2 arm=gin band=not_k10 rows=10, median_last5=132.575 raw=[206.143 133.284 133.476 132.817 132.027 132.575 132.492 138.674 ] reps=8 probe=215.174
+pass=2 arm=gin band=phrase_us_k10 rows=10, median_last5=3471.167 raw=[3802.028 3605.499 3697.849 3486.009 3471.167 3432.567 3455.489 3501.515 ] reps=8 probe=3500.961
+pass=2 arm=gin band=phrase_ww_k10 rows=10, median_last5=1495.428 raw=[1856.824 1546.795 1451.571 1480.272 1512.000 1516.346 1480.357 1495.428 ] reps=8 probe=2001.219
+pass=2 arm=gin band=count_common rows=734896, median_last5=480.031 raw=[657.059 541.253 518.498 551.464 476.783 480.031 455.689 593.122 ] reps=8 probe=525.693
+pass=2 arm=fts_aa band=rare_k10 rows=10, median_last5=0.227 raw=[20.297 0.663 0.357 0.232 0.227 0.231 0.226 0.223 ] reps=8 probe=48.644
+pass=2 arm=fts_aa band=mid_k10 rows=10, median_last5=0.255 raw=[14.241 0.471 0.271 0.265 0.255 0.250 0.249 0.256 ] reps=8 probe=15.168
+pass=2 arm=fts_aa band=common_k10 rows=10, median_last5=0.352 raw=[23.269 0.580 0.385 0.371 0.393 0.344 0.352 0.337 ] reps=8 probe=22.151
+pass=2 arm=fts_aa band=common_k100 rows=100, median_last5=0.821 raw=[59.940 1.004 0.852 0.834 0.829 0.821 0.820 0.804 ] reps=8 probe=61.180
+pass=2 arm=fts_aa band=common_k1000 rows=1000, median_last5=13.356 raw=[647.270 13.763 13.557 13.356 13.382 13.305 13.317 13.386 ] reps=8 probe=652.918
+pass=2 arm=fts_aa band=or2_k10 rows=10, median_last5=1.307 raw=[30.869 1.493 1.342 1.317 1.309 1.307 1.303 1.299 ] reps=8 probe=31.675
+pass=2 arm=fts_aa band=or4_k10 rows=10, median_last5=15.628 raw=[27.514 15.732 15.742 15.683 15.572 15.690 15.628 15.548 ] reps=8 probe=26.213
+pass=2 arm=fts_aa band=and_k10 rows=10, median_last5=0.684 raw=[31.670 0.927 0.715 0.698 0.690 0.678 0.684 0.681 ] reps=8 probe=30.562
+pass=2 arm=fts_aa band=and_us_k10 rows=10, median_last5=2.173 raw=[39.773 2.429 2.211 2.191 2.181 2.173 2.167 2.171 ] reps=8 probe=38.788
+pass=2 arm=fts_aa band=and_ww_k10 rows=10, median_last5=6.245 raw=[30.899 6.464 6.261 6.266 6.252 6.245 6.234 6.241 ] reps=8 probe=30.132
+pass=2 arm=fts_aa band=not_k10 rows=10, median_last5=1.812 raw=[11.241 1.917 1.914 1.856 1.812 1.807 1.822 1.809 ] reps=8 probe=10.215
+pass=2 arm=fts_aa band=phrase_us_k10 rows=10, median_last5=2.603 raw=[44.410 2.938 2.662 2.613 2.603 2.613 2.563 2.586 ] reps=8 probe=70.814
+pass=2 arm=fts_aa band=phrase_ww_k10 rows=10, median_last5=6.544 raw=[33.803 6.880 6.558 6.553 6.555 6.528 6.544 6.530 ] reps=8 probe=34.899
+pass=2 arm=fts_aa band=count_common rows=734896, median_last5=0.176 raw=[5.670 0.252 0.203 0.186 0.179 0.176 0.176 0.175 ] reps=8 probe=4.720
+pass=2 arm=fts band=rare_k10 rows=10, median_last5=0.231 raw=[18.957 0.303 0.262 0.236 0.231 0.228 0.242 0.230 ] reps=8 probe=18.464
+pass=2 arm=fts band=mid_k10 rows=10, median_last5=0.257 raw=[16.463 0.331 0.285 0.263 0.257 0.254 0.266 0.254 ] reps=8 probe=14.989
+pass=2 arm=fts band=common_k10 rows=10, median_last5=0.353 raw=[22.876 0.440 0.393 0.366 0.353 0.363 0.345 0.340 ] reps=8 probe=21.659
+pass=2 arm=fts band=common_k100 rows=100, median_last5=0.817 raw=[60.506 1.014 0.855 0.832 0.817 0.816 0.817 0.822 ] reps=8 probe=58.444
+pass=2 arm=fts band=common_k1000 rows=1000, median_last5=13.458 raw=[647.765 13.774 13.496 13.458 13.460 13.445 13.441 13.535 ] reps=8 probe=648.443
+pass=2 arm=fts band=or2_k10 rows=10, median_last5=1.372 raw=[30.986 1.421 1.387 1.381 1.377 1.372 1.333 1.326 ] reps=8 probe=32.985
+pass=2 arm=fts band=or4_k10 rows=10, median_last5=15.734 raw=[28.423 15.752 15.812 15.784 15.766 15.716 15.734 15.599 ] reps=8 probe=26.486
+pass=2 arm=fts band=and_k10 rows=10, median_last5=0.692 raw=[32.213 0.883 0.728 0.700 0.696 0.692 0.688 0.678 ] reps=8 probe=30.799
+pass=2 arm=fts band=and_us_k10 rows=10, median_last5=2.224 raw=[40.788 2.432 2.253 2.232 2.224 2.213 2.207 2.231 ] reps=8 probe=40.101
+pass=2 arm=fts band=and_ww_k10 rows=10, median_last5=6.291 raw=[31.497 6.457 6.306 6.307 6.291 6.266 6.285 6.295 ] reps=8 probe=30.588
+pass=2 arm=fts band=not_k10 rows=10, median_last5=1.817 raw=[12.169 1.903 1.835 1.830 1.818 1.816 1.817 1.813 ] reps=8 probe=11.409
+pass=2 arm=fts band=phrase_us_k10 rows=10, median_last5=2.655 raw=[44.818 2.969 2.705 2.665 2.655 2.647 2.634 2.655 ] reps=8 probe=45.090
+pass=2 arm=fts band=phrase_ww_k10 rows=10, median_last5=6.612 raw=[34.069 6.923 6.628 6.625 6.622 6.612 6.605 6.603 ] reps=8 probe=33.924
+pass=2 arm=fts band=count_common rows=734896, median_last5=0.180 raw=[6.062 0.238 0.206 0.187 0.180 0.178 0.178 0.184 ] reps=8 probe=5.508
+pass=3 arm=pgts_main band=rare_k10 rows=10, median_last5=0.919 raw=[4.387 0.987 0.941 0.926 0.919 0.921 0.916 0.917 ] reps=8 probe=4.748
+pass=3 arm=pgts_main band=mid_k10 rows=10, median_last5=1.117 raw=[4.438 1.168 1.130 1.122 1.118 1.117 1.112 1.115 ] reps=8 probe=3.886
+pass=3 arm=pgts_main band=common_k10 rows=10, median_last5=10.085 raw=[14.381 9.994 9.948 10.016 10.117 10.135 10.085 9.885 ] reps=8 probe=14.196
+pass=3 arm=pgts_main band=common_k100 rows=100, median_last5=12.395 raw=[15.610 12.377 12.441 12.504 12.335 12.354 12.459 12.395 ] reps=8 probe=15.964
+pass=3 arm=pgts_main band=common_k1000 rows=1000, median_last5=14.224 raw=[25.509 14.712 14.268 14.266 14.229 14.224 14.147 14.133 ] reps=8 probe=25.838
+pass=3 arm=pgts_main band=or2_k10 rows=10, median_last5=1.289 raw=[4.335 1.345 1.320 1.304 1.298 1.289 1.284 1.284 ] reps=8 probe=3.949
+pass=3 arm=pgts_main band=or4_k10 rows=10, median_last5=15.827 raw=[19.430 15.889 15.862 15.910 15.827 15.714 15.709 15.838 ] reps=8 probe=20.494
+pass=3 arm=pgts_main band=and_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=3 arm=pgts_main band=and_us_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=3 arm=pgts_main band=and_ww_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=3 arm=pgts_main band=not_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=3 arm=pgts_main band=phrase_us_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=3 arm=pgts_main band=phrase_ww_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=3 arm=pgts_main band=and_k10_cte rows=10, median_last5=4955.617 raw=[4979.924 4992.824 4973.702 4978.799 4952.522 4955.617 4955.733 4949.553 ] reps=8 probe=5015.750
+pass=3 arm=pgts_main band=and_us_k10_cte rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=3 arm=pgts_main band=and_ww_k10_cte rows=10, median_last5=189844.743 raw=[189844.743] reps=1 probe=189844.743
+pass=3 arm=pgts_main band=not_k10_cte rows=10, median_last5=19331.420 raw=[19249.831 19331.420 19367.255 ] reps=3 probe=19296.127
+pass=3 arm=pgts_main band=phrase_us_k10_cte rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=3 arm=pgts_main band=phrase_ww_k10_cte rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=3 arm=pgts_main band=count_common rows=734896, median_last5=291022.130 raw=[291022.130] reps=1 probe=291022.130
+pass=3 arm=psearch band=rare_k10 rows=10, median_last5=1.181 raw=[6.491 1.376 1.248 1.192 1.181 1.200 1.169 1.177 ] reps=8 probe=6.379
+pass=3 arm=psearch band=mid_k10 rows=10, median_last5=1.167 raw=[5.572 1.330 1.179 1.237 1.163 1.167 1.179 1.158 ] reps=8 probe=6.107
+pass=3 arm=psearch band=common_k10 rows=10, median_last5=1.250 raw=[5.370 1.356 1.264 1.250 1.287 1.244 1.232 1.255 ] reps=8 probe=6.024
+pass=3 arm=psearch band=common_k100 rows=100, median_last5=2.449 raw=[8.425 2.651 2.481 2.473 2.449 2.448 2.435 2.487 ] reps=8 probe=8.606
+pass=3 arm=psearch band=common_k1000 rows=1000, median_last5=7.627 raw=[19.458 8.158 7.783 7.669 7.644 7.594 7.627 7.612 ] reps=8 probe=20.199
+pass=3 arm=psearch band=or2_k10 rows=10, median_last5=1.832 raw=[7.455 1.941 1.835 1.847 1.835 1.825 1.792 1.832 ] reps=8 probe=6.125
+pass=3 arm=psearch band=or4_k10 rows=10, median_last5=10.577 raw=[15.013 11.075 10.911 10.577 10.862 10.399 10.853 10.485 ] reps=8 probe=14.456
+pass=3 arm=psearch band=and_k10 rows=10, median_last5=1.639 raw=[7.117 1.687 1.652 1.639 1.592 1.639 1.589 1.641 ] reps=8 probe=5.987
+pass=3 arm=psearch band=and_us_k10 rows=10, median_last5=9.337 raw=[12.612 10.179 9.871 9.241 7.969 9.516 9.337 9.388 ] reps=8 probe=12.515
+pass=3 arm=psearch band=and_ww_k10 rows=10, median_last5=2.954 raw=[8.443 3.099 3.157 2.938 2.976 2.954 2.968 2.947 ] reps=8 probe=8.520
+pass=3 arm=psearch band=not_k10 rows=10, median_last5=1.650 raw=[6.297 1.710 1.682 1.677 1.618 1.680 1.650 1.626 ] reps=8 probe=6.469
+pass=3 arm=psearch band=phrase_us_k10 rows=10, median_last5=9.217 raw=[12.428 9.533 8.930 9.213 9.032 9.683 9.217 9.622 ] reps=8 probe=12.112
+pass=3 arm=psearch band=phrase_ww_k10 rows=10, median_last5=9.197 raw=[12.401 8.980 9.191 9.547 9.308 9.197 9.005 9.046 ] reps=8 probe=12.323
+pass=3 arm=psearch band=count_common rows=735955, median_last5=0.965 raw=[4.427 1.033 0.975 0.965 0.986 0.960 0.966 0.965 ] reps=8 probe=4.177
+pass=3 arm=psearch_pn band=rare_k10 rows=10, median_last5=1.051 raw=[4.494 1.124 1.067 1.033 1.058 1.031 1.060 1.051 ] reps=8 probe=6.209
+pass=3 arm=psearch_pn band=mid_k10 rows=10, median_last5=1.042 raw=[6.147 1.176 1.072 1.042 1.055 1.080 1.027 1.039 ] reps=8 probe=4.511
+pass=3 arm=psearch_pn band=common_k10 rows=10, median_last5=1.175 raw=[5.430 1.305 1.223 1.227 1.173 1.168 1.207 1.175 ] reps=8 probe=5.422
+pass=3 arm=psearch_pn band=common_k100 rows=100, median_last5=1.999 raw=[7.521 2.156 2.028 1.985 2.011 1.978 1.999 2.004 ] reps=8 probe=8.470
+pass=3 arm=psearch_pn band=common_k1000 rows=1000, median_last5=5.813 raw=[17.011 6.331 5.954 5.861 5.838 5.782 5.796 5.813 ] reps=8 probe=18.153
+pass=3 arm=psearch_pn band=or2_k10 rows=10, median_last5=1.630 raw=[6.124 1.691 1.634 1.651 1.612 1.630 1.607 1.725 ] reps=8 probe=5.538
+pass=3 arm=psearch_pn band=or4_k10 rows=10, median_last5=10.091 raw=[14.336 9.645 10.428 10.367 9.595 10.091 9.689 10.203 ] reps=8 probe=14.001
+pass=3 arm=psearch_pn band=and_k10 rows=10, median_last5=1.365 raw=[5.943 1.455 1.371 1.365 1.377 1.341 1.398 1.347 ] reps=8 probe=5.348
+pass=3 arm=psearch_pn band=and_us_k10 rows=10, median_last5=9.376 raw=[12.506 9.121 9.421 9.823 9.208 8.857 9.503 9.376 ] reps=8 probe=12.828
+pass=3 arm=psearch_pn band=and_ww_k10 rows=10, median_last5=2.263 raw=[7.524 2.379 2.278 2.264 2.311 2.239 2.263 2.255 ] reps=8 probe=7.368
+pass=3 arm=psearch_pn band=not_k10 rows=10, median_last5=1.522 raw=[4.859 1.564 1.543 1.522 1.520 1.510 1.541 1.543 ] reps=8 probe=5.148
+pass=3 arm=psearch_pn band=phrase_us_k10 rows=10, median_last5=9.715 raw=[12.417 9.149 8.982 9.630 9.715 10.257 9.531 9.833 ] reps=8 probe=12.601
+pass=3 arm=psearch_pn band=phrase_ww_k10 rows=10, median_last5=9.112 raw=[12.739 9.866 10.242 9.523 9.805 9.095 8.891 9.112 ] reps=8 probe=12.622
+pass=3 arm=psearch_pn band=count_common rows=735955, median_last5=0.960 raw=[4.538 1.039 1.007 0.966 0.986 0.960 0.948 0.946 ] reps=8 probe=4.249
+pass=3 arm=vchord band=rare_k10 rows=10, median_last5=8.590 raw=[27.453 13.045 9.329 8.972 8.725 8.590 8.544 8.545 ] reps=8 probe=87.185
+pass=3 arm=vchord band=mid_k10 rows=10, median_last5=16.618 raw=[45.464 24.644 17.657 17.078 16.743 16.535 16.618 16.425 ] reps=8 probe=126.007
+pass=3 arm=vchord band=common_k10 rows=10, median_last5=55.322 raw=[97.833 73.111 60.495 56.658 55.832 55.322 55.075 54.876 ] reps=8 probe=255.417
+pass=3 arm=vchord band=common_k100 rows=100, median_last5=58.627 raw=[86.504 62.027 60.176 59.217 58.781 58.627 58.284 58.120 ] reps=8 probe=94.337
+pass=3 arm=vchord band=common_k1000 rows=100, median_last5=58.459 raw=[85.967 61.449 59.919 58.967 58.861 58.459 58.446 58.288 ] reps=8 probe=92.001
+pass=3 arm=vchord band=or2_k10 rows=10, median_last5=5.612 raw=[16.395 6.153 5.780 5.692 5.616 5.608 5.612 5.598 ] reps=8 probe=21.960
+pass=3 arm=vchord band=or4_k10 rows=10, median_last5=31.607 raw=[63.987 37.969 32.773 31.784 31.544 31.702 31.607 31.566 ] reps=8 probe=134.957
+pass=3 arm=gin band=rare_k10 rows=10, median_last5=55.530 raw=[94.071 59.417 57.981 56.537 56.103 55.530 54.536 54.037 ] reps=8 probe=184.394
+pass=3 arm=gin band=mid_k10 rows=10, median_last5=151.289 raw=[219.443 152.620 152.041 151.289 150.810 150.720 182.094 158.035 ] reps=8 probe=389.408
+pass=3 arm=gin band=common_k10 rows=10, median_last5=2333.220 raw=[2111.362 2193.385 2155.504 2212.774 2471.264 2357.001 2333.220 2249.131 ] reps=8 probe=3934.805
+pass=3 arm=gin band=common_k100 rows=100, median_last5=2350.660 raw=[2200.719 2245.284 2221.814 2293.183 2419.574 2398.368 2350.660 2329.885 ] reps=8 probe=2389.136
+pass=3 arm=gin band=common_k1000 rows=1000, median_last5=2133.232 raw=[2121.347 2073.701 2049.461 2123.969 2180.165 2134.902 2133.232 2091.306 ] reps=8 probe=2113.964
+pass=3 arm=gin band=or2_k10 rows=10, median_last5=203.921 raw=[271.180 195.964 196.135 195.098 197.852 203.921 218.624 231.571 ] reps=8 probe=273.079
+pass=3 arm=gin band=or4_k10 rows=10, median_last5=1803.511 raw=[1406.965 1570.824 1629.939 1656.593 1746.655 1803.511 1859.880 1884.179 ] reps=8 probe=1694.355
+pass=3 arm=gin band=and_k10 rows=10, median_last5=18.833 raw=[43.695 24.036 22.206 20.255 19.400 18.833 18.637 18.538 ] reps=8 probe=47.002
+pass=3 arm=gin band=and_us_k10 rows=10, median_last5=2653.767 raw=[2727.116 2622.650 2373.946 2658.890 2550.437 3267.232 2653.767 2624.890 ] reps=8 probe=3109.203
+pass=3 arm=gin band=and_ww_k10 rows=10, median_last5=1121.920 raw=[1417.042 1140.592 1150.063 1087.132 1104.343 1121.920 1133.878 1131.539 ] reps=8 probe=1525.458
+pass=3 arm=gin band=not_k10 rows=10, median_last5=112.966 raw=[186.874 113.998 113.061 113.519 112.831 113.121 112.564 112.966 ] reps=8 probe=214.338
+pass=3 arm=gin band=phrase_us_k10 rows=10, median_last5=3255.781 raw=[3565.681 3340.419 3554.969 3157.033 3359.194 3522.191 3167.609 3255.781 ] reps=8 probe=3834.162
+pass=3 arm=gin band=phrase_ww_k10 rows=10, median_last5=1451.828 raw=[1833.039 1511.481 1447.402 1451.828 1505.815 1517.326 1429.807 1420.789 ] reps=8 probe=2018.822
+pass=3 arm=gin band=count_common rows=734896, median_last5=600.104 raw=[508.448 547.170 551.881 562.385 600.104 560.122 638.745 663.992 ] reps=8 probe=624.886
+pass=3 arm=fts_aa band=rare_k10 rows=10, median_last5=0.224 raw=[19.170 0.510 0.362 0.232 0.224 0.230 0.224 0.221 ] reps=8 probe=44.935
+pass=3 arm=fts_aa band=mid_k10 rows=10, median_last5=0.251 raw=[14.397 0.328 0.272 0.259 0.262 0.251 0.249 0.251 ] reps=8 probe=16.480
+pass=3 arm=fts_aa band=common_k10 rows=10, median_last5=0.353 raw=[22.899 0.726 0.382 0.369 0.353 0.348 0.354 0.342 ] reps=8 probe=22.793
+pass=3 arm=fts_aa band=common_k100 rows=100, median_last5=0.793 raw=[59.041 0.987 0.836 0.814 0.802 0.792 0.793 0.792 ] reps=8 probe=58.618
+pass=3 arm=fts_aa band=common_k1000 rows=1000, median_last5=13.333 raw=[646.970 13.998 13.410 13.333 13.416 13.394 13.306 13.278 ] reps=8 probe=652.311
+pass=3 arm=fts_aa band=or2_k10 rows=10, median_last5=1.291 raw=[31.852 1.481 1.327 1.308 1.297 1.291 1.289 1.289 ] reps=8 probe=32.781
+pass=3 arm=fts_aa band=or4_k10 rows=10, median_last5=15.703 raw=[26.470 15.962 15.767 15.694 15.849 15.724 15.703 15.554 ] reps=8 probe=27.171
+pass=3 arm=fts_aa band=and_k10 rows=10, median_last5=0.660 raw=[30.607 0.846 0.692 0.679 0.669 0.655 0.660 0.656 ] reps=8 probe=31.034
+pass=3 arm=fts_aa band=and_us_k10 rows=10, median_last5=2.128 raw=[38.780 2.396 2.168 2.146 2.135 2.128 2.126 2.121 ] reps=8 probe=39.967
+pass=3 arm=fts_aa band=and_ww_k10 rows=10, median_last5=6.246 raw=[29.514 6.490 6.247 6.255 6.246 6.246 6.246 6.238 ] reps=8 probe=30.616
+pass=3 arm=fts_aa band=not_k10 rows=10, median_last5=1.796 raw=[10.666 1.903 1.824 1.806 1.806 1.792 1.796 1.794 ] reps=8 probe=11.175
+pass=3 arm=fts_aa band=phrase_us_k10 rows=10, median_last5=2.534 raw=[43.154 2.999 2.643 2.534 2.539 2.551 2.527 2.523 ] reps=8 probe=68.182
+pass=3 arm=fts_aa band=phrase_ww_k10 rows=10, median_last5=6.588 raw=[33.475 6.888 6.605 6.574 6.586 6.601 6.588 6.642 ] reps=8 probe=33.949
+pass=3 arm=fts_aa band=count_common rows=734896, median_last5=0.178 raw=[5.444 0.247 0.192 0.180 0.176 0.178 0.174 0.183 ] reps=8 probe=5.327
+pass=3 arm=fts band=rare_k10 rows=10, median_last5=0.220 raw=[18.393 0.447 0.241 0.235 0.222 0.220 0.217 0.218 ] reps=8 probe=18.205
+pass=3 arm=fts band=mid_k10 rows=10, median_last5=0.254 raw=[15.956 0.329 0.274 0.260 0.254 0.268 0.253 0.250 ] reps=8 probe=15.043
+pass=3 arm=fts band=common_k10 rows=10, median_last5=0.360 raw=[22.301 0.616 0.392 0.392 0.367 0.355 0.360 0.349 ] reps=8 probe=21.681
+pass=3 arm=fts band=common_k100 rows=100, median_last5=0.807 raw=[59.599 1.000 0.848 0.833 0.823 0.803 0.806 0.807 ] reps=8 probe=58.125
+pass=3 arm=fts band=common_k1000 rows=1000, median_last5=13.352 raw=[641.916 13.550 13.484 13.457 13.351 13.344 13.355 13.352 ] reps=8 probe=645.053
+pass=3 arm=fts band=or2_k10 rows=10, median_last5=1.311 raw=[30.783 1.538 1.340 1.319 1.311 1.313 1.308 1.303 ] reps=8 probe=31.336
+pass=3 arm=fts band=or4_k10 rows=10, median_last5=15.599 raw=[27.145 15.825 15.770 15.712 15.769 15.588 15.587 15.599 ] reps=8 probe=26.638
+pass=3 arm=fts band=and_k10 rows=10, median_last5=0.666 raw=[29.746 0.896 0.698 0.680 0.669 0.663 0.653 0.666 ] reps=8 probe=30.772
+pass=3 arm=fts band=and_us_k10 rows=10, median_last5=2.154 raw=[39.417 2.378 2.215 2.168 2.153 2.169 2.154 2.145 ] reps=8 probe=38.514
+pass=3 arm=fts band=and_ww_k10 rows=10, median_last5=6.271 raw=[30.294 6.469 6.271 6.276 6.271 6.250 6.265 6.271 ] reps=8 probe=30.172
+pass=3 arm=fts band=not_k10 rows=10, median_last5=1.822 raw=[10.896 1.891 1.842 1.831 1.829 1.822 1.822 1.817 ] reps=8 probe=10.441
+pass=3 arm=fts band=phrase_us_k10 rows=10, median_last5=2.553 raw=[43.023 2.888 2.606 2.554 2.544 2.553 2.549 2.568 ] reps=8 probe=43.584
+pass=3 arm=fts band=phrase_ww_k10 rows=10, median_last5=6.586 raw=[32.780 6.821 6.627 6.604 6.581 6.594 6.566 6.586 ] reps=8 probe=33.088
+pass=3 arm=fts band=count_common rows=734896, median_last5=0.178 raw=[5.047 0.234 0.189 0.179 0.185 0.178 0.172 0.171 ] reps=8 probe=5.286
+pass=3 arm=pgts_rel band=rare_k10 rows=10, median_last5=0.905 raw=[4.172 0.990 0.929 0.915 0.906 0.905 0.902 0.904 ] reps=8 probe=4.648
+pass=3 arm=pgts_rel band=mid_k10 rows=10, median_last5=1.130 raw=[4.164 1.181 1.150 1.133 1.130 1.126 1.132 1.126 ] reps=8 probe=4.320
+pass=3 arm=pgts_rel band=common_k10 rows=10, median_last5=10.029 raw=[13.740 9.951 9.836 9.960 10.023 10.043 10.029 10.039 ] reps=8 probe=13.899
+pass=3 arm=pgts_rel band=common_k100 rows=100, median_last5=12.248 raw=[16.496 12.229 12.147 12.235 12.248 12.258 12.287 12.212 ] reps=8 probe=17.013
+pass=3 arm=pgts_rel band=common_k1000 rows=1000, median_last5=14.063 raw=[24.396 14.436 14.179 14.027 14.165 14.093 14.063 13.986 ] reps=8 probe=24.049
+pass=3 arm=pgts_rel band=or2_k10 rows=10, median_last5=1.294 raw=[4.297 1.323 1.298 1.294 1.287 1.295 1.279 1.304 ] reps=8 probe=4.099
+pass=3 arm=pgts_rel band=or4_k10 rows=10, median_last5=15.781 raw=[20.418 15.753 15.748 15.787 15.798 15.781 15.762 15.641 ] reps=8 probe=19.837
+pass=3 arm=pgts_rel band=and_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=3 arm=pgts_rel band=and_us_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=3 arm=pgts_rel band=and_ww_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=3 arm=pgts_rel band=not_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=3 arm=pgts_rel band=phrase_us_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=3 arm=pgts_rel band=phrase_ww_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=3 arm=pgts_rel band=and_k10_cte rows=10, median_last5=4964.137 raw=[4988.203 4998.039 4985.658 4992.148 4962.775 4963.517 4965.503 4964.137 ] reps=8 probe=5025.159
+pass=3 arm=pgts_rel band=and_us_k10_cte rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=3 arm=pgts_rel band=and_ww_k10_cte rows=10, median_last5=191131.481 raw=[191131.481] reps=1 probe=191131.481
+pass=3 arm=pgts_rel band=not_k10_cte rows=10, median_last5=19383.480 raw=[19359.254 19383.480 19497.458 ] reps=3 probe=19422.693
+pass=3 arm=pgts_rel band=phrase_us_k10_cte rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=3 arm=pgts_rel band=phrase_ww_k10_cte rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=3 arm=pgts_rel band=count_common rows=734896, median_last5=291669.508 raw=[291669.508] reps=1 probe=291669.508
+pass=4 arm=psearch band=rare_k10 rows=10, median_last5=1.167 raw=[4.910 1.278 1.191 1.167 1.194 1.165 1.158 1.210 ] reps=8 probe=6.416
+pass=4 arm=psearch band=mid_k10 rows=10, median_last5=1.170 raw=[4.817 1.262 1.186 1.207 1.170 1.155 1.207 1.169 ] reps=8 probe=6.231
+pass=4 arm=psearch band=common_k10 rows=10, median_last5=1.243 raw=[5.910 1.355 1.299 1.252 1.236 1.263 1.243 1.229 ] reps=8 probe=5.206
+pass=4 arm=psearch band=common_k100 rows=100, median_last5=2.445 raw=[8.203 2.611 2.430 2.469 2.611 2.433 2.434 2.445 ] reps=8 probe=8.374
+pass=4 arm=psearch band=common_k1000 rows=1000, median_last5=7.577 raw=[19.320 8.379 7.660 7.583 7.599 7.577 7.559 7.573 ] reps=8 probe=18.015
+pass=4 arm=psearch band=or2_k10 rows=10, median_last5=1.849 raw=[5.716 1.932 1.866 1.862 1.855 1.845 1.849 1.817 ] reps=8 probe=6.180
+pass=4 arm=psearch band=or4_k10 rows=10, median_last5=10.271 raw=[14.655 10.671 10.450 10.323 10.269 10.247 10.367 10.271 ] reps=8 probe=14.758
+pass=4 arm=psearch band=and_k10 rows=10, median_last5=1.603 raw=[6.246 1.664 1.670 1.603 1.606 1.622 1.598 1.569 ] reps=8 probe=6.936
+pass=4 arm=psearch band=and_us_k10 rows=10, median_last5=9.195 raw=[12.222 9.479 9.331 9.195 8.938 8.713 9.203 9.460 ] reps=8 probe=12.409
+pass=4 arm=psearch band=and_ww_k10 rows=10, median_last5=2.958 raw=[7.146 3.001 2.994 2.940 2.966 2.958 2.949 2.967 ] reps=8 probe=8.157
+pass=4 arm=psearch band=not_k10 rows=10, median_last5=1.626 raw=[6.125 1.677 1.608 1.661 1.626 1.587 1.632 1.619 ] reps=8 probe=6.650
+pass=4 arm=psearch band=phrase_us_k10 rows=10, median_last5=9.108 raw=[12.133 9.110 8.649 8.939 9.060 9.191 9.670 9.108 ] reps=8 probe=12.301
+pass=4 arm=psearch band=phrase_ww_k10 rows=10, median_last5=9.059 raw=[12.631 9.706 9.780 8.940 9.059 8.991 9.751 9.222 ] reps=8 probe=11.644
+pass=4 arm=psearch band=count_common rows=735955, median_last5=0.956 raw=[4.070 1.029 0.995 0.972 0.949 0.943 0.956 0.960 ] reps=8 probe=3.836
+pass=4 arm=psearch_pn band=rare_k10 rows=10, median_last5=1.055 raw=[5.845 1.158 1.101 1.055 1.037 1.057 1.066 1.035 ] reps=8 probe=5.963
+pass=4 arm=psearch_pn band=mid_k10 rows=10, median_last5=1.044 raw=[5.260 1.177 1.079 1.051 1.039 1.054 1.044 1.033 ] reps=8 probe=4.911
+pass=4 arm=psearch_pn band=common_k10 rows=10, median_last5=1.220 raw=[5.407 1.300 1.221 1.228 1.197 1.228 1.220 1.185 ] reps=8 probe=5.517
+pass=4 arm=psearch_pn band=common_k100 rows=100, median_last5=2.028 raw=[7.952 2.173 2.015 2.051 1.981 2.030 1.996 2.028 ] reps=8 probe=7.503
+pass=4 arm=psearch_pn band=common_k1000 rows=1000, median_last5=5.820 raw=[17.016 6.418 5.907 5.937 5.810 5.802 5.820 5.822 ] reps=8 probe=16.164
+pass=4 arm=psearch_pn band=or2_k10 rows=10, median_last5=1.630 raw=[6.188 1.719 1.672 1.663 1.612 1.627 1.630 1.651 ] reps=8 probe=5.401
+pass=4 arm=psearch_pn band=or4_k10 rows=10, median_last5=9.918 raw=[14.027 9.691 9.914 10.019 9.897 10.143 9.533 9.918 ] reps=8 probe=13.391
+pass=4 arm=psearch_pn band=and_k10 rows=10, median_last5=1.399 raw=[5.498 1.477 1.423 1.404 1.399 1.386 1.405 1.367 ] reps=8 probe=5.818
+pass=4 arm=psearch_pn band=and_us_k10 rows=10, median_last5=9.149 raw=[12.273 9.956 9.519 9.217 8.991 9.124 9.149 9.516 ] reps=8 probe=12.852
+pass=4 arm=psearch_pn band=and_ww_k10 rows=10, median_last5=2.273 raw=[7.288 2.416 2.349 2.270 2.277 2.273 2.274 2.272 ] reps=8 probe=6.873
+pass=4 arm=psearch_pn band=not_k10 rows=10, median_last5=1.579 raw=[5.670 1.622 1.533 1.584 1.535 1.579 1.592 1.534 ] reps=8 probe=5.539
+pass=4 arm=psearch_pn band=phrase_us_k10 rows=10, median_last5=9.332 raw=[11.681 9.090 9.574 9.921 9.368 9.123 9.332 9.241 ] reps=8 probe=12.378
+pass=4 arm=psearch_pn band=phrase_ww_k10 rows=10, median_last5=9.056 raw=[12.367 9.148 8.816 8.584 8.958 9.071 9.339 9.056 ] reps=8 probe=10.737
+pass=4 arm=psearch_pn band=count_common rows=735955, median_last5=0.974 raw=[4.285 1.060 1.013 0.992 0.974 0.963 0.957 0.985 ] reps=8 probe=4.068
+pass=4 arm=vchord band=rare_k10 rows=10, median_last5=8.792 raw=[30.477 15.145 9.197 8.806 8.792 8.810 8.690 8.621 ] reps=8 probe=80.695
+pass=4 arm=vchord band=mid_k10 rows=10, median_last5=17.181 raw=[45.859 26.029 18.144 17.457 17.181 17.212 17.098 16.889 ] reps=8 probe=119.426
+pass=4 arm=vchord band=common_k10 rows=10, median_last5=55.916 raw=[98.814 73.705 61.295 57.351 56.211 55.767 55.916 55.721 ] reps=8 probe=256.079
+pass=4 arm=vchord band=common_k100 rows=100, median_last5=59.289 raw=[87.544 62.396 60.853 59.948 59.594 59.289 59.020 58.976 ] reps=8 probe=92.667
+pass=4 arm=vchord band=common_k1000 rows=100, median_last5=59.109 raw=[88.330 62.247 60.564 59.827 59.511 59.109 59.042 58.925 ] reps=8 probe=91.151
+pass=4 arm=vchord band=or2_k10 rows=10, median_last5=5.570 raw=[16.875 6.170 5.769 5.678 5.575 5.570 5.561 5.552 ] reps=8 probe=21.913
+pass=4 arm=vchord band=or4_k10 rows=10, median_last5=31.698 raw=[63.740 38.198 32.557 31.857 31.863 31.698 31.572 31.431 ] reps=8 probe=135.984
+pass=4 arm=gin band=rare_k10 rows=10, median_last5=54.422 raw=[92.508 58.695 56.962 55.719 55.204 54.422 53.838 53.177 ] reps=8 probe=176.052
+pass=4 arm=gin band=mid_k10 rows=10, median_last5=150.479 raw=[215.664 151.148 150.138 150.479 150.135 149.776 179.309 160.502 ] reps=8 probe=377.865
+pass=4 arm=gin band=common_k10 rows=10, median_last5=2691.518 raw=[1989.821 2296.973 2337.503 2545.418 2779.787 2812.841 2691.518 2602.027 ] reps=8 probe=3864.480
+pass=4 arm=gin band=common_k100 rows=100, median_last5=2355.916 raw=[2195.326 2161.541 2162.154 2247.299 2461.455 2449.333 2355.916 2306.137 ] reps=8 probe=2168.201
+pass=4 arm=gin band=common_k1000 rows=1000, median_last5=2203.587 raw=[2209.512 2122.659 2107.015 2149.177 2238.662 2265.005 2200.296 2203.587 ] reps=8 probe=2214.751
+pass=4 arm=gin band=or2_k10 rows=10, median_last5=161.183 raw=[240.116 159.746 159.566 159.183 159.853 161.183 166.288 163.915 ] reps=8 probe=281.491
+pass=4 arm=gin band=or4_k10 rows=10, median_last5=1718.631 raw=[1562.807 1758.097 1780.113 1724.898 1718.631 1692.317 1702.979 1745.799 ] reps=8 probe=1959.691
+pass=4 arm=gin band=and_k10 rows=10, median_last5=19.277 raw=[47.089 25.426 23.530 21.249 19.917 19.277 18.853 18.870 ] reps=8 probe=53.616
+pass=4 arm=gin band=and_us_k10 rows=10, median_last5=2784.164 raw=[2967.919 3438.118 2832.814 3119.053 2703.473 3166.255 2784.164 2717.333 ] reps=8 probe=2947.126
+pass=4 arm=gin band=and_ww_k10 rows=10, median_last5=1315.299 raw=[1674.750 1353.141 1357.738 1267.087 1285.085 1331.463 1326.707 1315.299 ] reps=8 probe=1514.119
+pass=4 arm=gin band=not_k10 rows=10, median_last5=113.023 raw=[176.419 113.285 113.103 112.714 113.194 112.885 113.649 113.023 ] reps=8 probe=184.335
+pass=4 arm=gin band=phrase_us_k10 rows=10, median_last5=3203.695 raw=[3577.075 3286.357 3546.171 3203.695 3267.855 3011.091 3441.946 3167.772 ] reps=8 probe=3829.866
+pass=4 arm=gin band=phrase_ww_k10 rows=10, median_last5=1485.062 raw=[1847.941 1558.366 1444.524 1485.062 1499.716 1511.880 1444.787 1434.024 ] reps=8 probe=2029.156
+pass=4 arm=gin band=count_common rows=734896, median_last5=543.954 raw=[477.818 508.079 515.740 521.475 510.611 548.010 547.514 543.954 ] reps=8 probe=522.071
+pass=4 arm=fts_aa band=rare_k10 rows=10, median_last5=0.230 raw=[19.723 0.677 0.263 0.233 0.235 0.230 0.225 0.222 ] reps=8 probe=44.580
+pass=4 arm=fts_aa band=mid_k10 rows=10, median_last5=0.251 raw=[15.783 0.478 0.278 0.257 0.251 0.270 0.251 0.247 ] reps=8 probe=17.080
+pass=4 arm=fts_aa band=common_k10 rows=10, median_last5=0.357 raw=[23.970 0.555 0.386 0.378 0.359 0.351 0.357 0.352 ] reps=8 probe=22.339
+pass=4 arm=fts_aa band=common_k100 rows=100, median_last5=0.816 raw=[59.441 1.000 0.832 0.820 0.816 0.819 0.810 0.801 ] reps=8 probe=58.728
+pass=4 arm=fts_aa band=common_k1000 rows=1000, median_last5=13.444 raw=[646.787 13.880 13.480 13.344 13.530 13.464 13.444 13.320 ] reps=8 probe=653.099
+pass=4 arm=fts_aa band=or2_k10 rows=10, median_last5=1.316 raw=[33.235 1.561 1.345 1.328 1.317 1.311 1.316 1.308 ] reps=8 probe=31.938
+pass=4 arm=fts_aa band=or4_k10 rows=10, median_last5=15.710 raw=[27.414 15.928 15.787 15.660 15.740 15.710 15.759 15.618 ] reps=8 probe=26.420
+pass=4 arm=fts_aa band=and_k10 rows=10, median_last5=0.667 raw=[31.765 0.848 0.702 0.673 0.671 0.667 0.655 0.657 ] reps=8 probe=30.452
+pass=4 arm=fts_aa band=and_us_k10 rows=10, median_last5=2.147 raw=[39.503 2.504 2.180 2.151 2.147 2.157 2.143 2.138 ] reps=8 probe=39.343
+pass=4 arm=fts_aa band=and_ww_k10 rows=10, median_last5=6.254 raw=[31.125 6.442 6.258 6.259 6.255 6.254 6.253 6.233 ] reps=8 probe=29.848
+pass=4 arm=fts_aa band=not_k10 rows=10, median_last5=1.817 raw=[11.110 1.896 1.836 1.822 1.813 1.824 1.812 1.817 ] reps=8 probe=10.255
+pass=4 arm=fts_aa band=phrase_us_k10 rows=10, median_last5=2.568 raw=[44.633 2.976 2.668 2.615 2.597 2.568 2.562 2.566 ] reps=8 probe=70.116
+pass=4 arm=fts_aa band=phrase_ww_k10 rows=10, median_last5=6.547 raw=[33.427 6.806 6.562 6.563 6.550 6.547 6.537 6.541 ] reps=8 probe=32.938
+pass=4 arm=fts_aa band=count_common rows=734896, median_last5=0.179 raw=[4.219 0.236 0.202 0.185 0.179 0.177 0.179 0.184 ] reps=8 probe=5.708
+pass=4 arm=fts band=rare_k10 rows=10, median_last5=0.252 raw=[18.816 0.309 0.282 0.252 0.267 0.265 0.230 0.223 ] reps=8 probe=18.253
+pass=4 arm=fts band=mid_k10 rows=10, median_last5=0.254 raw=[15.508 0.323 0.280 0.260 0.254 0.250 0.260 0.247 ] reps=8 probe=16.416
+pass=4 arm=fts band=common_k10 rows=10, median_last5=0.350 raw=[22.438 0.599 0.388 0.363 0.360 0.348 0.344 0.350 ] reps=8 probe=23.307
+pass=4 arm=fts band=common_k100 rows=100, median_last5=0.815 raw=[60.313 1.000 0.838 0.827 0.833 0.815 0.808 0.808 ] reps=8 probe=58.581
+pass=4 arm=fts band=common_k1000 rows=1000, median_last5=13.399 raw=[645.124 13.529 13.418 13.399 13.404 13.399 13.315 13.517 ] reps=8 probe=646.975
+pass=4 arm=fts band=or2_k10 rows=10, median_last5=1.312 raw=[33.475 1.552 1.345 1.329 1.314 1.312 1.310 1.305 ] reps=8 probe=31.644
+pass=4 arm=fts band=or4_k10 rows=10, median_last5=15.697 raw=[28.469 15.866 15.785 15.697 15.728 15.767 15.595 15.664 ] reps=8 probe=27.564
+pass=4 arm=fts band=and_k10 rows=10, median_last5=0.663 raw=[31.290 0.869 0.697 0.699 0.677 0.662 0.663 0.659 ] reps=8 probe=30.171
+pass=4 arm=fts band=and_us_k10 rows=10, median_last5=2.167 raw=[39.483 2.406 2.200 2.185 2.169 2.163 2.167 2.163 ] reps=8 probe=40.416
+pass=4 arm=fts band=and_ww_k10 rows=10, median_last5=6.270 raw=[31.229 6.501 6.266 6.270 6.269 6.257 6.284 6.499 ] reps=8 probe=29.664
+pass=4 arm=fts band=not_k10 rows=10, median_last5=1.824 raw=[11.336 1.900 1.853 1.837 1.819 1.824 1.829 1.821 ] reps=8 probe=10.366
+pass=4 arm=fts band=phrase_us_k10 rows=10, median_last5=2.571 raw=[44.499 2.869 2.630 2.571 2.570 2.576 2.562 2.851 ] reps=8 probe=44.445
+pass=4 arm=fts band=phrase_ww_k10 rows=10, median_last5=6.567 raw=[33.140 6.839 6.593 6.582 6.571 6.567 6.563 6.555 ] reps=8 probe=32.455
+pass=4 arm=fts band=count_common rows=734896, median_last5=0.177 raw=[5.416 0.246 0.193 0.182 0.177 0.176 0.186 0.176 ] reps=8 probe=5.920
+pass=4 arm=pgts_rel band=rare_k10 rows=10, median_last5=0.903 raw=[4.372 0.965 0.925 0.911 0.908 0.903 0.896 0.901 ] reps=8 probe=4.707
+pass=4 arm=pgts_rel band=mid_k10 rows=10, median_last5=1.125 raw=[4.633 1.176 1.142 1.140 1.124 1.125 1.122 1.126 ] reps=8 probe=3.821
+pass=4 arm=pgts_rel band=common_k10 rows=10, median_last5=9.769 raw=[13.728 9.800 9.800 9.769 9.774 9.793 9.743 9.699 ] reps=8 probe=13.505
+pass=4 arm=pgts_rel band=common_k100 rows=100, median_last5=11.967 raw=[16.338 11.854 11.893 11.970 11.962 11.967 12.271 11.954 ] reps=8 probe=17.103
+pass=4 arm=pgts_rel band=common_k1000 rows=1000, median_last5=14.326 raw=[23.883 14.775 14.430 14.344 14.359 14.276 14.304 14.326 ] reps=8 probe=24.788
+pass=4 arm=pgts_rel band=or2_k10 rows=10, median_last5=1.276 raw=[4.855 1.332 1.290 1.282 1.276 1.272 1.280 1.274 ] reps=8 probe=4.197
+pass=4 arm=pgts_rel band=or4_k10 rows=10, median_last5=16.167 raw=[20.533 16.464 16.290 16.212 16.151 16.167 16.187 16.080 ] reps=8 probe=20.159
+pass=4 arm=pgts_rel band=and_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=4 arm=pgts_rel band=and_us_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=4 arm=pgts_rel band=and_ww_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=4 arm=pgts_rel band=not_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=4 arm=pgts_rel band=phrase_us_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=4 arm=pgts_rel band=phrase_ww_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=4 arm=pgts_rel band=and_k10_cte rows=10, median_last5=4966.347 raw=[4985.674 5008.966 4963.105 4984.845 4944.816 4966.347 5007.921 4950.757 ] reps=8 probe=5015.599
+pass=4 arm=pgts_rel band=and_us_k10_cte rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=4 arm=pgts_rel band=and_ww_k10_cte rows=10, median_last5=189377.366 raw=[189377.366] reps=1 probe=189377.366
+pass=4 arm=pgts_rel band=not_k10_cte rows=10, median_last5=19243.787 raw=[19199.866 19243.787 19294.845 ] reps=3 probe=19267.692
+pass=4 arm=pgts_rel band=phrase_us_k10_cte rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=4 arm=pgts_rel band=phrase_ww_k10_cte rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=4 arm=pgts_rel band=count_common rows=734896, median_last5=290377.944 raw=[290377.944] reps=1 probe=290377.944
+pass=4 arm=pgts_main band=rare_k10 rows=10, median_last5=0.916 raw=[3.292 0.949 0.930 0.923 0.916 0.914 0.913 0.950 ] reps=8 probe=5.142
+pass=4 arm=pgts_main band=mid_k10 rows=10, median_last5=1.125 raw=[4.071 1.172 1.135 1.127 1.125 1.123 1.128 1.122 ] reps=8 probe=4.844
+pass=4 arm=pgts_main band=common_k10 rows=10, median_last5=10.096 raw=[13.858 10.183 10.069 10.111 10.102 10.096 10.059 9.874 ] reps=8 probe=14.394
+pass=4 arm=pgts_main band=common_k100 rows=100, median_last5=12.375 raw=[17.726 12.237 12.275 12.375 12.405 12.375 12.300 12.315 ] reps=8 probe=16.219
+pass=4 arm=pgts_main band=common_k1000 rows=1000, median_last5=14.232 raw=[26.035 14.646 14.275 14.232 14.271 14.146 14.157 14.242 ] reps=8 probe=25.176
+pass=4 arm=pgts_main band=or2_k10 rows=10, median_last5=1.304 raw=[4.030 1.352 1.308 1.304 1.294 1.290 1.315 1.380 ] reps=8 probe=4.290
+pass=4 arm=pgts_main band=or4_k10 rows=10, median_last5=15.771 raw=[20.676 16.062 15.896 15.771 15.729 15.831 15.802 15.670 ] reps=8 probe=19.886
+pass=4 arm=pgts_main band=and_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=4 arm=pgts_main band=and_us_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=4 arm=pgts_main band=and_ww_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=4 arm=pgts_main band=not_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=4 arm=pgts_main band=phrase_us_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=4 arm=pgts_main band=phrase_ww_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=4 arm=pgts_main band=and_k10_cte rows=10, median_last5=4976.006 raw=[4982.631 5026.458 4973.321 4985.229 4950.568 4976.006 5020.950 4956.676 ] reps=8 probe=5014.726
+pass=4 arm=pgts_main band=and_us_k10_cte rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=4 arm=pgts_main band=and_ww_k10_cte rows=10, median_last5=189869.867 raw=[189869.867] reps=1 probe=189869.867
+pass=4 arm=pgts_main band=not_k10_cte rows=10, median_last5=19276.920 raw=[19244.720 19276.920 19343.511 ] reps=3 probe=19317.455
+pass=4 arm=pgts_main band=phrase_us_k10_cte rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=4 arm=pgts_main band=phrase_ww_k10_cte rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=4 arm=pgts_main band=count_common rows=734896, median_last5=291840.009 raw=[291840.009] reps=1 probe=291840.009
+pass=5 arm=psearch_pn band=rare_k10 rows=10, median_last5=1.019 raw=[5.591 1.137 1.078 1.037 1.018 1.019 1.087 1.013 ] reps=8 probe=6.448
+pass=5 arm=psearch_pn band=mid_k10 rows=10, median_last5=1.066 raw=[5.452 1.180 1.087 1.066 1.085 1.077 1.053 1.031 ] reps=8 probe=4.838
+pass=5 arm=psearch_pn band=common_k10 rows=10, median_last5=1.191 raw=[5.038 1.297 1.232 1.191 1.178 1.221 1.181 1.220 ] reps=8 probe=5.725
+pass=5 arm=psearch_pn band=common_k100 rows=100, median_last5=2.020 raw=[7.672 2.174 2.078 1.998 2.063 2.003 2.026 2.020 ] reps=8 probe=7.281
+pass=5 arm=psearch_pn band=common_k1000 rows=1000, median_last5=5.867 raw=[17.131 6.381 6.000 5.909 5.900 5.867 5.845 5.828 ] reps=8 probe=17.552
+pass=5 arm=psearch_pn band=or2_k10 rows=10, median_last5=1.629 raw=[5.784 1.707 1.669 1.648 1.623 1.639 1.624 1.629 ] reps=8 probe=5.912
+pass=5 arm=psearch_pn band=or4_k10 rows=10, median_last5=9.627 raw=[13.743 9.800 9.840 9.627 9.547 9.804 9.281 9.779 ] reps=8 probe=13.619
+pass=5 arm=psearch_pn band=and_k10 rows=10, median_last5=1.393 raw=[5.829 1.451 1.418 1.419 1.370 1.395 1.360 1.393 ] reps=8 probe=5.122
+pass=5 arm=psearch_pn band=and_us_k10 rows=10, median_last5=8.879 raw=[12.765 9.202 9.199 8.965 8.879 9.006 8.469 8.404 ] reps=8 probe=12.069
+pass=5 arm=psearch_pn band=and_ww_k10 rows=10, median_last5=2.300 raw=[7.077 2.472 2.312 2.266 2.320 2.313 2.289 2.300 ] reps=8 probe=6.750
+pass=5 arm=psearch_pn band=not_k10 rows=10, median_last5=1.566 raw=[5.958 1.617 1.561 1.554 1.571 1.566 1.600 1.534 ] reps=8 probe=5.419
+pass=5 arm=psearch_pn band=phrase_us_k10 rows=10, median_last5=9.258 raw=[11.818 8.810 8.937 8.992 9.309 9.268 9.258 9.130 ] reps=8 probe=11.796
+pass=5 arm=psearch_pn band=phrase_ww_k10 rows=10, median_last5=9.257 raw=[12.368 9.256 9.787 9.597 8.900 9.042 9.257 9.756 ] reps=8 probe=11.708
+pass=5 arm=psearch_pn band=count_common rows=735955, median_last5=0.993 raw=[3.755 1.040 0.985 0.979 1.182 1.031 0.993 0.977 ] reps=8 probe=4.538
+pass=5 arm=vchord band=rare_k10 rows=10, median_last5=8.861 raw=[30.349 15.112 9.362 9.074 9.105 8.861 8.806 8.840 ] reps=8 probe=80.830
+pass=5 arm=vchord band=mid_k10 rows=10, median_last5=16.944 raw=[45.075 25.313 17.657 17.067 16.954 16.944 16.810 16.694 ] reps=8 probe=120.337
+pass=5 arm=vchord band=common_k10 rows=10, median_last5=54.711 raw=[98.118 72.146 60.682 55.690 55.018 54.711 54.636 54.550 ] reps=8 probe=255.450
+pass=5 arm=vchord band=common_k100 rows=100, median_last5=59.039 raw=[86.688 61.778 60.342 59.366 59.356 59.039 58.952 58.856 ] reps=8 probe=93.023
+pass=5 arm=vchord band=common_k1000 rows=100, median_last5=56.607 raw=[92.160 59.772 57.645 56.807 56.735 56.592 56.607 56.469 ] reps=8 probe=87.259
+pass=5 arm=vchord band=or2_k10 rows=10, median_last5=5.591 raw=[21.103 6.387 5.756 5.652 5.660 5.591 5.580 5.570 ] reps=8 probe=22.331
+pass=5 arm=vchord band=or4_k10 rows=10, median_last5=31.678 raw=[63.849 38.565 33.237 31.959 31.851 31.661 31.642 31.678 ] reps=8 probe=139.329
+pass=5 arm=gin band=rare_k10 rows=10, median_last5=56.119 raw=[94.877 60.289 58.573 57.484 56.704 56.119 55.773 54.598 ] reps=8 probe=183.133
+pass=5 arm=gin band=mid_k10 rows=10, median_last5=153.223 raw=[221.928 153.859 153.488 153.223 152.821 152.937 185.329 159.382 ] reps=8 probe=390.780
+pass=5 arm=gin band=common_k10 rows=10, median_last5=2346.856 raw=[2142.694 2325.157 2332.168 2279.131 2642.791 2186.409 2370.321 2346.856 ] reps=8 probe=3684.055
+pass=5 arm=gin band=common_k100 rows=100, median_last5=2104.580 raw=[2076.055 2046.798 2017.845 2104.580 2165.859 2127.568 2097.326 2065.138 ] reps=8 probe=2111.789
+pass=5 arm=gin band=common_k1000 rows=1000, median_last5=3273.162 raw=[2167.241 2558.993 2701.510 3399.293 3386.119 3273.162 3156.450 3115.999 ] reps=8 probe=2293.796
+pass=5 arm=gin band=or2_k10 rows=10, median_last5=167.369 raw=[248.043 163.933 163.835 164.395 163.537 167.369 171.822 172.702 ] reps=8 probe=279.319
+pass=5 arm=gin band=or4_k10 rows=10, median_last5=1626.542 raw=[1581.309 1583.598 1591.173 1574.242 1594.468 1626.542 1649.602 1665.654 ] reps=8 probe=1838.040
+pass=5 arm=gin band=and_k10 rows=10, median_last5=19.144 raw=[46.783 25.335 23.188 21.052 19.745 19.144 18.920 18.760 ] reps=8 probe=50.678
+pass=5 arm=gin band=and_us_k10 rows=10, median_last5=2712.262 raw=[2739.708 2687.261 2575.113 2726.531 2501.774 2318.228 2712.262 2873.381 ] reps=8 probe=3193.905
+pass=5 arm=gin band=and_ww_k10 rows=10, median_last5=1122.772 raw=[1477.080 1141.056 1148.050 1085.795 1109.801 1131.915 1122.772 1125.933 ] reps=8 probe=1725.302
+pass=5 arm=gin band=not_k10 rows=10, median_last5=111.741 raw=[181.938 112.331 111.820 111.569 111.602 112.295 111.741 111.804 ] reps=8 probe=214.758
+pass=5 arm=gin band=phrase_us_k10 rows=10, median_last5=3371.988 raw=[3831.955 3752.175 3935.928 3371.988 3438.229 3555.009 3105.647 3283.420 ] reps=8 probe=3443.458
+pass=5 arm=gin band=phrase_ww_k10 rows=10, median_last5=1478.581 raw=[1825.593 1516.981 1427.009 1457.341 1493.915 1478.581 1438.592 1493.224 ] reps=8 probe=2000.485
+pass=5 arm=gin band=count_common rows=734896, median_last5=568.408 raw=[500.316 547.965 493.638 542.295 559.871 577.412 568.408 571.280 ] reps=8 probe=617.671
+pass=5 arm=fts_aa band=rare_k10 rows=10, median_last5=0.223 raw=[19.147 0.511 0.250 0.234 0.235 0.223 0.219 0.219 ] reps=8 probe=45.041
+pass=5 arm=fts_aa band=mid_k10 rows=10, median_last5=0.252 raw=[16.247 0.334 0.283 0.260 0.252 0.263 0.251 0.249 ] reps=8 probe=15.485
+pass=5 arm=fts_aa band=common_k10 rows=10, median_last5=0.373 raw=[22.573 0.753 0.404 0.394 0.376 0.371 0.373 0.364 ] reps=8 probe=22.309
+pass=5 arm=fts_aa band=common_k100 rows=100, median_last5=0.823 raw=[60.142 1.009 0.843 0.834 0.831 0.823 0.813 0.811 ] reps=8 probe=58.826
+pass=5 arm=fts_aa band=common_k1000 rows=1000, median_last5=13.473 raw=[646.381 13.876 13.504 13.446 13.416 13.495 13.484 13.473 ] reps=8 probe=651.353
+pass=5 arm=fts_aa band=or2_k10 rows=10, median_last5=1.332 raw=[31.815 1.510 1.365 1.340 1.332 1.334 1.326 1.323 ] reps=8 probe=32.445
+pass=5 arm=fts_aa band=or4_k10 rows=10, median_last5=15.749 raw=[26.601 15.793 15.708 15.819 15.728 15.805 15.718 15.749 ] reps=8 probe=27.339
+pass=5 arm=fts_aa band=and_k10 rows=10, median_last5=0.668 raw=[31.048 0.761 0.701 0.682 0.675 0.668 0.653 0.665 ] reps=8 probe=29.718
+pass=5 arm=fts_aa band=and_us_k10 rows=10, median_last5=2.154 raw=[38.884 2.413 2.215 2.196 2.157 2.154 2.145 2.148 ] reps=8 probe=38.823
+pass=5 arm=fts_aa band=and_ww_k10 rows=10, median_last5=6.257 raw=[30.282 6.427 6.259 6.257 6.258 6.252 6.312 6.233 ] reps=8 probe=29.794
+pass=5 arm=fts_aa band=not_k10 rows=10, median_last5=1.829 raw=[11.108 1.907 1.851 1.827 1.830 1.827 1.829 1.831 ] reps=8 probe=10.786
+pass=5 arm=fts_aa band=phrase_us_k10 rows=10, median_last5=2.533 raw=[43.301 2.972 2.655 2.538 2.535 2.533 2.524 2.510 ] reps=8 probe=69.521
+pass=5 arm=fts_aa band=phrase_ww_k10 rows=10, median_last5=6.544 raw=[32.950 6.862 6.567 6.550 6.544 6.543 6.561 6.531 ] reps=8 probe=34.093
+pass=5 arm=fts_aa band=count_common rows=734896, median_last5=0.177 raw=[5.263 0.242 0.190 0.182 0.175 0.174 0.182 0.177 ] reps=8 probe=5.245
+pass=5 arm=fts band=rare_k10 rows=10, median_last5=0.226 raw=[18.547 0.304 0.251 0.232 0.226 0.225 0.224 0.245 ] reps=8 probe=18.016
+pass=5 arm=fts band=mid_k10 rows=10, median_last5=0.252 raw=[15.860 0.321 0.272 0.270 0.254 0.249 0.246 0.252 ] reps=8 probe=14.892
+pass=5 arm=fts band=common_k10 rows=10, median_last5=0.366 raw=[22.439 0.472 0.440 0.423 0.373 0.361 0.366 0.356 ] reps=8 probe=21.477
+pass=5 arm=fts band=common_k100 rows=100, median_last5=0.803 raw=[59.042 1.011 0.837 0.824 0.808 0.794 0.803 0.800 ] reps=8 probe=59.650
+pass=5 arm=fts band=common_k1000 rows=1000, median_last5=13.459 raw=[646.536 13.679 13.414 13.538 13.459 13.389 13.392 13.474 ] reps=8 probe=646.348
+pass=5 arm=fts band=or2_k10 rows=10, median_last5=1.322 raw=[31.073 1.417 1.352 1.339 1.355 1.322 1.322 1.318 ] reps=8 probe=32.135
+pass=5 arm=fts band=or4_k10 rows=10, median_last5=15.650 raw=[25.313 15.767 15.575 15.769 15.557 15.819 15.650 15.567 ] reps=8 probe=25.990
+pass=5 arm=fts band=and_k10 rows=10, median_last5=0.668 raw=[30.548 0.860 0.706 0.687 0.668 0.673 0.665 0.654 ] reps=8 probe=31.415
+pass=5 arm=fts band=and_us_k10 rows=10, median_last5=2.151 raw=[37.652 2.304 2.247 2.163 2.169 2.142 2.126 2.151 ] reps=8 probe=38.547
+pass=5 arm=fts band=and_ww_k10 rows=10, median_last5=6.261 raw=[30.825 6.415 6.269 6.261 6.224 6.253 6.276 6.264 ] reps=8 probe=29.234
+pass=5 arm=fts band=not_k10 rows=10, median_last5=1.861 raw=[11.575 1.908 1.863 1.861 1.842 1.846 1.924 1.863 ] reps=8 probe=10.736
+pass=5 arm=fts band=phrase_us_k10 rows=10, median_last5=2.525 raw=[42.958 2.896 2.596 2.557 2.525 2.538 2.517 2.515 ] reps=8 probe=44.032
+pass=5 arm=fts band=phrase_ww_k10 rows=10, median_last5=6.604 raw=[33.532 6.773 6.658 6.635 6.604 6.591 6.606 6.569 ] reps=8 probe=33.067
+pass=5 arm=fts band=count_common rows=734896, median_last5=0.176 raw=[5.048 0.238 0.193 0.181 0.184 0.176 0.176 0.173 ] reps=8 probe=4.899
+pass=5 arm=pgts_rel band=rare_k10 rows=10, median_last5=0.908 raw=[3.417 0.989 0.987 0.924 0.913 0.907 0.908 0.906 ] reps=8 probe=4.610
+pass=5 arm=pgts_rel band=mid_k10 rows=10, median_last5=1.107 raw=[4.365 1.158 1.123 1.112 1.112 1.107 1.106 1.105 ] reps=8 probe=4.451
+pass=5 arm=pgts_rel band=common_k10 rows=10, median_last5=9.886 raw=[13.997 10.084 9.915 9.886 9.704 9.796 9.896 9.899 ] reps=8 probe=13.963
+pass=5 arm=pgts_rel band=common_k100 rows=100, median_last5=12.126 raw=[16.871 12.241 12.107 12.126 12.151 12.147 11.987 11.979 ] reps=8 probe=16.586
+pass=5 arm=pgts_rel band=common_k1000 rows=1000, median_last5=13.882 raw=[23.637 14.613 14.101 13.971 13.882 13.994 13.866 13.824 ] reps=8 probe=22.989
+pass=5 arm=pgts_rel band=or2_k10 rows=10, median_last5=1.288 raw=[4.509 1.329 1.303 1.288 1.281 1.290 1.288 1.281 ] reps=8 probe=3.975
+pass=5 arm=pgts_rel band=or4_k10 rows=10, median_last5=15.926 raw=[20.223 16.061 15.751 15.833 15.891 15.985 15.926 15.948 ] reps=8 probe=20.047
+pass=5 arm=pgts_rel band=and_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=5 arm=pgts_rel band=and_us_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=5 arm=pgts_rel band=and_ww_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=5 arm=pgts_rel band=not_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=5 arm=pgts_rel band=phrase_us_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=5 arm=pgts_rel band=phrase_ww_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=5 arm=pgts_rel band=and_k10_cte rows=10, median_last5=4967.365 raw=[4990.223 5005.033 4985.211 4997.113 4965.312 4967.998 4967.365 4961.819 ] reps=8 probe=5029.244
+pass=5 arm=pgts_rel band=and_us_k10_cte rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=5 arm=pgts_rel band=and_ww_k10_cte rows=10, median_last5=190201.274 raw=[190201.274] reps=1 probe=190201.274
+pass=5 arm=pgts_rel band=not_k10_cte rows=10, median_last5=19374.643 raw=[19300.668 19374.643 19489.757 ] reps=3 probe=19356.407
+pass=5 arm=pgts_rel band=phrase_us_k10_cte rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=5 arm=pgts_rel band=phrase_ww_k10_cte rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=5 arm=pgts_rel band=count_common rows=734896, median_last5=290744.266 raw=[290744.266] reps=1 probe=290744.266
+pass=5 arm=pgts_main band=rare_k10 rows=10, median_last5=0.921 raw=[4.253 0.979 0.940 0.924 0.919 0.924 0.921 0.916 ] reps=8 probe=4.749
+pass=5 arm=pgts_main band=mid_k10 rows=10, median_last5=1.112 raw=[4.130 1.169 1.129 1.117 1.110 1.104 1.112 1.126 ] reps=8 probe=4.261
+pass=5 arm=pgts_main band=common_k10 rows=10, median_last5=10.049 raw=[13.927 9.990 9.840 9.950 10.056 10.039 10.049 10.061 ] reps=8 probe=14.104
+pass=5 arm=pgts_main band=common_k100 rows=100, median_last5=12.261 raw=[16.680 12.220 12.267 12.243 12.261 12.155 12.283 12.400 ] reps=8 probe=17.145
+pass=5 arm=pgts_main band=common_k1000 rows=1000, median_last5=14.219 raw=[23.896 14.680 14.305 14.301 14.227 14.183 14.189 14.219 ] reps=8 probe=24.708
+pass=5 arm=pgts_main band=or2_k10 rows=10, median_last5=1.284 raw=[4.149 1.328 1.301 1.292 1.289 1.284 1.282 1.274 ] reps=8 probe=4.351
+pass=5 arm=pgts_main band=or4_k10 rows=10, median_last5=15.718 raw=[19.971 16.078 15.798 15.718 15.791 15.748 15.667 15.500 ] reps=8 probe=20.294
+pass=5 arm=pgts_main band=and_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=5 arm=pgts_main band=and_us_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=5 arm=pgts_main band=and_ww_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=5 arm=pgts_main band=not_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=5 arm=pgts_main band=phrase_us_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=5 arm=pgts_main band=phrase_ww_k10 rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=5 arm=pgts_main band=and_k10_cte rows=10, median_last5=4953.633 raw=[4977.028 4987.069 4966.188 4978.389 4953.633 4951.403 4957.741 4952.132 ] reps=8 probe=5015.201
+pass=5 arm=pgts_main band=and_us_k10_cte rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=5 arm=pgts_main band=and_ww_k10_cte rows=10, median_last5=189743.364 raw=[189743.364] reps=1 probe=189743.364
+pass=5 arm=pgts_main band=not_k10_cte rows=10, median_last5=19302.687 raw=[19282.444 19302.687 19449.002 ] reps=3 probe=19292.502
+pass=5 arm=pgts_main band=phrase_us_k10_cte rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=5 arm=pgts_main band=phrase_ww_k10_cte rows=TIMEOUT(300s) median_last5= raw=[skipped: timed out in an earlier pass]
+pass=5 arm=pgts_main band=count_common rows=734896, median_last5=290562.712 raw=[290562.712] reps=1 probe=290562.712
+pass=5 arm=psearch band=rare_k10 rows=10, median_last5=1.249 raw=[6.292 1.380 1.333 1.266 1.246 1.284 1.249 1.234 ] reps=8 probe=6.447
+pass=5 arm=psearch band=mid_k10 rows=10, median_last5=1.150 raw=[5.586 1.318 1.192 1.150 1.150 1.210 1.140 1.128 ] reps=8 probe=5.611
+pass=5 arm=psearch band=common_k10 rows=10, median_last5=1.263 raw=[5.518 1.349 1.285 1.283 1.263 1.260 1.270 1.249 ] reps=8 probe=5.362
+pass=5 arm=psearch band=common_k100 rows=100, median_last5=2.446 raw=[8.138 2.608 2.432 2.406 2.490 2.446 2.411 2.449 ] reps=8 probe=7.595
+pass=5 arm=psearch band=common_k1000 rows=1000, median_last5=7.658 raw=[19.354 8.179 7.683 7.658 7.677 7.671 7.632 7.637 ] reps=8 probe=18.768
+pass=5 arm=psearch band=or2_k10 rows=10, median_last5=1.817 raw=[6.509 1.933 1.857 1.807 1.842 1.817 1.794 1.871 ] reps=8 probe=6.165
+pass=5 arm=psearch band=or4_k10 rows=10, median_last5=10.370 raw=[14.307 11.221 10.504 10.782 10.370 10.684 10.325 10.240 ] reps=8 probe=14.699
+pass=5 arm=psearch band=and_k10 rows=10, median_last5=1.613 raw=[6.307 1.681 1.609 1.613 1.616 1.588 1.643 1.585 ] reps=8 probe=6.187
+pass=5 arm=psearch band=and_us_k10 rows=10, median_last5=8.946 raw=[12.160 9.707 9.284 8.946 8.854 9.544 9.735 8.420 ] reps=8 probe=11.885
+pass=5 arm=psearch band=and_ww_k10 rows=10, median_last5=2.930 raw=[7.878 3.077 2.962 2.935 2.963 2.928 2.930 2.926 ] reps=8 probe=7.882
+pass=5 arm=psearch band=not_k10 rows=10, median_last5=1.657 raw=[6.529 1.706 1.715 1.640 1.639 1.657 1.820 1.662 ] reps=8 probe=5.575
+pass=5 arm=psearch band=phrase_us_k10 rows=10, median_last5=8.651 raw=[12.246 9.508 9.313 8.651 8.739 8.607 8.346 9.125 ] reps=8 probe=12.100
+pass=5 arm=psearch band=phrase_ww_k10 rows=10, median_last5=8.659 raw=[12.239 9.119 9.382 8.852 8.422 8.659 8.587 8.791 ] reps=8 probe=12.247
+pass=5 arm=psearch band=count_common rows=735955, median_last5=0.957 raw=[4.255 1.055 0.981 0.965 0.956 0.957 0.975 0.955 ] reps=8 probe=3.838

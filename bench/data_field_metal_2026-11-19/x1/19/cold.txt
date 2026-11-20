@@ -1,0 +1,50 @@
+rep=1 arm=fts band=rare_k10 cold_ms=45.56
+rep=1 arm=fts band=common_k10 cold_ms=54.616
+rep=1 arm=fts band=and_k10 cold_ms=63.925
+rep=1 arm=pgts_main band=rare_k10 cold_ms=28.659
+rep=1 arm=pgts_main band=common_k10 cold_ms=42.291
+rep=1 arm=pgts_main band=and_k10 cold_ms=SKIPPED(timeout in latency)
+rep=1 arm=pgts_main band=and_k10_cte cold_ms=7242.419
+rep=1 arm=gin band=rare_k10 cold_ms=1728.981
+rep=1 arm=gin band=common_k10 cold_ms=6194.904
+rep=1 arm=gin band=and_k10 cold_ms=1371.212
+rep=2 arm=fts band=rare_k10 cold_ms=ERR Expecting value: line 1 column 1 (char 0)
+rep=2 arm=fts band=common_k10 cold_ms=ERR Expecting value: line 1 column 1 (char 0)
+rep=2 arm=fts band=and_k10 cold_ms=ERR Expecting value: line 1 column 1 (char 0)
+rep=2 arm=pgts_main band=rare_k10 cold_ms=31.471
+rep=2 arm=pgts_main band=common_k10 cold_ms=42.076
+rep=2 arm=pgts_main band=and_k10 cold_ms=SKIPPED(timeout in latency)
+rep=2 arm=pgts_main band=and_k10_cte cold_ms=7382.048
+rep=2 arm=gin band=rare_k10 cold_ms=1733.473
+rep=2 arm=gin band=common_k10 cold_ms=6224.165
+rep=2 arm=gin band=and_k10 cold_ms=1416.312
+rep=3 arm=fts band=rare_k10 cold_ms=ERR Expecting value: line 1 column 1 (char 0)
+rep=3 arm=fts band=common_k10 cold_ms=ERR Expecting value: line 1 column 1 (char 0)
+rep=3 arm=fts band=and_k10 cold_ms=ERR Expecting value: line 1 column 1 (char 0)
+rep=3 arm=pgts_main band=rare_k10 cold_ms=30.559
+rep=3 arm=pgts_main band=common_k10 cold_ms=41.857
+rep=3 arm=pgts_main band=and_k10 cold_ms=SKIPPED(timeout in latency)
+rep=3 arm=pgts_main band=and_k10_cte cold_ms=7356.586
+rep=3 arm=gin band=rare_k10 cold_ms=1769.518
+rep=3 arm=gin band=common_k10 cold_ms=6188.202
+rep=3 arm=gin band=and_k10 cold_ms=1364.126
+rep=4 arm=fts band=rare_k10 cold_ms=ERR Expecting value: line 1 column 1 (char 0)
+rep=4 arm=fts band=common_k10 cold_ms=ERR Expecting value: line 1 column 1 (char 0)
+rep=4 arm=fts band=and_k10 cold_ms=ERR Expecting value: line 1 column 1 (char 0)
+rep=4 arm=pgts_main band=rare_k10 cold_ms=28.064
+rep=4 arm=pgts_main band=common_k10 cold_ms=40.811
+rep=4 arm=pgts_main band=and_k10 cold_ms=SKIPPED(timeout in latency)
+rep=4 arm=pgts_main band=and_k10_cte cold_ms=7362.797
+rep=4 arm=gin band=rare_k10 cold_ms=1746.527
+rep=4 arm=gin band=common_k10 cold_ms=6183.084
+rep=4 arm=gin band=and_k10 cold_ms=1374.715
+rep=5 arm=fts band=rare_k10 cold_ms=ERR Expecting value: line 1 column 1 (char 0)
+rep=5 arm=fts band=common_k10 cold_ms=ERR Expecting value: line 1 column 1 (char 0)
+rep=5 arm=fts band=and_k10 cold_ms=ERR Expecting value: line 1 column 1 (char 0)
+rep=5 arm=pgts_main band=rare_k10 cold_ms=29.827
+rep=5 arm=pgts_main band=common_k10 cold_ms=43.366
+rep=5 arm=pgts_main band=and_k10 cold_ms=SKIPPED(timeout in latency)
+rep=5 arm=pgts_main band=and_k10_cte cold_ms=7223.993
+rep=5 arm=gin band=rare_k10 cold_ms=1732.675
+rep=5 arm=gin band=common_k10 cold_ms=6214.06
+rep=5 arm=gin band=and_k10 cold_ms=1421.877

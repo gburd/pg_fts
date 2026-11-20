@@ -1,0 +1,26 @@
+pass=1 arm=fts band=and_us_k10 c1=473.390541 f1=0 c16=6679.564294 f16=0 c64=24087.990399 f64=0 c128=33946.880407 f128=0 c256=33663.458800 f256=0
+pass=1 arm=fts band=common_k10 c1=3058.988832 f1=0 c16=40599.853853 f16=0 c64=128243.441582 f64=0 c128=180419.284893 f128=0 c256=168496.091248 f256=0
+pass=1 arm=fts band=count_common c1=5897.189945 f1=0 c16=82890.429527 f16=0 c64=261655.254362 f64=0 c128=400475.999930 f128=0 c256=409707.852439 f256=0
+pass=1 arm=fts band=rare_k10 c1=4672.689707 f1=0 c16=62036.427514 f16=0 c64=128429.535661 f64=0 c128=146297.171263 f128=0 c256=130149.387020 f256=0
+pass=1 arm=pgts_main band=and_us_k10_cte SKIPPED(timeout in latency)
+pass=1 arm=pgts_main band=and_us_k10 SKIPPED(timeout in latency)
+pass=1 arm=pgts_main band=common_k10 c1=101.684361 f1=0 c16=683.964779 f16=0 c64=1266.708756 f64=0 c128=1158.035882 f128=0 c256=1234.775262 f256=0
+pass=1 arm=pgts_main band=count_common SKIPPED(timeout in latency)
+pass=1 arm=pgts_main band=rare_k10 c1=1098.578814 f1=0 c16=11986.471597 f16=0 c64=21290.943095 f64=0 c128=12858.428601 f128=0 c256=13153.117555 f256=0
+pass=1 arm=gin band=and_us_k10 SKIPPED(latency 2439.691 ms > 1 s)
+pass=1 arm=gin band=common_k10 SKIPPED(latency 3880.777 ms > 1 s)
+pass=1 arm=gin band=count_common c1=2.568800 f1=0 c16=27.246200 f16=0 c64=98.640910 f64=0 c128=137.199139 f128=0 c256=162.533616 f256=0
+pass=1 arm=gin band=rare_k10 c1=20.247351 f1=0 c16=243.628887 f16=0 c64=547.871580 f64=0 c128=408.347163 f128=0 c256=359.839640 f256=0
+pass=2 arm=gin band=and_us_k10 SKIPPED(latency 2439.691 ms > 1 s)
+pass=2 arm=gin band=common_k10 SKIPPED(latency 3880.777 ms > 1 s)
+pass=2 arm=gin band=count_common c1=2.397109 f1=0 c16=30.909140 f16=0 c64=103.157014 f64=0 c128=141.685024 f128=0 c256=164.242830 f256=0
+pass=2 arm=gin band=rare_k10 c1=19.929230 f1=0 c16=238.267650 f16=0 c64=549.474167 f64=0 c128=398.153583 f128=0 c256=415.870073 f256=0
+pass=2 arm=pgts_main band=and_us_k10_cte SKIPPED(timeout in latency)
+pass=2 arm=pgts_main band=and_us_k10 SKIPPED(timeout in latency)
+pass=2 arm=pgts_main band=common_k10 c1=99.072372 f1=0 c16=659.295370 f16=0 c64=1359.723345 f64=0 c128=1106.914059 f128=0 c256=1252.855242 f256=0
+pass=2 arm=pgts_main band=count_common SKIPPED(timeout in latency)
+pass=2 arm=pgts_main band=rare_k10 c1=1118.845239 f1=0 c16=11961.466564 f16=0 c64=20593.920471 f64=0 c128=13062.635519 f128=0 c256=15286.436838 f256=0
+pass=2 arm=fts band=and_us_k10 c1=466.012800 f1=0 c16=6673.789296 f16=0 c64=24083.482469 f64=0 c128=34002.913321 f128=0 c256=33624.895164 f256=0
+pass=2 arm=fts band=common_k10 c1=3008.664373 f1=0 c16=40367.157946 f16=0 c64=128278.853307 f64=0 c128=180713.235172 f128=0 c256=169234.690071 f256=0
+pass=2 arm=fts band=count_common c1=5908.035679 f1=0 c16=83590.244212 f16=0 c64=258507.567793 f64=0 c128=393286.337292 f128=0 c256=403292.539685 f256=0
+pass=2 arm=fts band=rare_k10 c1=4546.568989 f1=0 c16=61470.308991 f16=0 c64=130433.009101 f64=0 c128=150813.021163 f128=0 c256=120809.799699 f256=0

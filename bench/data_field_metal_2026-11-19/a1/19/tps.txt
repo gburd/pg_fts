@@ -1,0 +1,26 @@
+pass=1 arm=fts band=and_us_k10 c1=537.074794 f1=0 c16=8191.897209 f16=0 c64=26790.310614 f64=0 c128=28414.657979 f128=0 c256=27945.143177 f256=0
+pass=1 arm=fts band=common_k10 c1=3007.766129 f1=0 c16=45971.054216 f16=0 c64=142351.133580 f64=0 c128=117666.636694 f128=0 c256=110930.422777 f256=0
+pass=1 arm=fts band=count_common c1=6518.073359 f1=0 c16=95270.845525 f16=0 c64=308498.002988 f64=0 c128=289918.917915 f128=0 c256=267649.018782 f256=0
+pass=1 arm=fts band=rare_k10 c1=4368.005888 f1=0 c16=60483.089591 f16=0 c64=152796.146989 f64=0 c128=147576.548682 f128=0 c256=142192.671276 f256=0
+pass=1 arm=pgts_main band=and_us_k10_cte SKIPPED(latency 277788.368 ms > 1 s)
+pass=1 arm=pgts_main band=and_us_k10 SKIPPED(timeout in latency)
+pass=1 arm=pgts_main band=common_k10 c1=92.828027 f1=0 c16=1301.644010 f16=0 c64=3525.802277 f64=0 c128=3548.758586 f128=0 c256=3566.582034 f256=0
+pass=1 arm=pgts_main band=count_common SKIPPED(latency 235900.850 ms > 1 s)
+pass=1 arm=pgts_main band=rare_k10 c1=1023.624635 f1=0 c16=14542.759239 f16=0 c64=20019.739697 f64=0 c128=19941.987128 f128=0 c256=19933.872416 f256=0
+pass=1 arm=gin band=and_us_k10 SKIPPED(latency 1120.502 ms > 1 s)
+pass=1 arm=gin band=common_k10 SKIPPED(latency 2701.674 ms > 1 s)
+pass=1 arm=gin band=count_common SKIPPED(latency 2040.752 ms > 1 s)
+pass=1 arm=gin band=rare_k10 c1=23.486992 f1=0 c16=242.925381 f16=0 c64=523.080895 f64=0 c128=551.496364 f128=0 c256=547.097439 f256=0
+pass=2 arm=gin band=and_us_k10 SKIPPED(latency 1120.502 ms > 1 s)
+pass=2 arm=gin band=common_k10 SKIPPED(latency 2701.674 ms > 1 s)
+pass=2 arm=gin band=count_common SKIPPED(latency 2040.752 ms > 1 s)
+pass=2 arm=gin band=rare_k10 c1=23.742796 f1=0 c16=242.924588 f16=0 c64=523.252394 f64=0 c128=551.715221 f128=0 c256=551.052613 f256=0
+pass=2 arm=pgts_main band=and_us_k10_cte SKIPPED(latency 277788.368 ms > 1 s)
+pass=2 arm=pgts_main band=and_us_k10 SKIPPED(timeout in latency)
+pass=2 arm=pgts_main band=common_k10 c1=92.415011 f1=0 c16=1289.275076 f16=0 c64=3531.724020 f64=0 c128=3547.745124 f128=0 c256=3596.592941 f256=0
+pass=2 arm=pgts_main band=count_common SKIPPED(latency 235900.850 ms > 1 s)
+pass=2 arm=pgts_main band=rare_k10 c1=1045.157302 f1=0 c16=14682.247945 f16=0 c64=19414.357451 f64=0 c128=19310.785863 f128=0 c256=19347.396603 f256=0
+pass=2 arm=fts band=and_us_k10 c1=532.415901 f1=0 c16=8053.378187 f16=0 c64=26921.026724 f64=0 c128=28565.733196 f128=0 c256=28165.218433 f256=0
+pass=2 arm=fts band=common_k10 c1=3092.095978 f1=0 c16=47848.357742 f16=0 c64=148896.282548 f64=0 c128=124836.447398 f128=0 c256=121510.991781 f256=0
+pass=2 arm=fts band=count_common c1=6637.998645 f1=0 c16=98445.597064 f16=0 c64=314190.542994 f64=0 c128=294649.197027 f128=0 c256=272426.721047 f256=0
+pass=2 arm=fts band=rare_k10 c1=4374.384219 f1=0 c16=61003.594926 f16=0 c64=150150.726738 f64=0 c128=145683.219971 f128=0 c256=140524.020638 f256=0

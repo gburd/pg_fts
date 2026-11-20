@@ -1,0 +1,869 @@
+== fts rare_k10
+Aggregate  (cost=40.21..40.22 rows=1 width=8)
+  ->  Limit  (cost=0.01..40.09 rows=10 width=16)
+        ->  Index Scan using docs_idx on docs  (cost=0.01..43454.95 rows=10842 width=16)
+              Index Cond: (to_ftsdoc('english'::regconfig, content) @@@ '''slovakia'''::ftsquery)
+              Order By: (to_ftsdoc('english'::regconfig, content) <=> '''slovakia'''::ftsquery)
+== fts mid_k10
+Aggregate  (cost=39.12..39.13 rows=1 width=8)
+  ->  Limit  (cost=0.01..38.99 rows=10 width=16)
+        ->  Index Scan using docs_idx on docs  (cost=0.01..93666.57 rows=24025 width=16)
+              Index Cond: (to_ftsdoc('english'::regconfig, content) @@@ '''hungari'''::ftsquery)
+              Order By: (to_ftsdoc('english'::regconfig, content) <=> '''hungari'''::ftsquery)
+== fts common_k10
+Aggregate  (cost=13.35..13.36 rows=1 width=8)
+  ->  Limit  (cost=0.01..13.22 rows=10 width=16)
+        ->  Index Scan using docs_idx on docs  (cost=0.01..968290.44 rows=732686 width=16)
+              Index Cond: (to_ftsdoc('english'::regconfig, content) @@@ '''year'''::ftsquery)
+              Order By: (to_ftsdoc('english'::regconfig, content) <=> '''year'''::ftsquery)
+== fts common_k100
+Aggregate  (cost=133.41..133.42 rows=1 width=8)
+  ->  Limit  (cost=0.01..132.16 rows=100 width=16)
+        ->  Index Scan using docs_idx on docs  (cost=0.01..968290.44 rows=732686 width=16)
+              Index Cond: (to_ftsdoc('english'::regconfig, content) @@@ '''year'''::ftsquery)
+              Order By: (to_ftsdoc('english'::regconfig, content) <=> '''year'''::ftsquery)
+== fts common_k1000
+Aggregate  (cost=1334.07..1334.08 rows=1 width=8)
+  ->  Limit  (cost=0.01..1321.57 rows=1000 width=16)
+        ->  Index Scan using docs_idx on docs  (cost=0.01..968290.44 rows=732686 width=16)
+              Index Cond: (to_ftsdoc('english'::regconfig, content) @@@ '''year'''::ftsquery)
+              Order By: (to_ftsdoc('english'::regconfig, content) <=> '''year'''::ftsquery)
+== fts or2_k10
+Aggregate  (cost=38.26..38.27 rows=1 width=8)
+  ->  Limit  (cost=0.01..38.14 rows=10 width=16)
+        ->  Index Scan using docs_idx on docs  (cost=0.01..132953.51 rows=34867 width=16)
+              Index Cond: (to_ftsdoc('english'::regconfig, content) @@@ '(''slovakia'' | ''hungari'')'::ftsquery)
+              Order By: (to_ftsdoc('english'::regconfig, content) <=> '(''slovakia'' | ''hungari'')'::ftsquery)
+== fts or4_k10
+Aggregate  (cost=13.44..13.45 rows=1 width=8)
+  ->  Limit  (cost=0.01..13.31 rows=10 width=16)
+        ->  Index Scan using docs_idx on docs  (cost=0.01..967740.00 rows=727333 width=16)
+              Index Cond: (to_ftsdoc('english'::regconfig, content) @@@ '(((''film'' | ''music'') | ''album'') | ''band'')'::ftsquery)
+              Order By: (to_ftsdoc('english'::regconfig, content) <=> '(((''film'' | ''music'') | ''album'') | ''band'')'::ftsquery)
+== fts and_k10
+Aggregate  (cost=40.21..40.22 rows=1 width=8)
+  ->  Limit  (cost=0.01..40.09 rows=10 width=16)
+        ->  Index Scan using docs_idx on docs  (cost=0.01..43454.95 rows=10842 width=16)
+              Index Cond: (to_ftsdoc('english'::regconfig, content) @@@ '(''slovakia'' & ''hungari'')'::ftsquery)
+              Order By: (to_ftsdoc('english'::regconfig, content) <=> '(''slovakia'' & ''hungari'')'::ftsquery)
+== fts and_us_k10
+Aggregate  (cost=17.81..17.82 rows=1 width=8)
+  ->  Limit  (cost=0.01..17.68 rows=10 width=16)
+        ->  Index Scan using docs_idx on docs  (cost=0.01..948092.83 rows=536259 width=16)
+              Index Cond: (to_ftsdoc('english'::regconfig, content) @@@ '(''unit'' & ''state'')'::ftsquery)
+              Order By: (to_ftsdoc('english'::regconfig, content) <=> '(''unit'' & ''state'')'::ftsquery)
+== fts and_ww_k10
+Aggregate  (cost=26.22..26.23 rows=1 width=8)
+  ->  Limit  (cost=0.01..26.09 rows=10 width=16)
+        ->  Index Scan using docs_idx on docs  (cost=0.01..694392.79 rows=266168 width=16)
+              Index Cond: (to_ftsdoc('english'::regconfig, content) @@@ '(''world'' & ''war'')'::ftsquery)
+              Order By: (to_ftsdoc('english'::regconfig, content) <=> '(''world'' & ''war'')'::ftsquery)
+== fts not_k10
+Aggregate  (cost=39.12..39.13 rows=1 width=8)
+  ->  Limit  (cost=0.01..38.99 rows=10 width=16)
+        ->  Index Scan using docs_idx on docs  (cost=0.01..93666.57 rows=24025 width=16)
+              Index Cond: (to_ftsdoc('english'::regconfig, content) @@@ '(''hungari'' & !''slovakia'')'::ftsquery)
+              Order By: (to_ftsdoc('english'::regconfig, content) <=> '(''hungari'' & !''slovakia'')'::ftsquery)
+== fts phrase_us_k10
+Aggregate  (cost=17.53..17.54 rows=1 width=8)
+  ->  Limit  (cost=0.01..17.41 rows=10 width=16)
+        ->  Index Scan using fts_pos on docs_pos  (cost=0.01..937557.71 rows=538698 width=16)
+              Index Cond: (to_ftsdoc('english'::regconfig, content) @@@ '(''unit'' <-> ''state'')'::ftsquery)
+              Order By: (to_ftsdoc('english'::regconfig, content) <=> '(''unit'' <-> ''state'')'::ftsquery)
+== fts phrase_ww_k10
+Aggregate  (cost=26.47..26.48 rows=1 width=8)
+  ->  Limit  (cost=0.01..26.34 rows=10 width=16)
+        ->  Index Scan using fts_pos on docs_pos  (cost=0.01..704182.03 rows=267379 width=16)
+              Index Cond: (to_ftsdoc('english'::regconfig, content) @@@ '(''world'' <-> ''war'')'::ftsquery)
+              Order By: (to_ftsdoc('english'::regconfig, content) <=> '(''world'' <-> ''war'')'::ftsquery)
+== fts count_common
+Custom Scan (FtsCount)  (cost=0.00..2233.38 rows=1 width=8)
+== pgts_rel rare_k10
+Aggregate  (cost=28.27..28.28 rows=1 width=8)
+  ->  Limit  (cost=0.01..28.15 rows=10 width=16)
+        ->  Index Scan using docs_idx on docs  (cost=0.01..6174469.19 rows=2194221 width=16)
+              Order By: (content <@> 'docs_idx:slovakia'::bm25query)
+== pgts_rel mid_k10
+Aggregate  (cost=28.27..28.28 rows=1 width=8)
+  ->  Limit  (cost=0.01..28.15 rows=10 width=16)
+        ->  Index Scan using docs_idx on docs  (cost=0.01..6174469.19 rows=2194221 width=16)
+              Order By: (content <@> 'docs_idx:hungary'::bm25query)
+== pgts_rel common_k10
+Aggregate  (cost=28.27..28.28 rows=1 width=8)
+  ->  Limit  (cost=0.01..28.15 rows=10 width=16)
+        ->  Index Scan using docs_idx on docs  (cost=0.01..6174469.19 rows=2194221 width=16)
+              Order By: (content <@> 'docs_idx:year'::bm25query)
+== pgts_rel common_k100
+Aggregate  (cost=282.66..282.67 rows=1 width=8)
+  ->  Limit  (cost=0.01..281.41 rows=100 width=16)
+        ->  Index Scan using docs_idx on docs  (cost=0.01..6174469.19 rows=2194221 width=16)
+              Order By: (content <@> 'docs_idx:year'::bm25query)
+== pgts_rel common_k1000
+Aggregate  (cost=2826.48..2826.49 rows=1 width=8)
+  ->  Limit  (cost=0.01..2813.98 rows=1000 width=16)
+        ->  Index Scan using docs_idx on docs  (cost=0.01..6174469.19 rows=2194221 width=16)
+              Order By: (content <@> 'docs_idx:year'::bm25query)
+== pgts_rel or2_k10
+Aggregate  (cost=28.27..28.28 rows=1 width=8)
+  ->  Limit  (cost=0.01..28.15 rows=10 width=16)
+        ->  Index Scan using docs_idx on docs  (cost=0.01..6174469.19 rows=2194221 width=16)
+              Order By: (content <@> 'docs_idx:slovakia hungary'::bm25query)
+== pgts_rel or4_k10
+Aggregate  (cost=28.27..28.28 rows=1 width=8)
+  ->  Limit  (cost=0.01..28.15 rows=10 width=16)
+        ->  Index Scan using docs_idx on docs  (cost=0.01..6174469.19 rows=2194221 width=16)
+              Order By: (content <@> 'docs_idx:film music album band'::bm25query)
+== pgts_rel and_k10
+Aggregate  (cost=794287.84..794287.85 rows=1 width=8)
+  ->  Limit  (cost=794287.69..794287.72 rows=10 width=16)
+        ->  Sort  (cost=794287.69..794288.24 rows=219 width=16)
+              Sort Key: ((docs.content <@> 'docs_idx:slovakia hungary'::bm25query))
+              ->  Seq Scan on docs  (cost=0.00..794282.96 rows=219 width=16)
+                    Filter: (content @@ '''slovakia'' & ''hungari'''::tsquery)
+== pgts_rel and_us_k10
+Aggregate  (cost=1073177.87..1073177.88 rows=1 width=8)
+  ->  Limit  (cost=1073177.72..1073177.74 rows=10 width=16)
+        ->  Sort  (cost=1073177.72..1073454.77 rows=110819 width=16)
+              Sort Key: ((docs.content <@> 'docs_idx:united states'::bm25query))
+              ->  Seq Scan on docs  (cost=0.00..1070782.96 rows=110819 width=16)
+                    Filter: (content @@ '''unit'' & ''state'''::tsquery)
+== pgts_rel and_ww_k10
+Aggregate  (cost=905513.52..905513.53 rows=1 width=8)
+  ->  Limit  (cost=905513.37..905513.40 rows=10 width=16)
+        ->  Sort  (cost=905513.37..905624.19 rows=44328 width=16)
+              Sort Key: ((docs.content <@> 'docs_idx:world war'::bm25query))
+              ->  Seq Scan on docs  (cost=0.00..904555.46 rows=44328 width=16)
+                    Filter: (content @@ '''world'' & ''war'''::tsquery)
+== pgts_rel not_k10
+Aggregate  (cost=794287.84..794287.85 rows=1 width=8)
+  ->  Limit  (cost=794287.69..794287.72 rows=10 width=16)
+        ->  Sort  (cost=794287.69..794288.24 rows=219 width=16)
+              Sort Key: ((docs.content <@> 'docs_idx:hungary'::bm25query))
+              ->  Seq Scan on docs  (cost=0.00..794282.96 rows=219 width=16)
+                    Filter: (content @@ '''hungari'' & !''slovakia'''::tsquery)
+== pgts_rel phrase_us_k10
+Aggregate  (cost=1073177.87..1073177.88 rows=1 width=8)
+  ->  Limit  (cost=1073177.72..1073177.74 rows=10 width=16)
+        ->  Sort  (cost=1073177.72..1073454.77 rows=110819 width=16)
+              Sort Key: ((docs.content <@> 'docs_idx:united states'::bm25query))
+              ->  Seq Scan on docs  (cost=0.00..1070782.96 rows=110819 width=16)
+                    Filter: (content @@ '''unit'' <-> ''state'''::tsquery)
+== pgts_rel phrase_ww_k10
+Aggregate  (cost=905513.52..905513.53 rows=1 width=8)
+  ->  Limit  (cost=905513.37..905513.40 rows=10 width=16)
+        ->  Sort  (cost=905513.37..905624.19 rows=44328 width=16)
+              Sort Key: ((docs.content <@> 'docs_idx:world war'::bm25query))
+              ->  Seq Scan on docs  (cost=0.00..904555.46 rows=44328 width=16)
+                    Filter: (content @@ '''world'' <-> ''war'''::tsquery)
+== pgts_rel and_k10_cte
+Aggregate  (cost=591241.15..591241.16 rows=1 width=8)
+  ->  Limit  (cost=591241.00..591241.02 rows=10 width=16)
+        CTE f
+          ->  Index Scan using docs_idx on docs  (cost=10.16..590684.38 rows=219 width=741)
+                Index Cond: (content @@ '''slovakia'' & ''hungari'''::tsquery)
+        ->  Sort  (cost=556.61..557.16 rows=219 width=16)
+              Sort Key: ((f.content <@> 'docs_idx:slovakia hungary'::bm25query))
+              ->  CTE Scan on f  (cost=0.00..551.88 rows=219 width=16)
+== pgts_rel and_us_k10_cte
+Aggregate  (cost=877294.92..877294.93 rows=1 width=8)
+  ->  Limit  (cost=877294.77..877294.80 rows=10 width=16)
+        CTE f
+          ->  Index Scan using docs_idx on docs  (cost=4961.91..595636.13 rows=110819 width=741)
+                Index Cond: (content @@ '''unit'' & ''state'''::tsquery)
+        ->  Sort  (cost=281658.64..281935.69 rows=110819 width=16)
+              Sort Key: ((f.content <@> 'docs_idx:united states'::bm25query))
+              ->  CTE Scan on f  (cost=0.00..279263.88 rows=110819 width=16)
+== pgts_rel and_ww_k10_cte
+Aggregate  (cost=705323.69..705323.70 rows=1 width=8)
+  ->  Limit  (cost=705323.54..705323.56 rows=10 width=16)
+        CTE f
+          ->  Index Scan using docs_idx on docs  (cost=1984.85..592659.07 rows=44328 width=741)
+                Index Cond: (content @@ '''world'' & ''war'''::tsquery)
+        ->  Sort  (cost=112664.47..112775.29 rows=44328 width=16)
+              Sort Key: ((f.content <@> 'docs_idx:world war'::bm25query))
+              ->  CTE Scan on f  (cost=0.00..111706.56 rows=44328 width=16)
+== pgts_rel not_k10_cte
+Aggregate  (cost=591241.15..591241.16 rows=1 width=8)
+  ->  Limit  (cost=591241.00..591241.02 rows=10 width=16)
+        CTE f
+          ->  Index Scan using docs_idx on docs  (cost=10.16..590684.38 rows=219 width=741)
+                Index Cond: (content @@ '''hungari'' & !''slovakia'''::tsquery)
+        ->  Sort  (cost=556.61..557.16 rows=219 width=16)
+              Sort Key: ((f.content <@> 'docs_idx:hungary'::bm25query))
+              ->  CTE Scan on f  (cost=0.00..551.88 rows=219 width=16)
+== pgts_rel phrase_us_k10_cte
+Aggregate  (cost=877294.92..877294.93 rows=1 width=8)
+  ->  Limit  (cost=877294.77..877294.80 rows=10 width=16)
+        CTE f
+          ->  Index Scan using docs_idx on docs  (cost=4961.91..595636.13 rows=110819 width=741)
+                Index Cond: (content @@ '''unit'' <-> ''state'''::tsquery)
+        ->  Sort  (cost=281658.64..281935.69 rows=110819 width=16)
+              Sort Key: ((f.content <@> 'docs_idx:united states'::bm25query))
+              ->  CTE Scan on f  (cost=0.00..279263.88 rows=110819 width=16)
+== pgts_rel phrase_ww_k10_cte
+Aggregate  (cost=705323.69..705323.70 rows=1 width=8)
+  ->  Limit  (cost=705323.54..705323.56 rows=10 width=16)
+        CTE f
+          ->  Index Scan using docs_idx on docs  (cost=1984.85..592659.07 rows=44328 width=741)
+                Index Cond: (content @@ '''world'' <-> ''war'''::tsquery)
+        ->  Sort  (cost=112664.47..112775.29 rows=44328 width=16)
+              Sort Key: ((f.content <@> 'docs_idx:world war'::bm25query))
+              ->  CTE Scan on f  (cost=0.00..111706.56 rows=44328 width=16)
+== pgts_rel count_common
+Finalize Aggregate  (cost=462014.75..462014.76 rows=1 width=8)
+  ->  Gather  (cost=462014.54..462014.75 rows=2 width=8)
+        Workers Planned: 2
+        ->  Partial Aggregate  (cost=461014.54..461014.55 rows=1 width=8)
+              ->  Parallel Seq Scan on docs  (cost=0.00..460945.28 rows=27705 width=0)
+                    Filter: (content @@ '''year'''::tsquery)
+== pgts_main rare_k10
+Aggregate  (cost=28.28..28.29 rows=1 width=8)
+  ->  Limit  (cost=0.01..28.15 rows=10 width=16)
+        ->  Index Scan using docs_idx on docs  (cost=0.01..6157170.40 rows=2187770 width=16)
+              Order By: (content <@> 'docs_idx:slovakia'::bm25query)
+== pgts_main mid_k10
+Aggregate  (cost=28.28..28.29 rows=1 width=8)
+  ->  Limit  (cost=0.01..28.15 rows=10 width=16)
+        ->  Index Scan using docs_idx on docs  (cost=0.01..6157170.40 rows=2187770 width=16)
+              Order By: (content <@> 'docs_idx:hungary'::bm25query)
+== pgts_main common_k10
+Aggregate  (cost=28.28..28.29 rows=1 width=8)
+  ->  Limit  (cost=0.01..28.15 rows=10 width=16)
+        ->  Index Scan using docs_idx on docs  (cost=0.01..6157170.40 rows=2187770 width=16)
+              Order By: (content <@> 'docs_idx:year'::bm25query)
+== pgts_main common_k100
+Aggregate  (cost=282.70..282.71 rows=1 width=8)
+  ->  Limit  (cost=0.01..281.45 rows=100 width=16)
+        ->  Index Scan using docs_idx on docs  (cost=0.01..6157170.40 rows=2187770 width=16)
+              Order By: (content <@> 'docs_idx:year'::bm25query)
+== pgts_main common_k1000
+Aggregate  (cost=2826.87..2826.88 rows=1 width=8)
+  ->  Limit  (cost=0.01..2814.37 rows=1000 width=16)
+        ->  Index Scan using docs_idx on docs  (cost=0.01..6157170.40 rows=2187770 width=16)
+              Order By: (content <@> 'docs_idx:year'::bm25query)
+== pgts_main or2_k10
+Aggregate  (cost=28.28..28.29 rows=1 width=8)
+  ->  Limit  (cost=0.01..28.15 rows=10 width=16)
+        ->  Index Scan using docs_idx on docs  (cost=0.01..6157170.40 rows=2187770 width=16)
+              Order By: (content <@> 'docs_idx:slovakia hungary'::bm25query)
+== pgts_main or4_k10
+Aggregate  (cost=28.28..28.29 rows=1 width=8)
+  ->  Limit  (cost=0.01..28.15 rows=10 width=16)
+        ->  Index Scan using docs_idx on docs  (cost=0.01..6157170.40 rows=2187770 width=16)
+              Order By: (content <@> 'docs_idx:film music album band'::bm25query)
+== pgts_main and_k10
+Aggregate  (cost=792610.58..792610.59 rows=1 width=8)
+  ->  Limit  (cost=792610.43..792610.46 rows=10 width=16)
+        ->  Sort  (cost=792610.43..792610.98 rows=219 width=16)
+              Sort Key: ((docs.content <@> 'docs_idx:slovakia hungary'::bm25query))
+              ->  Seq Scan on docs  (cost=0.00..792605.70 rows=219 width=16)
+                    Filter: (content @@ '''slovakia'' & ''hungari'''::tsquery)
+== pgts_main and_us_k10
+Aggregate  (cost=1237851.20..1237851.21 rows=1 width=8)
+  ->  Limit  (cost=1237851.05..1237851.07 rows=10 width=16)
+        ->  Sort  (cost=1237851.05..1238293.02 rows=176789 width=16)
+              Sort Key: ((docs.content <@> 'docs_idx:united states'::bm25query))
+              ->  Seq Scan on docs  (cost=0.00..1234030.70 rows=176789 width=16)
+                    Filter: (content @@ '''unit'' & ''state'''::tsquery)
+== pgts_main and_ww_k10
+Aggregate  (cost=903505.93..903505.94 rows=1 width=8)
+  ->  Limit  (cost=903505.78..903505.81 rows=10 width=16)
+        ->  Sort  (cost=903505.78..903616.27 rows=44197 width=16)
+              Sort Key: ((docs.content <@> 'docs_idx:world war'::bm25query))
+              ->  Seq Scan on docs  (cost=0.00..902550.70 rows=44197 width=16)
+                    Filter: (content @@ '''world'' & ''war'''::tsquery)
+== pgts_main not_k10
+Aggregate  (cost=792610.58..792610.59 rows=1 width=8)
+  ->  Limit  (cost=792610.43..792610.46 rows=10 width=16)
+        ->  Sort  (cost=792610.43..792610.98 rows=219 width=16)
+              Sort Key: ((docs.content <@> 'docs_idx:hungary'::bm25query))
+              ->  Seq Scan on docs  (cost=0.00..792605.70 rows=219 width=16)
+                    Filter: (content @@ '''hungari'' & !''slovakia'''::tsquery)
+== pgts_main phrase_us_k10
+Aggregate  (cost=1182128.67..1182128.68 rows=1 width=8)
+  ->  Limit  (cost=1182128.52..1182128.54 rows=10 width=16)
+        ->  Sort  (cost=1182128.52..1182515.24 rows=154691 width=16)
+              Sort Key: ((docs.content <@> 'docs_idx:united states'::bm25query))
+              ->  Seq Scan on docs  (cost=0.00..1178785.70 rows=154691 width=16)
+                    Filter: (content @@ '''unit'' <-> ''state'''::tsquery)
+== pgts_main phrase_ww_k10
+Aggregate  (cost=903505.93..903505.94 rows=1 width=8)
+  ->  Limit  (cost=903505.78..903505.81 rows=10 width=16)
+        ->  Sort  (cost=903505.78..903616.27 rows=44197 width=16)
+              Sort Key: ((docs.content <@> 'docs_idx:world war'::bm25query))
+              ->  Seq Scan on docs  (cost=0.00..902550.70 rows=44197 width=16)
+                    Filter: (content @@ '''world'' <-> ''war'''::tsquery)
+== pgts_main and_k10_cte
+Aggregate  (cost=590074.70..590074.71 rows=1 width=8)
+  ->  Limit  (cost=590074.55..590074.57 rows=10 width=16)
+        CTE f
+          ->  Index Scan using docs_idx on docs  (cost=10.16..589517.93 rows=219 width=748)
+                Index Cond: (content @@ '''slovakia'' & ''hungari'''::tsquery)
+        ->  Sort  (cost=556.61..557.16 rows=219 width=16)
+              Sort Key: ((f.content <@> 'docs_idx:slovakia hungary'::bm25query))
+              ->  CTE Scan on f  (cost=0.00..551.88 rows=219 width=16)
+== pgts_main and_us_k10_cte
+Aggregate  (cost=1046775.14..1046775.15 rows=1 width=8)
+  ->  Limit  (cost=1046774.99..1046775.01 rows=10 width=16)
+        CTE f
+          ->  Index Scan using docs_idx on docs  (cost=7938.59..597446.36 rows=176789 width=748)
+                Index Cond: (content @@ '''unit'' & ''state'''::tsquery)
+        ->  Sort  (cost=449328.63..449770.60 rows=176789 width=16)
+              Sort Key: ((f.content <@> 'docs_idx:united states'::bm25query))
+              ->  CTE Scan on f  (cost=0.00..445508.28 rows=176789 width=16)
+== pgts_main and_ww_k10_cte
+Aggregate  (cost=703824.19..703824.20 rows=1 width=8)
+  ->  Limit  (cost=703824.04..703824.06 rows=10 width=16)
+        CTE f
+          ->  Index Scan using docs_idx on docs  (cost=1984.75..591492.52 rows=44197 width=748)
+                Index Cond: (content @@ '''world'' & ''war'''::tsquery)
+        ->  Sort  (cost=112331.52..112442.01 rows=44197 width=16)
+              Sort Key: ((f.content <@> 'docs_idx:world war'::bm25query))
+              ->  CTE Scan on f  (cost=0.00..111376.44 rows=44197 width=16)
+== pgts_main not_k10_cte
+Aggregate  (cost=590074.70..590074.71 rows=1 width=8)
+  ->  Limit  (cost=590074.55..590074.57 rows=10 width=16)
+        CTE f
+          ->  Index Scan using docs_idx on docs  (cost=10.16..589517.93 rows=219 width=748)
+                Index Cond: (content @@ '''hungari'' & !''slovakia'''::tsquery)
+        ->  Sort  (cost=556.61..557.16 rows=219 width=16)
+              Sort Key: ((f.content <@> 'docs_idx:hungary'::bm25query))
+              ->  CTE Scan on f  (cost=0.00..551.88 rows=219 width=16)
+== pgts_main phrase_us_k10_cte
+Aggregate  (cost=989618.48..989618.49 rows=1 width=8)
+  ->  Limit  (cost=989618.33..989618.35 rows=10 width=16)
+        CTE f
+          ->  Index Scan using docs_idx on docs  (cost=6946.42..596454.19 rows=154691 width=748)
+                Index Cond: (content @@ '''unit'' <-> ''state'''::tsquery)
+        ->  Sort  (cost=393164.14..393550.86 rows=154691 width=16)
+              Sort Key: ((f.content <@> 'docs_idx:united states'::bm25query))
+              ->  CTE Scan on f  (cost=0.00..389821.32 rows=154691 width=16)
+== pgts_main phrase_ww_k10_cte
+Aggregate  (cost=703824.19..703824.20 rows=1 width=8)
+  ->  Limit  (cost=703824.04..703824.06 rows=10 width=16)
+        CTE f
+          ->  Index Scan using docs_idx on docs  (cost=1984.75..591492.52 rows=44197 width=748)
+                Index Cond: (content @@ '''world'' <-> ''war'''::tsquery)
+        ->  Sort  (cost=112331.52..112442.01 rows=44197 width=16)
+              Sort Key: ((f.content <@> 'docs_idx:world war'::bm25query))
+              ->  CTE Scan on f  (cost=0.00..111376.44 rows=44197 width=16)
+== pgts_main count_common
+Finalize Aggregate  (cost=461361.73..461361.74 rows=1 width=8)
+  ->  Gather  (cost=461361.51..461361.72 rows=2 width=8)
+        Workers Planned: 2
+        ->  Partial Aggregate  (cost=460361.51..460361.52 rows=1 width=8)
+              ->  Parallel Seq Scan on docs  (cost=0.00..460246.42 rows=46039 width=0)
+                    Filter: (content @@ '''year'''::tsquery)
+== psearch rare_k10
+Aggregate  (cost=10.25..10.26 rows=1 width=8)
+  ->  Limit  (cost=10.00..10.12 rows=10 width=12)
+        ->  Custom Scan (ParadeDB Base Scan) on docs  (cost=10.00..10.12 rows=10 width=12)
+              Table: docs
+              Index: docs_idx
+              Segment Count: 4
+              Exec Method: TopKScanExecState
+              Scores: true
+                 TopK Order By: pdb.score() desc
+                 TopK Limit: 10
+              Tantivy Query: {"with_index":{"query":{"match":{"field":"content","value":"slovakia","tokenizer":null,"distance":null,"transposition_cost_one":null,"prefix":null,"conjunction_mode":false}}}}
+== psearch mid_k10
+Aggregate  (cost=10.25..10.26 rows=1 width=8)
+  ->  Limit  (cost=10.00..10.12 rows=10 width=12)
+        ->  Custom Scan (ParadeDB Base Scan) on docs  (cost=10.00..10.12 rows=10 width=12)
+              Table: docs
+              Index: docs_idx
+              Segment Count: 4
+              Exec Method: TopKScanExecState
+              Scores: true
+                 TopK Order By: pdb.score() desc
+                 TopK Limit: 10
+              Tantivy Query: {"with_index":{"query":{"match":{"field":"content","value":"hungary","tokenizer":null,"distance":null,"transposition_cost_one":null,"prefix":null,"conjunction_mode":false}}}}
+== psearch common_k10
+Aggregate  (cost=10.25..10.26 rows=1 width=8)
+  ->  Limit  (cost=10.00..10.12 rows=10 width=12)
+        ->  Custom Scan (ParadeDB Base Scan) on docs  (cost=10.00..10.12 rows=10 width=12)
+              Table: docs
+              Index: docs_idx
+              Segment Count: 4
+              Exec Method: TopKScanExecState
+              Scores: true
+                 TopK Order By: pdb.score() desc
+                 TopK Limit: 10
+              Tantivy Query: {"with_index":{"query":{"match":{"field":"content","value":"year","tokenizer":null,"distance":null,"transposition_cost_one":null,"prefix":null,"conjunction_mode":false}}}}
+== psearch common_k100
+Aggregate  (cost=12.50..12.51 rows=1 width=8)
+  ->  Limit  (cost=10.00..11.25 rows=100 width=12)
+        ->  Custom Scan (ParadeDB Base Scan) on docs  (cost=10.00..11.25 rows=100 width=12)
+              Table: docs
+              Index: docs_idx
+              Segment Count: 4
+              Exec Method: TopKScanExecState
+              Scores: true
+                 TopK Order By: pdb.score() desc
+                 TopK Limit: 100
+              Tantivy Query: {"with_index":{"query":{"match":{"field":"content","value":"year","tokenizer":null,"distance":null,"transposition_cost_one":null,"prefix":null,"conjunction_mode":false}}}}
+== psearch common_k1000
+Aggregate  (cost=35.00..35.01 rows=1 width=8)
+  ->  Limit  (cost=10.00..22.50 rows=1000 width=12)
+        ->  Custom Scan (ParadeDB Base Scan) on docs  (cost=10.00..22.50 rows=1000 width=12)
+              Table: docs
+              Index: docs_idx
+              Segment Count: 4
+              Exec Method: TopKScanExecState
+              Scores: true
+                 TopK Order By: pdb.score() desc
+                 TopK Limit: 1000
+              Tantivy Query: {"with_index":{"query":{"match":{"field":"content","value":"year","tokenizer":null,"distance":null,"transposition_cost_one":null,"prefix":null,"conjunction_mode":false}}}}
+== psearch or2_k10
+Aggregate  (cost=181.73..181.74 rows=1 width=8)
+  ->  Limit  (cost=10.00..181.60 rows=10 width=12)
+        ->  Custom Scan (ParadeDB Base Scan) on docs  (cost=10.00..181.60 rows=10 width=12)
+              Table: docs
+              Index: docs_idx
+              Segment Count: 4
+              Exec Method: TopKScanExecState
+              Scores: true
+                 TopK Order By: pdb.score() desc
+                 TopK Limit: 10
+              Tantivy Query: {"with_index":{"query":{"match":{"field":"content","value":"slovakia hungary","tokenizer":null,"distance":null,"transposition_cost_one":null,"prefix":null,"conjunction_mode":false}}}}
+== psearch or4_k10
+Aggregate  (cost=1011.32..1011.33 rows=1 width=8)
+  ->  Limit  (cost=1010.02..1011.20 rows=10 width=12)
+        ->  Gather Merge  (cost=1010.02..76852.41 rows=646503 width=12)
+              Workers Planned: 2
+              ->  Parallel Custom Scan (ParadeDB Base Scan) on docs  (cost=10.00..1229.90 rows=3 width=12)
+                    Table: docs
+                    Index: docs_idx
+                    Segment Count: 4
+                    Exec Method: TopKScanExecState
+                    Scores: true
+                       TopK Order By: pdb.score() desc
+                       TopK Limit: 10
+                    Tantivy Query: {"with_index":{"query":{"match":{"field":"content","value":"film music album band","tokenizer":null,"distance":null,"transposition_cost_one":null,"prefix":null,"conjunction_mode":false}}}}
+== psearch and_k10
+Aggregate  (cost=64.56..64.57 rows=1 width=8)
+  ->  Limit  (cost=10.00..64.43 rows=10 width=12)
+        ->  Custom Scan (ParadeDB Base Scan) on docs  (cost=10.00..64.43 rows=10 width=12)
+              Table: docs
+              Index: docs_idx
+              Segment Count: 4
+              Exec Method: TopKScanExecState
+              Scores: true
+                 TopK Order By: pdb.score() desc
+                 TopK Limit: 10
+              Tantivy Query: {"with_index":{"query":{"match":{"field":"content","value":"slovakia hungary","tokenizer":null,"distance":null,"transposition_cost_one":null,"prefix":null,"conjunction_mode":true}}}}
+== psearch and_us_k10
+Aggregate  (cost=1011.33..1011.34 rows=1 width=8)
+  ->  Limit  (cost=1010.02..1011.21 rows=10 width=12)
+        ->  Gather Merge  (cost=1010.02..35644.08 rows=292346 width=12)
+              Workers Planned: 2
+              ->  Parallel Custom Scan (ParadeDB Base Scan) on docs  (cost=10.00..900.07 rows=3 width=12)
+                    Table: docs
+                    Index: docs_idx
+                    Segment Count: 4
+                    Exec Method: TopKScanExecState
+                    Scores: true
+                       TopK Order By: pdb.score() desc
+                       TopK Limit: 10
+                    Tantivy Query: {"with_index":{"query":{"match":{"field":"content","value":"united states","tokenizer":null,"distance":null,"transposition_cost_one":null,"prefix":null,"conjunction_mode":true}}}}
+== psearch and_ww_k10
+Aggregate  (cost=1344.84..1344.85 rows=1 width=8)
+  ->  Limit  (cost=10.00..1344.71 rows=10 width=12)
+        ->  Custom Scan (ParadeDB Base Scan) on docs  (cost=10.00..1344.71 rows=10 width=12)
+              Table: docs
+              Index: docs_idx
+              Segment Count: 4
+              Exec Method: TopKScanExecState
+              Scores: true
+                 TopK Order By: pdb.score() desc
+                 TopK Limit: 10
+              Tantivy Query: {"with_index":{"query":{"match":{"field":"content","value":"world war","tokenizer":null,"distance":null,"transposition_cost_one":null,"prefix":null,"conjunction_mode":true}}}}
+== psearch not_k10
+Aggregate  (cost=127.42..127.44 rows=1 width=8)
+  ->  Limit  (cost=10.00..127.30 rows=10 width=12)
+        ->  Custom Scan (ParadeDB Base Scan) on docs  (cost=10.00..127.30 rows=10 width=12)
+              Table: docs
+              Index: docs_idx
+              Segment Count: 4
+              Exec Method: TopKScanExecState
+              Scores: true
+                 TopK Order By: pdb.score() desc
+                 TopK Limit: 10
+              Tantivy Query: {"boolean":{"must":[{"with_index":{"query":{"match":{"field":"content","value":"hungary","tokenizer":null,"distance":null,"transposition_cost_one":null,"prefix":null,"conjunction_mode":true}}}},{"with_index":{"query":{"boolean":{"must":["all"],"must_not":[{"match":{"field":"content","value":"slovakia","tokenizer":null,"distance":null,"transposition_cost_one":null,"prefix":null,"conjunction_mode":true}}]}}}}]}}
+== psearch phrase_us_k10
+Aggregate  (cost=1017.97..1017.98 rows=1 width=8)
+  ->  Limit  (cost=1010.02..1017.84 rows=10 width=12)
+        ->  Gather Merge  (cost=1010.02..7268.88 rows=8006 width=12)
+              Workers Planned: 2
+              ->  Parallel Custom Scan (ParadeDB Base Scan) on docs  (cost=10.00..5344.76 rows=3 width=12)
+                    Table: docs
+                    Index: docs_idx
+                    Segment Count: 4
+                    Exec Method: TopKScanExecState
+                    Scores: true
+                       TopK Order By: pdb.score() desc
+                       TopK Limit: 10
+                    Tantivy Query: {"with_index":{"query":{"tokenized_phrase":{"field":"content","phrase":"united states","slop":null}}}}
+== psearch phrase_ww_k10
+Aggregate  (cost=1017.96..1017.97 rows=1 width=8)
+  ->  Limit  (cost=1010.02..1017.83 rows=10 width=12)
+        ->  Gather Merge  (cost=1010.02..2997.18 rows=2544 width=12)
+              Workers Planned: 2
+              ->  Parallel Custom Scan (ParadeDB Base Scan) on docs  (cost=10.00..1703.52 rows=3 width=12)
+                    Table: docs
+                    Index: docs_idx
+                    Segment Count: 4
+                    Exec Method: TopKScanExecState
+                    Scores: true
+                       TopK Order By: pdb.score() desc
+                       TopK Limit: 10
+                    Tantivy Query: {"with_index":{"query":{"tokenized_phrase":{"field":"content","phrase":"world war","slop":null}}}}
+== psearch count_common
+Custom Scan (ParadeDB Aggregate Scan) on docs  (cost=0.00..0.00 rows=1 width=8)
+  Index: docs_idx
+  Tantivy Query: {"with_index":{"query":{"match":{"field":"content","value":"year","tokenizer":null,"distance":null,"transposition_cost_one":null,"prefix":null,"conjunction_mode":false}}}}
+    Applies to Aggregates: COUNT(*)
+    Aggregate Definition: {"0":{"filter":"*"}}
+== psearch_pn rare_k10
+Aggregate  (cost=10.25..10.26 rows=1 width=8)
+  ->  Limit  (cost=10.00..10.12 rows=10 width=12)
+        ->  Custom Scan (ParadeDB Base Scan) on docs  (cost=10.00..10.12 rows=10 width=12)
+              Table: docs
+              Index: docs_idx
+              Segment Count: 4
+              Exec Method: TopKScanExecState
+              Scores: true
+                 TopK Order By: pdb.score() desc
+                 TopK Limit: 10
+              Tantivy Query: {"with_index":{"query":{"match":{"field":"content","value":"slovakia","tokenizer":null,"distance":null,"transposition_cost_one":null,"prefix":null,"conjunction_mode":false}}}}
+== psearch_pn mid_k10
+Aggregate  (cost=10.25..10.26 rows=1 width=8)
+  ->  Limit  (cost=10.00..10.12 rows=10 width=12)
+        ->  Custom Scan (ParadeDB Base Scan) on docs  (cost=10.00..10.12 rows=10 width=12)
+              Table: docs
+              Index: docs_idx
+              Segment Count: 4
+              Exec Method: TopKScanExecState
+              Scores: true
+                 TopK Order By: pdb.score() desc
+                 TopK Limit: 10
+              Tantivy Query: {"with_index":{"query":{"match":{"field":"content","value":"hungary","tokenizer":null,"distance":null,"transposition_cost_one":null,"prefix":null,"conjunction_mode":false}}}}
+== psearch_pn common_k10
+Aggregate  (cost=10.25..10.26 rows=1 width=8)
+  ->  Limit  (cost=10.00..10.12 rows=10 width=12)
+        ->  Custom Scan (ParadeDB Base Scan) on docs  (cost=10.00..10.12 rows=10 width=12)
+              Table: docs
+              Index: docs_idx
+              Segment Count: 4
+              Exec Method: TopKScanExecState
+              Scores: true
+                 TopK Order By: pdb.score() desc
+                 TopK Limit: 10
+              Tantivy Query: {"with_index":{"query":{"match":{"field":"content","value":"year","tokenizer":null,"distance":null,"transposition_cost_one":null,"prefix":null,"conjunction_mode":false}}}}
+== psearch_pn common_k100
+Aggregate  (cost=12.50..12.51 rows=1 width=8)
+  ->  Limit  (cost=10.00..11.25 rows=100 width=12)
+        ->  Custom Scan (ParadeDB Base Scan) on docs  (cost=10.00..11.25 rows=100 width=12)
+              Table: docs
+              Index: docs_idx
+              Segment Count: 4
+              Exec Method: TopKScanExecState
+              Scores: true
+                 TopK Order By: pdb.score() desc
+                 TopK Limit: 100
+              Tantivy Query: {"with_index":{"query":{"match":{"field":"content","value":"year","tokenizer":null,"distance":null,"transposition_cost_one":null,"prefix":null,"conjunction_mode":false}}}}
+== psearch_pn common_k1000
+Aggregate  (cost=35.00..35.01 rows=1 width=8)
+  ->  Limit  (cost=10.00..22.50 rows=1000 width=12)
+        ->  Custom Scan (ParadeDB Base Scan) on docs  (cost=10.00..22.50 rows=1000 width=12)
+              Table: docs
+              Index: docs_idx
+              Segment Count: 4
+              Exec Method: TopKScanExecState
+              Scores: true
+                 TopK Order By: pdb.score() desc
+                 TopK Limit: 1000
+              Tantivy Query: {"with_index":{"query":{"match":{"field":"content","value":"year","tokenizer":null,"distance":null,"transposition_cost_one":null,"prefix":null,"conjunction_mode":false}}}}
+== psearch_pn or2_k10
+Aggregate  (cost=182.33..182.34 rows=1 width=8)
+  ->  Limit  (cost=10.00..182.21 rows=10 width=12)
+        ->  Custom Scan (ParadeDB Base Scan) on docs  (cost=10.00..182.21 rows=10 width=12)
+              Table: docs
+              Index: docs_idx
+              Segment Count: 4
+              Exec Method: TopKScanExecState
+              Scores: true
+                 TopK Order By: pdb.score() desc
+                 TopK Limit: 10
+              Tantivy Query: {"with_index":{"query":{"match":{"field":"content","value":"slovakia hungary","tokenizer":null,"distance":null,"transposition_cost_one":null,"prefix":null,"conjunction_mode":false}}}}
+== psearch_pn or4_k10
+Aggregate  (cost=1011.32..1011.33 rows=1 width=8)
+  ->  Limit  (cost=1010.02..1011.20 rows=10 width=12)
+        ->  Gather Merge  (cost=1010.02..76013.36 rows=639358 width=12)
+              Workers Planned: 2
+              ->  Parallel Custom Scan (ParadeDB Base Scan) on docs  (cost=10.00..1215.56 rows=3 width=12)
+                    Table: docs
+                    Index: docs_idx
+                    Segment Count: 4
+                    Exec Method: TopKScanExecState
+                    Scores: true
+                       TopK Order By: pdb.score() desc
+                       TopK Limit: 10
+                    Tantivy Query: {"with_index":{"query":{"match":{"field":"content","value":"film music album band","tokenizer":null,"distance":null,"transposition_cost_one":null,"prefix":null,"conjunction_mode":false}}}}
+== psearch_pn and_k10
+Aggregate  (cost=62.15..62.16 rows=1 width=8)
+  ->  Limit  (cost=10.00..62.02 rows=10 width=12)
+        ->  Custom Scan (ParadeDB Base Scan) on docs  (cost=10.00..62.02 rows=10 width=12)
+              Table: docs
+              Index: docs_idx
+              Segment Count: 4
+              Exec Method: TopKScanExecState
+              Scores: true
+                 TopK Order By: pdb.score() desc
+                 TopK Limit: 10
+              Tantivy Query: {"with_index":{"query":{"match":{"field":"content","value":"slovakia hungary","tokenizer":null,"distance":null,"transposition_cost_one":null,"prefix":null,"conjunction_mode":true}}}}
+== psearch_pn and_us_k10
+Aggregate  (cost=1011.33..1011.34 rows=1 width=8)
+  ->  Limit  (cost=1010.02..1011.21 rows=10 width=12)
+        ->  Gather Merge  (cost=1010.02..35924.10 rows=294752 width=12)
+              Workers Planned: 2
+              ->  Parallel Custom Scan (ParadeDB Base Scan) on docs  (cost=10.00..902.38 rows=3 width=12)
+                    Table: docs
+                    Index: docs_idx
+                    Segment Count: 4
+                    Exec Method: TopKScanExecState
+                    Scores: true
+                       TopK Order By: pdb.score() desc
+                       TopK Limit: 10
+                    Tantivy Query: {"with_index":{"query":{"match":{"field":"content","value":"united states","tokenizer":null,"distance":null,"transposition_cost_one":null,"prefix":null,"conjunction_mode":true}}}}
+== psearch_pn and_ww_k10
+Aggregate  (cost=1327.39..1327.40 rows=1 width=8)
+  ->  Limit  (cost=10.00..1327.27 rows=10 width=12)
+        ->  Custom Scan (ParadeDB Base Scan) on docs  (cost=10.00..1327.27 rows=10 width=12)
+              Table: docs
+              Index: docs_idx
+              Segment Count: 4
+              Exec Method: TopKScanExecState
+              Scores: true
+                 TopK Order By: pdb.score() desc
+                 TopK Limit: 10
+              Tantivy Query: {"with_index":{"query":{"match":{"field":"content","value":"world war","tokenizer":null,"distance":null,"transposition_cost_one":null,"prefix":null,"conjunction_mode":true}}}}
+== psearch_pn not_k10
+Aggregate  (cost=130.44..130.44 rows=1 width=8)
+  ->  Limit  (cost=10.00..130.31 rows=10 width=12)
+        ->  Custom Scan (ParadeDB Base Scan) on docs  (cost=10.00..130.31 rows=10 width=12)
+              Table: docs
+              Index: docs_idx
+              Segment Count: 4
+              Exec Method: TopKScanExecState
+              Scores: true
+                 TopK Order By: pdb.score() desc
+                 TopK Limit: 10
+              Tantivy Query: {"boolean":{"must":[{"with_index":{"query":{"match":{"field":"content","value":"hungary","tokenizer":null,"distance":null,"transposition_cost_one":null,"prefix":null,"conjunction_mode":true}}}},{"with_index":{"query":{"boolean":{"must":["all"],"must_not":[{"match":{"field":"content","value":"slovakia","tokenizer":null,"distance":null,"transposition_cost_one":null,"prefix":null,"conjunction_mode":true}}]}}}}]}}
+== psearch_pn phrase_us_k10
+Aggregate  (cost=1017.97..1017.98 rows=1 width=8)
+  ->  Limit  (cost=1010.02..1017.84 rows=10 width=12)
+        ->  Gather Merge  (cost=1010.02..7355.86 rows=8118 width=12)
+              Workers Planned: 2
+              ->  Parallel Custom Scan (ParadeDB Base Scan) on docs  (cost=10.00..5418.82 rows=3 width=12)
+                    Table: docs
+                    Index: docs_idx
+                    Segment Count: 4
+                    Exec Method: TopKScanExecState
+                    Scores: true
+                       TopK Order By: pdb.score() desc
+                       TopK Limit: 10
+                    Tantivy Query: {"with_index":{"query":{"tokenized_phrase":{"field":"content","phrase":"united states","slop":null}}}}
+== psearch_pn phrase_ww_k10
+Aggregate  (cost=1017.96..1017.97 rows=1 width=8)
+  ->  Limit  (cost=1010.02..1017.83 rows=10 width=12)
+        ->  Gather Merge  (cost=1010.02..2948.64 rows=2482 width=12)
+              Workers Planned: 2
+              ->  Parallel Custom Scan (ParadeDB Base Scan) on docs  (cost=10.00..1662.13 rows=3 width=12)
+                    Table: docs
+                    Index: docs_idx
+                    Segment Count: 4
+                    Exec Method: TopKScanExecState
+                    Scores: true
+                       TopK Order By: pdb.score() desc
+                       TopK Limit: 10
+                    Tantivy Query: {"with_index":{"query":{"tokenized_phrase":{"field":"content","phrase":"world war","slop":null}}}}
+== psearch_pn count_common
+Custom Scan (ParadeDB Aggregate Scan) on docs  (cost=0.00..0.00 rows=1 width=8)
+  Index: docs_idx
+  Tantivy Query: {"with_index":{"query":{"match":{"field":"content","value":"year","tokenizer":null,"distance":null,"transposition_cost_one":null,"prefix":null,"conjunction_mode":false}}}}
+    Applies to Aggregates: COUNT(*)
+    Aggregate Definition: {"0":{"filter":"*"}}
+== vchord rare_k10
+Aggregate  (cost=5.02..5.03 rows=1 width=8)
+  ->  Limit  (cost=0.00..4.89 rows=10 width=12)
+        ->  Index Scan using docs_idx on docs  (cost=0.00..1073613.81 rows=2193375 width=12)
+              Order By: (emb <&> to_bm25query('docs_idx'::regclass, (tokenize('slovakia'::text, 'en'::text))::bm25vector))
+== vchord mid_k10
+Aggregate  (cost=5.02..5.03 rows=1 width=8)
+  ->  Limit  (cost=0.00..4.89 rows=10 width=12)
+        ->  Index Scan using docs_idx on docs  (cost=0.00..1073613.81 rows=2193375 width=12)
+              Order By: (emb <&> to_bm25query('docs_idx'::regclass, (tokenize('hungary'::text, 'en'::text))::bm25vector))
+== vchord common_k10
+Aggregate  (cost=5.02..5.03 rows=1 width=8)
+  ->  Limit  (cost=0.00..4.89 rows=10 width=12)
+        ->  Index Scan using docs_idx on docs  (cost=0.00..1073613.81 rows=2193375 width=12)
+              Order By: (emb <&> to_bm25query('docs_idx'::regclass, (tokenize('year'::text, 'en'::text))::bm25vector))
+== vchord common_k100
+Aggregate  (cost=50.20..50.21 rows=1 width=8)
+  ->  Limit  (cost=0.00..48.95 rows=100 width=12)
+        ->  Index Scan using docs_idx on docs  (cost=0.00..1073613.81 rows=2193375 width=12)
+              Order By: (emb <&> to_bm25query('docs_idx'::regclass, (tokenize('year'::text, 'en'::text))::bm25vector))
+== vchord common_k1000
+Aggregate  (cost=501.98..501.99 rows=1 width=8)
+  ->  Limit  (cost=0.00..489.48 rows=1000 width=12)
+        ->  Index Scan using docs_idx on docs  (cost=0.00..1073613.81 rows=2193375 width=12)
+              Order By: (emb <&> to_bm25query('docs_idx'::regclass, (tokenize('year'::text, 'en'::text))::bm25vector))
+== vchord or2_k10
+Aggregate  (cost=5.02..5.03 rows=1 width=8)
+  ->  Limit  (cost=0.00..4.89 rows=10 width=12)
+        ->  Index Scan using docs_idx on docs  (cost=0.00..1073613.81 rows=2193375 width=12)
+              Order By: (emb <&> to_bm25query('docs_idx'::regclass, (tokenize('slovakia hungary'::text, 'en'::text))::bm25vector))
+== vchord or4_k10
+Aggregate  (cost=5.02..5.03 rows=1 width=8)
+  ->  Limit  (cost=0.00..4.89 rows=10 width=12)
+        ->  Index Scan using docs_idx on docs  (cost=0.00..1073613.81 rows=2193375 width=12)
+              Order By: (emb <&> to_bm25query('docs_idx'::regclass, (tokenize('film music album band'::text, 'en'::text))::bm25vector))
+== gin rare_k10
+Aggregate  (cost=37118.56..37118.57 rows=1 width=8)
+  ->  Limit  (cost=37118.41..37118.44 rows=10 width=12)
+        ->  Sort  (cost=37118.41..37145.78 rows=10946 width=12)
+              Sort Key: (ts_rank(docs.tsv, '''slovakia'''::tsquery)) DESC
+              ->  Bitmap Heap Scan on docs  (cost=103.84..36881.88 rows=10946 width=12)
+                    Recheck Cond: (tsv @@ '''slovakia'''::tsquery)
+                    ->  Bitmap Index Scan on docs_idx  (cost=0.00..101.10 rows=10946 width=0)
+                          Index Cond: (tsv @@ '''slovakia'''::tsquery)
+== gin mid_k10
+Aggregate  (cost=37118.56..37118.57 rows=1 width=8)
+  ->  Limit  (cost=37118.41..37118.44 rows=10 width=12)
+        ->  Sort  (cost=37118.41..37145.78 rows=10946 width=12)
+              Sort Key: (ts_rank(docs.tsv, '''hungari'''::tsquery)) DESC
+              ->  Bitmap Heap Scan on docs  (cost=103.84..36881.88 rows=10946 width=12)
+                    Recheck Cond: (tsv @@ '''hungari'''::tsquery)
+                    ->  Bitmap Index Scan on docs_idx  (cost=0.00..101.10 rows=10946 width=0)
+                          Index Cond: (tsv @@ '''hungari'''::tsquery)
+== gin common_k10
+Aggregate  (cost=295569.91..295569.92 rows=1 width=8)
+  ->  Limit  (cost=295568.62..295569.79 rows=10 width=12)
+        ->  Gather Merge  (cost=295568.62..381980.46 rows=741946 width=12)
+              Workers Planned: 2
+              ->  Sort  (cost=294568.60..295341.46 rows=309144 width=12)
+                    Sort Key: (ts_rank(docs.tsv, '''year'''::tsquery)) DESC
+                    ->  Parallel Bitmap Heap Scan on docs  (cost=5042.95..287888.11 rows=309144 width=12)
+                          Recheck Cond: (tsv @@ '''year'''::tsquery)
+                          ->  Bitmap Index Scan on docs_idx  (cost=0.00..4857.47 rows=741945 width=0)
+                                Index Cond: (tsv @@ '''year'''::tsquery)
+== gin common_k100
+Aggregate  (cost=300716.29..300716.30 rows=1 width=8)
+  ->  Limit  (cost=300703.40..300715.04 rows=100 width=12)
+        ->  Gather Merge  (cost=300703.40..387115.23 rows=741946 width=12)
+              Workers Planned: 2
+              ->  Sort  (cost=299703.37..300476.23 rows=309144 width=12)
+                    Sort Key: (ts_rank(docs.tsv, '''year'''::tsquery)) DESC
+                    ->  Parallel Bitmap Heap Scan on docs  (cost=5042.95..287888.11 rows=309144 width=12)
+                          Recheck Cond: (tsv @@ '''year'''::tsquery)
+                          ->  Bitmap Index Scan on docs_idx  (cost=0.00..4857.47 rows=741945 width=0)
+                                Index Cond: (tsv @@ '''year'''::tsquery)
+== gin common_k1000
+Aggregate  (cost=305967.13..305967.14 rows=1 width=8)
+  ->  Limit  (cost=305838.17..305954.63 rows=1000 width=12)
+        ->  Gather Merge  (cost=305838.17..392250.00 rows=741946 width=12)
+              Workers Planned: 2
+              ->  Sort  (cost=304838.14..305611.00 rows=309144 width=12)
+                    Sort Key: (ts_rank(docs.tsv, '''year'''::tsquery)) DESC
+                    ->  Parallel Bitmap Heap Scan on docs  (cost=5042.95..287888.11 rows=309144 width=12)
+                          Recheck Cond: (tsv @@ '''year'''::tsquery)
+                          ->  Bitmap Index Scan on docs_idx  (cost=0.00..4857.47 rows=741945 width=0)
+                                Index Cond: (tsv @@ '''year'''::tsquery)
+== gin or2_k10
+Aggregate  (cost=67728.72..67728.73 rows=1 width=8)
+  ->  Limit  (cost=67728.57..67728.59 rows=10 width=12)
+        ->  Sort  (cost=67728.57..67783.16 rows=21838 width=12)
+              Sort Key: (ts_rank(docs.tsv, '''slovakia'' | ''hungari'''::tsquery)) DESC
+              ->  Bitmap Heap Scan on docs  (cost=199.13..67256.66 rows=21838 width=12)
+                    Recheck Cond: (tsv @@ '''slovakia'' | ''hungari'''::tsquery)
+                    ->  Bitmap Index Scan on docs_idx  (cost=0.00..193.68 rows=21838 width=0)
+                          Index Cond: (tsv @@ '''slovakia'' | ''hungari'''::tsquery)
+== gin or4_k10
+Aggregate  (cost=293568.49..293568.50 rows=1 width=8)
+  ->  Limit  (cost=293567.20..293568.37 rows=10 width=12)
+        ->  Gather Merge  (cost=293567.20..368968.41 rows=647407 width=12)
+              Workers Planned: 2
+              ->  Sort  (cost=292567.18..293241.56 rows=269753 width=12)
+                    Sort Key: (ts_rank(docs.tsv, '''film'' | ''music'' | ''album'' | ''band'''::tsquery)) DESC
+                    ->  Parallel Bitmap Heap Scan on docs  (cost=4483.61..286737.91 rows=269753 width=12)
+                          Recheck Cond: (tsv @@ '''film'' | ''music'' | ''album'' | ''band'''::tsquery)
+                          ->  Bitmap Index Scan on docs_idx  (cost=0.00..4321.76 rows=647408 width=0)
+                                Index Cond: (tsv @@ '''film'' | ''music'' | ''album'' | ''band'''::tsquery)
+== gin and_k10
+Aggregate  (cost=275.74..275.75 rows=1 width=8)
+  ->  Limit  (cost=275.59..275.62 rows=10 width=12)
+        ->  Sort  (cost=275.59..275.73 rows=55 width=12)
+              Sort Key: (ts_rank(docs.tsv, '''slovakia'' & ''hungari'''::tsquery)) DESC
+              ->  Bitmap Heap Scan on docs  (cost=55.90..274.40 rows=55 width=12)
+                    Recheck Cond: (tsv @@ '''slovakia'' & ''hungari'''::tsquery)
+                    ->  Bitmap Index Scan on docs_idx  (cost=0.00..55.88 rows=55 width=0)
+                          Index Cond: (tsv @@ '''slovakia'' & ''hungari'''::tsquery)
+== gin and_us_k10
+Aggregate  (cost=258426.87..258426.88 rows=1 width=8)
+  ->  Limit  (cost=258425.58..258426.75 rows=10 width=12)
+        ->  Gather Merge  (cost=258425.58..278229.78 rows=170042 width=12)
+              Workers Planned: 2
+              ->  Sort  (cost=257425.56..257602.69 rows=70851 width=12)
+                    Sort Key: (ts_rank(docs.tsv, '''unit'' & ''state'''::tsquery)) DESC
+                    ->  Parallel Bitmap Heap Scan on docs  (cost=1204.09..255894.50 rows=70851 width=12)
+                          Recheck Cond: (tsv @@ '''unit'' & ''state'''::tsquery)
+                          ->  Bitmap Index Scan on docs_idx  (cost=0.00..1161.58 rows=170043 width=0)
+                                Index Cond: (tsv @@ '''unit'' & ''state'''::tsquery)
+== gin and_ww_k10
+Aggregate  (cost=136723.47..136723.48 rows=1 width=8)
+  ->  Limit  (cost=136723.32..136723.35 rows=10 width=12)
+        ->  Sort  (cost=136723.32..136857.70 rows=53749 width=12)
+              Sort Key: (ts_rank(docs.tsv, '''world'' & ''war'''::tsquery)) DESC
+              ->  Bitmap Heap Scan on docs  (cost=416.17..135561.83 rows=53749 width=12)
+                    Recheck Cond: (tsv @@ '''world'' & ''war'''::tsquery)
+                    ->  Bitmap Index Scan on docs_idx  (cost=0.00..402.73 rows=53749 width=0)
+                          Index Cond: (tsv @@ '''world'' & ''war'''::tsquery)
+== gin not_k10
+Aggregate  (cost=36975.83..36975.84 rows=1 width=8)
+  ->  Limit  (cost=36975.68..36975.70 rows=10 width=12)
+        ->  Sort  (cost=36975.68..37002.91 rows=10892 width=12)
+              Sort Key: (ts_rank(docs.tsv, '''hungari'' & !''slovakia'''::tsquery)) DESC
+              ->  Bitmap Heap Scan on docs  (cost=125.17..36740.31 rows=10892 width=12)
+                    Recheck Cond: (tsv @@ '''hungari'' & !''slovakia'''::tsquery)
+                    ->  Bitmap Index Scan on docs_idx  (cost=0.00..122.44 rows=10892 width=0)
+                          Index Cond: (tsv @@ '''hungari'' & !''slovakia'''::tsquery)
+== gin phrase_us_k10
+Aggregate  (cost=258426.87..258426.88 rows=1 width=8)
+  ->  Limit  (cost=258425.58..258426.75 rows=10 width=12)
+        ->  Gather Merge  (cost=258425.58..278229.78 rows=170042 width=12)
+              Workers Planned: 2
+              ->  Sort  (cost=257425.56..257602.69 rows=70851 width=12)
+                    Sort Key: (ts_rank(docs.tsv, '''unit'' <-> ''state'''::tsquery)) DESC
+                    ->  Parallel Bitmap Heap Scan on docs  (cost=1204.09..255894.50 rows=70851 width=12)
+                          Recheck Cond: (tsv @@ '''unit'' <-> ''state'''::tsquery)
+                          ->  Bitmap Index Scan on docs_idx  (cost=0.00..1161.58 rows=170043 width=0)
+                                Index Cond: (tsv @@ '''unit'' <-> ''state'''::tsquery)
+== gin phrase_ww_k10
+Aggregate  (cost=136723.47..136723.48 rows=1 width=8)
+  ->  Limit  (cost=136723.32..136723.35 rows=10 width=12)
+        ->  Sort  (cost=136723.32..136857.70 rows=53749 width=12)
+              Sort Key: (ts_rank(docs.tsv, '''world'' <-> ''war'''::tsquery)) DESC
+              ->  Bitmap Heap Scan on docs  (cost=416.17..135561.83 rows=53749 width=12)
+                    Recheck Cond: (tsv @@ '''world'' <-> ''war'''::tsquery)
+                    ->  Bitmap Index Scan on docs_idx  (cost=0.00..402.73 rows=53749 width=0)
+                          Index Cond: (tsv @@ '''world'' <-> ''war'''::tsquery)
+== gin count_common
+Finalize Aggregate  (cost=288888.33..288888.34 rows=1 width=8)
+  ->  Gather  (cost=288888.11..288888.32 rows=2 width=8)
+        Workers Planned: 2
+        ->  Partial Aggregate  (cost=287888.11..287888.12 rows=1 width=8)
+              ->  Parallel Bitmap Heap Scan on docs  (cost=5042.95..287115.25 rows=309144 width=0)
+                    Recheck Cond: (tsv @@ '''year'''::tsquery)
+                    ->  Bitmap Index Scan on docs_idx  (cost=0.00..4857.47 rows=741945 width=0)
+                          Index Cond: (tsv @@ '''year'''::tsquery)
