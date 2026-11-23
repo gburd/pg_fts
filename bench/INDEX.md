@@ -13,6 +13,7 @@ earlier file, say so on both lines. C comments cite the CHANGELOG entry, never a
 | file | what it is |
 |---|---|
 | `BENCHMARK_SUMMARY.md` | **Start here.** Current numbers vs all measured competitors, the 8-run protocol, the correctness gate, the list of optimisations rejected by measurement, and the record of numbers published wrong and corrected. |
+| `CORPUS_HN.md` | **Current: the HackerNews corpus** (second standing corpus, added 2026-11-23 after the 1.18.1 field report): source pinned to an open-index/hacker-news commit, construction, tiers smoke/1m/10m/full/150m (150m by replication), the query trace, and the scale test (`hn_corpus.py`, `hn_queries.py`, `hn_scale.sh`).  Smoke tier checked; the 10m/150m runs are ROADMAP M5. |
 | `../doc/COMPARISON_MATRIX.md` | Feature/perf matrix. Untested competitor capabilities are marked untested, never "No". TIN has a "not in this matrix" note, not a column. |
 | `RESULTS_PGTS_METAL_2026-10-15.md` | **Current: pg_fts 1.13.0 vs pg_textsearch (HEAD a5fdfeb1, 1.5.1) on EC2 metal** (2x c6id.metal, 2x c7gd.metal, Fedora 44, XFS local NVMe): latency, settled tps 1-256 clients, cold, build, size, concurrent writes, ranking agreement. Data `data_pgts_metal_2026-10-15/` (incl. the 50k smoke run). |
 | `PROTOCOL_PGTS_METAL_2026-10-15.md` | Protocol for the above, with 7 amendments (written before the run): pg_fts 1.13.0 vs pg_textsearch (HEAD a5fdfeb1 and v1.5.1) on EC2 metal (c6id.metal, c7gd.metal; two hosts each), Fedora 44, XFS on local NVMe; written before the run. |

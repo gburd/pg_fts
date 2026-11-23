@@ -107,6 +107,13 @@ effect) can skip it.
       isolation, TAP (incl. crash-recovery `t/001`, replication `t/002`,
       pinned-horizon `t/009`), `make check-ascii`, `make check-alloc`, the fuzz
       harness (`== ALL CLEAN ==`), and coverage &ge; 90% of pg_fts-own sources.
+- [ ] **Scale: the HackerNews corpus at 10m, for any change to the scan,
+      collect, set-operation or allocation paths** (`bench/CORPUS_HN.md`,
+      `bench/hn_scale.sh`, on EC2): zero errors in `trace` and `conc`, the
+      index-vs-heap `check` equal, and peak RSS per band no worse than the
+      previous release's run.  A change aimed at memory or match-set size
+      runs the 150m tier too.  The 1.18.1 crash appeared only at 150M rows;
+      every gate before it ran at 2.19M rows or fewer and measured no memory.
 - [ ] **Concurrency/traversal-core change?** Get a second review (a reviewer
       sub-agent or a human) and, for anything scale-sensitive, an A/B on real
       hardware before shipping &mdash; do not ship a plausible-but-unproven
