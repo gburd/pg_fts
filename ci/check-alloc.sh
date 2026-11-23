@@ -31,8 +31,13 @@ FILES="pg_fts_am.c pg_fts_am_scan.c pg_fts_trgm_index.c pg_fts_doc.c pg_fts_anal
 
 # Size-drivers that scale with the corpus / vocabulary / one document (unbounded
 # in principle) -- as opposed to query size or fixed structs.  Matched as whole
-# words in the allocation's argument text.
-SCALE='df|gdf|sumtf|nterms|nout|ndocs|nposts|maxdocids|maxaccs|naccs|npos|maxpos|maxposts|parena_cap|ocap|sumdoclen|maxraw|doclen|ndistinct'
+# words in the allocation's argument text.  The scan/collect path adds
+# match-set-scale drivers: a boolean filter's result and the TID set operations
+# over it grow with the number of matching rows, which a wide filter over a
+# large corpus pushes past MaxAllocSize (the 1.18.1 "invalid memory alloc
+# request size" field crash).  `captids`/`runcap` are the growable TID buffers;
+# `matches` and a lone `n`/`cap` inside a set-op are the match-set sizes.
+SCALE='df|gdf|sumtf|nterms|nout|ndocs|nposts|maxdocids|maxaccs|naccs|npos|maxpos|maxposts|parena_cap|ocap|sumdoclen|maxraw|doclen|ndistinct|captids|runcap|matches'
 
 fail=0
 for f in $FILES; do

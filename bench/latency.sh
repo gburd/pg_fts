@@ -28,7 +28,22 @@ stats() { python3 /tmp/_lat_stats.py; }
 band() { # $1=name  $2=SQL
   local out=""
   for _ in $(seq 1 "$NS"); do out+="$(timeq "$2") "; done
-  printf '%-14s %s\n' "$1" "$(echo "$out" | stats)"
+  printf '%-16s %s\n' "$1" "$(echo "$out" | stats)"
+}
+
+# Peak backend RSS (VmHWM, MiB) for ONE execution of a query on a fresh
+# connection -- the collect path for a wide boolean filter materialises the
+# whole match set, so its memory, not just its latency, is a release-relevant
+# axis (a wide disjunction over a large corpus overran MaxAllocSize and OOMed a
+# memory-capped container; see CHANGELOG 1.18.1).  psql runs the query, then
+# reports its own backend's VmHWM before disconnecting.
+rssq() { # $1=SQL -> peak RSS MiB for the backend that ran it
+  psql "$DSN" -X -q -t -A \
+    -c "$1" \
+    -c "SELECT round((SELECT (regexp_match(l,'[0-9]+'))[1]::bigint FROM regexp_split_to_table(pg_read_file('/proc/'||pg_backend_pid()||'/status'),E'\n') l WHERE l LIKE 'VmHWM:%')/1024.0)" 2>/dev/null | tail -1
+}
+rssband() { # $1=name $2=SQL
+  printf '%-16s peak_rss_mib=%s\n' "$1" "$(rssq "$2")"
 }
 
 RARE="SELECT id FROM $TBL WHERE $COL @@@ to_ftsquery('english','slovakia') ORDER BY $COL <=> to_ftsquery('english','slovakia') LIMIT 10"
@@ -37,11 +52,23 @@ COM="SELECT id FROM $TBL WHERE $COL @@@ to_ftsquery('english','year') ORDER BY $
 COM100="SELECT id FROM $TBL WHERE $COL @@@ to_ftsquery('english','year') ORDER BY $COL <=> to_ftsquery('english','year') LIMIT 100"
 ANDC="SELECT count(*) FROM $TBL WHERE $COL @@@ to_ftsquery('english','slovakia & hungary')"
 CNT="SELECT count(*) FROM $TBL WHERE $COL @@@ to_ftsquery('english','year')"
+# Wide-disjunction FILTER (no ORDER BY/LIMIT): the eager collect path builds the
+# full match set.  This is the query shape that overran memory in the field
+# (CHANGELOG 1.18.1); it is a bare count(*), not a top-k, so it exercises the
+# collect/union/tombstone path, not the lazy WAND path the k10 bands use.
+ORFILT="SELECT count(*) FROM $TBL WHERE $COL @@@ to_ftsquery('english','year | time | people | first | world | state | national')"
 
-echo "band           median   p95     p99     n   (ms, NSAMP=$NS)"
-band rare_k10   "$RARE"
-band mid_k10    "$MID"
-band common_k10 "$COM"
-band common_k100 "$COM100"
-band and_count  "$ANDC"
+echo "band             median   p95     p99     n   (ms, NSAMP=$NS)"
+band rare_k10     "$RARE"
+band mid_k10      "$MID"
+band common_k10   "$COM"
+band common_k100  "$COM100"
+band and_count    "$ANDC"
 band count_common "$CNT"
+band or_filter    "$ORFILT"
+
+# Memory axis for the eager collect-path bands (the ones that build a full
+# match set); the lazy k10 bands are bounded by k and not reported here.
+echo "-- peak backend RSS (collect-path bands) --"
+rssband or_filter    "$ORFILT"
+rssband count_common "$CNT"

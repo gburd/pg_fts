@@ -2,6 +2,57 @@
 
 All notable changes to pg_fts are documented here.
 
+## 1.18.1 - 2026-11-23
+
+A patch release.  A wide boolean `@@@` filter over a large corpus no longer
+raises `invalid memory alloc request size`.  No SQL object changes, no on-disk
+format change (the metapage version is unchanged), no scoring change, no REINDEX
+(`ALTER EXTENSION pg_fts UPDATE TO '1.18.1'`).
+
+### Fixed
+
+- **A wide boolean filter over a large corpus raised `invalid memory alloc
+  request size` and could exhaust container memory under concurrency** (every
+  release with the collect path; reported from the field on a 150M-document
+  HackerNews index, where 549 of 3,762 queries failed and a wide disjunction
+  used ~5.8 GB).  A bare `d @@@ q` filter (no `ORDER BY <=> ... LIMIT`) takes the
+  eager collect path, which materialises the whole matching TID set.  Several of
+  that path's working buffers were sized to the match-set count with a plain
+  `palloc`: the per-segment tombstone-membership scratch (8 bytes/row), the
+  `tidset` AND/OR/AND-NOT results (6 bytes/row), the sorted docid filter array
+  (8 bytes/row), and the prefix and candidate-TID growers.  On a corpus where a
+  wide disjunction matches tens of millions of rows these crossed PostgreSQL's
+  1 GB `MaxAllocSize` and raised the error; under 8 concurrent clients the
+  transient buffers exhausted a 64 GiB container.  The tombstone-membership
+  sweep now runs in fixed 256-row batches (bounded scratch, bit-identical
+  result), and the match-set-scale arrays go through the huge-safe allocation
+  path (`MemoryContextAllocHuge`) the result array already used.  Verified
+  fails-before/passes-after on a real 150M-document index: unpatched 1.18.0
+  raised `invalid memory alloc request size 1800000001`; 1.18.1 returns the
+  count.  Found and reproduced on EC2 (Fedora, PostgreSQL 18.7).
+
+  Scope: the fix removes the hard failure.  A filter that genuinely matches tens
+  of millions of rows still allocates memory proportional to the match set (the
+  count has to enumerate every match); the allocation is transient and freed
+  when the query ends, but a memory-capped host running many concurrent
+  whole-corpus filters should bound that concurrency.  A streaming/bounded
+  collect path is possible future work.
+
+### Testing
+
+- New regression test `wide_filter_mem`: a wide-disjunction filter over a corpus
+  with deletes scattered across the chunked sweep's 256-row batch boundaries,
+  asserting the filter count equals the heap truth and leaks no deleted row.
+- `ci/check-alloc.sh` (the allocation-safety linter that exists for exactly this
+  crash class) now also flags scan/collect-path match-set-scale drivers
+  (`captids`, `runcap`, `matches`), not only build-path corpus drivers.  It was
+  clean-but-blind to the scan path, which is why these sites shipped; it now
+  catches them (verified: it flags the unpatched sites, passes on the fix).
+- `bench/latency.sh` gains an `or_filter` band (a wide-disjunction `count(*)`,
+  the field query shape, not an `ORDER BY ... LIMIT` top-k) and peak-backend-RSS
+  capture for the collect-path bands, so the memory axis is measured, not just
+  latency.
+
 ## 1.18.0 - 2026-11-19
 
 A minor release: PostgreSQL 19.0 support, sparsemap 5.9.0 (ranked queries on an index

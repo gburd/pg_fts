@@ -1,0 +1,7 @@
+-- pg_fts 1.18.0 -> 1.18.1
+-- A C-only fix: a wide boolean @@@ filter over a large corpus no longer raises
+-- "invalid memory alloc request size".  The collect path's match-set-scale
+-- working buffers are chunked or routed through the huge-safe allocation path.
+-- No on-disk format change (the metapage version is unchanged), no SQL-object
+-- change, no scoring change, no REINDEX.  Intentionally empty apart from this
+-- comment; ALTER EXTENSION pg_fts UPDATE TO '1.18.1' just records the version.

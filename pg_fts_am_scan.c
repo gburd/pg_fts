@@ -517,12 +517,9 @@ bm25_tomb_seek(BM25Tombstones *t, uint32 s, uint64 docid, sm_cursor_t *out)
 static void
 bm25_filter_tombstoned_seg(BM25Tombstones *t, uint32 segidx, TidSet *s)
 {
-	int			i,
-				j = 0;
+	int			j = 0;
 	uint64		stackids[256];
 	bool		stackres[256];
-	uint64	   *ids;
-	bool	   *res;
 
 	if (!t->hasany || s->n == 0 || segidx >= t->nseg || !t->present[segidx])
 		return;
@@ -538,36 +535,35 @@ bm25_filter_tombstoned_seg(BM25Tombstones *t, uint32 segidx, TidSet *s)
 	/*
 	 * Batched membership: extract this set's docids (already ascending, since
 	 * the TidSet is TID-sorted and docid is monotonic in TID) and test them
-	 * all in one left-to-right sweep with sm_contains_many -- O(chunks + n)
-	 * instead of n independent head-walks.  Use a stack buffer for the common
-	 * small case to avoid palloc; fall back to palloc only for large sets.
+	 * with sm_contains_many -- O(chunks + n) instead of n independent
+	 * head-walks.  Process in fixed-size batches so the scratch buffer is
+	 * bounded regardless of the match-set size: a wide boolean filter over a
+	 * large corpus can match tens of millions of rows, and a scratch buffer
+	 * sized to the whole set (uint64 per doc) overran MaxAllocSize and raised
+	 * "invalid memory alloc request size".  The compaction below carries `j`
+	 * across batches, so the single left-to-right sweep is unchanged; only the
+	 * working buffer is capped.  `stackids`/`stackres` (256-wide) serve the
+	 * common small case without any heap allocation.
 	 */
-	if (s->n <= (int) lengthof(stackids))
 	{
-		ids = stackids;
-		res = stackres;
+		int			off;
+
+		for (off = 0; off < s->n; off += (int) lengthof(stackids))
+		{
+			int			bn = Min((int) lengthof(stackids), s->n - off);
+			int			b;
+
+			for (b = 0; b < bn; b++)
+				stackids[b] = bm25_tid_to_docid(&s->tids[off + b]);
+
+			sm_contains_many(&t->maps[segidx], stackids, stackres, (size_t) bn);
+
+			for (b = 0; b < bn; b++)
+				if (!stackres[b])
+					s->tids[j++] = s->tids[off + b];
+		}
 	}
-	else
-	{
-		ids = (uint64 *) palloc(s->n * sizeof(uint64));
-		res = (bool *) palloc(s->n * sizeof(bool));
-	}
-
-	for (i = 0; i < s->n; i++)
-		ids[i] = bm25_tid_to_docid(&s->tids[i]);
-
-	sm_contains_many(&t->maps[segidx], ids, res, (size_t) s->n);
-
-	for (i = 0; i < s->n; i++)
-		if (!res[i])
-			s->tids[j++] = s->tids[i];
 	s->n = j;
-
-	if (ids != stackids)
-	{
-		pfree(ids);
-		pfree(res);
-	}
 }
 
 /* Read the metapage for corpus stats + dictstart. */
@@ -857,7 +853,7 @@ tidset_and(TidSet a, TidSet b)
 
 	a = tidset_sane(a);
 	b = tidset_sane(b);
-	r.tids = palloc(Min(a.n, b.n) * sizeof(ItemPointerData) + 1);
+	r.tids = FTS_ALLOC_MAYBE_HUGE((Size) Min(a.n, b.n) * sizeof(ItemPointerData) + 1);
 
 	/*
 	 * When the sets differ greatly in size, gallop the smaller through the
@@ -914,7 +910,7 @@ tidset_or(TidSet a, TidSet b)
 
 	a = tidset_sane(a);
 	b = tidset_sane(b);
-	r.tids = palloc((a.n + b.n) * sizeof(ItemPointerData) + 1);
+	r.tids = FTS_ALLOC_MAYBE_HUGE((Size) (a.n + b.n) * sizeof(ItemPointerData) + 1);
 	while (i < a.n && j < b.n)
 	{
 		int			c = ItemPointerCompare(&a.tids[i], &b.tids[j]);
@@ -949,7 +945,7 @@ tidset_andnot(TidSet a, TidSet b)
 
 	a = tidset_sane(a);
 	b = tidset_sane(b);
-	r.tids = palloc(a.n * sizeof(ItemPointerData) + 1);
+	r.tids = FTS_ALLOC_MAYBE_HUGE((Size) a.n * sizeof(ItemPointerData) + 1);
 	while (i < a.n)
 	{
 		if (j >= b.n)
@@ -988,7 +984,9 @@ bm25_lookup_prefix(Relation index, const BM25SegMeta *seg,
 	BlockNumber blk = bm25_dict_seek(index, seg, prefix, prefixlen);
 	int			cap = 32;
 	int			n = 0;
-	ItemPointerData *tids = palloc(cap * sizeof(ItemPointerData));
+	/* A common prefix can match a match-set-scale number of TIDs over a large
+	 * corpus, past MaxAllocSize; grow through the huge-safe path. */
+	ItemPointerData *tids = FTS_ALLOC_MAYBE_HUGE((Size) cap * sizeof(ItemPointerData));
 	bool		done = false;
 
 	while (blk != InvalidBlockNumber && !done)
@@ -1050,7 +1048,7 @@ bm25_lookup_prefix(Relation index, const BM25SegMeta *seg,
 					if (n >= cap)
 					{
 						cap *= 2;
-						tids = repalloc(tids, cap * sizeof(ItemPointerData));
+						tids = FTS_REALLOC_MAYBE_HUGE(tids, (Size) cap * sizeof(ItemPointerData));
 					}
 					tids[n++] = post[k].tid;
 				}
@@ -1658,7 +1656,9 @@ bm25_fuzzy_terms(Relation index, const BM25SegMeta *seg,
 				/* keep this term's docid-sorted TIDs as a run for k-way merge */
 				if (np > 0)
 				{
-					ItemPointerData *run = palloc(np * sizeof(ItemPointerData));
+					/* One term's posting TIDs; np is the term's df, which a common
+					 * term pushes to corpus scale, past MaxAllocSize. */
+					ItemPointerData *run = FTS_ALLOC_MAYBE_HUGE((Size) np * sizeof(ItemPointerData));
 					int			i;
 
 					for (i = 0; i < np; i++)
@@ -1666,10 +1666,10 @@ bm25_fuzzy_terms(Relation index, const BM25SegMeta *seg,
 					if (nruns >= runcap)
 					{
 						runcap = Max(runcap * 2, 16);
-						runs = runs ? repalloc(runs, runcap * sizeof(ItemPointerData *))
-							: palloc(runcap * sizeof(ItemPointerData *));
-						runlen = runlen ? repalloc(runlen, runcap * sizeof(int))
-							: palloc(runcap * sizeof(int));
+						runs = runs ? repalloc(runs, runcap * sizeof(ItemPointerData *))	/* alloc-ok: runcap counts OR operands (query size), not matches */
+							: palloc(runcap * sizeof(ItemPointerData *));	/* alloc-ok: runcap counts OR operands (query size), not matches */
+						runlen = runlen ? repalloc(runlen, runcap * sizeof(int))	/* alloc-ok: runcap counts OR operands (query size), not matches */
+							: palloc(runcap * sizeof(int));	/* alloc-ok: runcap counts OR operands (query size), not matches */
 					}
 					runs[nruns] = run;
 					runlen[nruns] = np;
@@ -1861,7 +1861,7 @@ bm25_universe_bounded(Relation index, BlockNumber dictstart, double ndocs,
 	BlockNumber blk = dictstart;
 	int			cap = 64;
 	int			n = 0;
-	ItemPointerData *tids = palloc(cap * sizeof(ItemPointerData));
+	ItemPointerData *tids = palloc(cap * sizeof(ItemPointerData));	/* alloc-ok: grows under the > MaxAllocSize ereport below */
 
 	/* Fold threshold: once the buffer holds more than fold_at raw TIDs,
 	 * sort_uniq collapses it back to the <= ndocs distinct ones.  A distinct
@@ -1937,7 +1937,7 @@ bm25_universe_bounded(Relation index, BlockNumber dictstart, double ndocs,
 									 errmsg("pg_fts: candidate set for this query is too large"),
 									 errhint("Build the index WITH (trigrams = on) so fuzzy/regex/NOT queries can be accelerated.")));
 						cap *= 2;
-						tids = repalloc(tids, cap * sizeof(ItemPointerData));
+						tids = repalloc(tids, cap * sizeof(ItemPointerData));	/* alloc-ok: bounded by the > MaxAllocSize ereport above */
 					}
 				}
 				tids[n++] = post[k].tid;
@@ -2802,8 +2802,11 @@ bm25_tidbuf_push(ItemPointerData **tids, int *ntids, int *captids,
 	if (*ntids >= *captids)
 	{
 		*captids = Max(*captids * 2, 16);
-		*tids = *tids ? repalloc(*tids, (Size) *captids * sizeof(ItemPointerData)) :
-			palloc((Size) *captids * sizeof(ItemPointerData));
+		/* A candidate TID buffer (phrase/proximity path) can grow to match-set
+		 * scale on a common term over a large corpus, past MaxAllocSize; use the
+		 * huge-safe path, as the collect-path result arrays do. */
+		*tids = *tids ? FTS_REALLOC_MAYBE_HUGE(*tids, (Size) *captids * sizeof(ItemPointerData)) :
+			FTS_ALLOC_MAYBE_HUGE((Size) *captids * sizeof(ItemPointerData));
 	}
 	(*tids)[(*ntids)++] = tid;
 }
@@ -7298,7 +7301,14 @@ bm25_topk_candidates_range(Relation index, FtsQuery q, int wantk,
 		}
 		if (matches.n > 0)
 		{
-			filter_docids = (uint64 *) palloc(matches.n * sizeof(uint64));
+			/*
+			 * One docid per matching row, sorted ascending for the downstream
+			 * binary-search filter.  A wide boolean filter over a large corpus
+			 * can match tens of millions of rows, so this array can exceed
+			 * MaxAllocSize (8 bytes/row); use the huge-alloc path, as the match
+			 * TidSet itself (above) already does.
+			 */
+			filter_docids = (uint64 *) FTS_ALLOC_MAYBE_HUGE((Size) matches.n * sizeof(uint64));
 			for (i = 0; i < matches.n; i++)
 				filter_docids[i] = bm25_tid_to_docid(&matches.tids[i]);
 		}
